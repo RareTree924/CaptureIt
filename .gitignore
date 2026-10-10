@@ -1,0 +1,17 @@
+# Build output and downloaded components
+build/
+managed_components/
+.cache/
+__pycache__/
+
+# Old sdkconfig copies
+sdkconfig.old
+sdkconfig.before-16mb
+
+# Secrets and logs
+tools/gemini_key.txt
+secrets.h
+*.log
+
+# Game Tools' deleted-asset bin
+assets/Recycle Bin/

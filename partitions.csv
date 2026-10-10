@@ -1,0 +1,11 @@
+# CaptureIt partition table for the 16 MB flash on the ESP32-S3.
+# One big app, no OTA. The bootloader sits at 0x0 and this table at 0x8000.
+# Name,     Type, SubType,  Offset,   Size
+# Settings (audio off, hotbar side, YOLOE sliders) + the WiFi driver's data.
+# NVS needs at least 3 x 4 KB pages (one is kept free for cleanup); 28 KB
+# fills the space up to 0x10000, where the app must start (64 KB aligned).
+nvs,        data, nvs,      0x9000,   0x7000,
+# Everything else goes to the app: ~15.9 MB.
+factory,    app,  factory,  0x10000,  0xFE0000,
+# After a crash the CPU state is saved here; read it with `idf.py coredump-info`.
+coredump,   data, coredump, 0xFF0000, 0x10000,

@@ -14,5 +14,24 @@
   ],
   "idf.flashType": "UART",
   "idf.port": "COM3",
-  "idf.flashBaudRate": "921600"
+  "idf.flashBaudRate": "921600",
+  "actionButtons": {
+    "reloadButton": null,
+    "commands": [
+      {
+        "name": "$(cloud-upload) Push",
+        "tooltip": "Overwrite GitHub with this computer's files",
+        "useVsCodeApi": true,
+        "command": "workbench.action.tasks.runTask",
+        "args": ["Git: Push (overwrite GitHub)"]
+      },
+      {
+        "name": "$(cloud-download) Pull",
+        "tooltip": "Overwrite this computer's files with GitHub's",
+        "useVsCodeApi": true,
+        "command": "workbench.action.tasks.runTask",
+        "args": ["Git: Pull (overwrite local)"]
+      }
+    ]
+  }
 }

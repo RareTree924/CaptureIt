@@ -37,6 +37,7 @@ static const item_attr_t k_sunfish_attrs[] = {
     { "fish_to", 19 },
     { "fish_min", 4 },
     { "fish_max", 10 },
+    { "fish_season", 3 },
 };
 
 const item_asset_t k_item_sunfish = {
@@ -46,5 +47,5 @@ const item_asset_t k_item_sunfish = {
     .passive = { .w=16, .h=16, .frame_count=1, .interval_ms=150, .loop_count=-1, .pixels=k_sunfish_passive_pixels },
     .use = { .frame_count = 0 },
     .attrs = k_sunfish_attrs,
-    .attr_count = 8,
+    .attr_count = 9,
 };

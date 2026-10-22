@@ -10,9 +10,9 @@ the ones that reuse the most existing code (cheapest to add).
 - ★ **Request board** — visitors post orders ("5 Silver tomatoes by Friday,
   $400"). Reuses shoppers, quality grades, the clock and the ledger. Gives
   farming and fishing a goal.
-- ★ **Seasons** — a 28-day season cycle. A `season` attribute on crops and
-  fish (like `fish_from`/`fish_to`), and seasonal map palettes (winter night
-  files already exist).
+- ✅ **Seasons** — done (30-day seasons, crops, fish, seasonal map art); see
+  `docs/SEASONS.md`. Next: seasonal festivals, a calendar screen, and
+  seasonal shop stock beyond seeds.
 - ★ **Crafting bench** — instant recipes (wood + stone → fence, fish + salt
   → bait!). Same recipe table as machines, with 0 days.
 - **Cooking & buffs** — a kitchen machine makes dishes. Eating one gives a

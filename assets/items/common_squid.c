@@ -38,6 +38,7 @@ static const item_attr_t k_common_squid_attrs[] = {
     { "fish_min", 6 },
     { "fish_max", 20 },
     { "fish_tier", 2 },
+    { "fish_season", 12 },
 };
 
 const item_asset_t k_item_common_squid = {
@@ -47,5 +48,5 @@ const item_asset_t k_item_common_squid = {
     .passive = { .w=16, .h=16, .frame_count=1, .interval_ms=150, .loop_count=-1, .pixels=k_common_squid_passive_pixels },
     .use = { .frame_count = 0 },
     .attrs = k_common_squid_attrs,
-    .attr_count = 9,
+    .attr_count = 10,
 };

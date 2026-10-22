@@ -296,6 +296,10 @@ textarea#fileText { width: 100%; height: 380px; font: 12px/1.4 var(--mono); resi
             <div class="col"><label>&nbsp;</label><button onclick="act('day '+dayN.value)">Set day</button></div>
             <div class="col"><label>&nbsp;</label><button class="primary" onclick="act('sleep')">Sleep → 6:00 tomorrow</button></div>
           </div>
+          <div class="row">
+            <button onclick="act('season spring')">Spring 1</button><button onclick="act('season summer')">Summer 1</button>
+            <button onclick="act('season fall')">Fall 1</button><button onclick="act('season winter')">Winter 1</button>
+          </div>
           <div class="col"><label>Clock speed (game minutes per real second)</label>
             <div class="row" id="clockBtns">
               <button data-x="0">⏸ Stopped</button><button data-x="1">x1 normal</button><button data-x="5">x5</button>
@@ -942,6 +946,7 @@ const REF = [
   ['money N | +N | -N', 'set / add / take money (max 999999)'],
   ['hour H [M] / day N', 'set the time / the day'],
   ['clock N', 'N game minutes per real second, 0 = stopped'],
+  ['season spring|summer|fall|winter', 'jump to day 1 of that season (this year); 30 days a season'],
   ['sleep', 'like the bed: to 6:00 tomorrow, night played, saved'],
   ['save', 'Save Game now'],
   ['rain on|off|auto', 'weather'],

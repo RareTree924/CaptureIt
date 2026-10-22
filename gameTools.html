@@ -500,6 +500,22 @@ button.tool-tp.active { background: linear-gradient(#e05cc0, #a02c86); border-co
 .mchRecipe .mchDays { width: 56px !important; }
 .mchRecipe .mchArrow { color: #40c8ff; font-weight: bold; padding: 0 2px; }
 .mchRecipe .aniX { min-height: 24px !important; padding: 0 8px !important; color: #ff9a9a; margin-left: auto; }
+/* ---- Seasonal art (Map Editor: an asset's Seasons…, the file row's Seasons…) ---- */
+#seasonOverlay, #seasonPrevOverlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.75); z-index: 1200; align-items: center; justify-content: center; }
+#seasonOverlay.show, #seasonPrevOverlay.show { display: flex; }
+#seasonPanel, #seasonPrevPanel { background: #222; padding: 16px 18px; border-radius: 8px; border: 1px solid #666; display: flex; flex-direction: column; gap: 10px; max-width: 94vw; max-height: 94vh; overflow: auto; box-sizing: border-box; }
+#seasonPanel { width: 760px; }
+#snGrid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+.snCard { display: flex; flex-direction: column; align-items: center; gap: 5px; padding: 8px 6px; border: 1px solid #444; border-radius: 6px; background: #1c1c1c; font-size: 11px; color: #aaa; text-align: center; }
+.snCard.empty canvas { opacity: .45; }
+.snCard.over { border-color: #40c8ff; }
+.snCard b { color: #fff; font-size: 13px; }
+.snCard canvas { width: 112px; height: 112px; image-rendering: pixelated; border-radius: 4px; }
+.snCard .bad { color: #ff8a7a; }
+.snCard div { display: flex; flex-wrap: wrap; gap: 4px; justify-content: center; }
+.snCard button { min-height: auto; padding: 4px 7px; font-size: 11px; }
+#snPrevTabs button.on { background: #2f6d8c; color: #fff; }
+#snPrevCanvas { width: min(640px, 80vh); height: min(640px, 80vh); image-rendering: pixelated; border: 1px solid #555; align-self: center; }
 /* ---- Bait Editor + Shop Editor (the Game Tools "Bait Editor" / "Shop Editor" tabs): the Machines Editor's layout ---- */
 #btEdOverlay, #shEdOverlay { display: none; position: fixed; left: 0; right: 0; bottom: 0; top: 31px; background: #1a1a1a; z-index: 1000; align-items: flex-start; justify-content: center; overflow: auto; padding: 16px 0; box-sizing: border-box; }
 #btEdOverlay.show, #shEdOverlay.show { display: flex; }
@@ -629,6 +645,8 @@ button.tool-tp.active { background: linear-gradient(#e05cc0, #a02c86); border-co
             <label>Seed packet costs <input type="number" id="cropBuyPrice" min="0" max="999999" value="20" style="width:70px;"> coins in shops</label>
           </div>
           <div class="animCap">What a shop charges for one packet. 0 = no shop sells it.</div>
+          <div class="animFields"><span>Grows in</span><span class="animFields" id="cropSeasons"></span></div>
+          <div class="animCap" id="cropSeasonInfo">Seasons are 30 game days each. In game it can only be planted in these, shops only sell the packet then, and it withers on the first day of a season it doesn't grow in. Inside buildings (a greenhouse) it grows any time. None ticked = all year.</div>
           <div class="animFields">
             <label><input type="checkbox" id="cropQuality" checked> Harvests roll a quality (rarity)</label>
           </div>
@@ -959,6 +977,28 @@ button.tool-tp.active { background: linear-gradient(#e05cc0, #a02c86); border-co
       <div id="mchExportStatus" class="animCap"></div>
       <button type="button" id="mchExportBtn">Save machine (.c)</button>
     </div>
+  </div>
+</div>
+
+<div id="seasonOverlay">
+  <div id="seasonPanel">
+    <div class="itemHead"><div class="itemTitle" id="snTitle">Seasonal art</div></div>
+    <div class="animHelp">Seasons are 30 game days each. In a season this asset has art for, every copy of it on the map is drawn with that art instead; the others use the normal art. Collision, layers and actions stay the same, and the seasonal art can't paint past the normal art's shape (see-through there = what's under it shows). Click Load PNG…, drop a PNG on a season, or try Auto for a first draft. Export the map again afterwards.</div>
+    <div class="animCap" id="snSize"></div>
+    <div id="snGrid"></div>
+    <input type="file" id="snFile" accept="image/png" style="display:none">
+    <div class="row" style="justify-content:flex-end;">
+      <button type="button" id="snPreview" title="The whole map in each season">Preview map…</button>
+      <button type="button" id="snClose">Done</button>
+    </div>
+  </div>
+</div>
+
+<div id="seasonPrevOverlay">
+  <div id="seasonPrevPanel">
+    <div class="itemHead"><div class="itemTitle">Map seasons</div><div class="seg" id="snPrevTabs"></div><button type="button" id="snPrevClose">Close</button></div>
+    <div class="animCap" id="snPrevInfo"></div>
+    <canvas id="snPrevCanvas" width="480" height="480"></canvas>
   </div>
 </div>
 
@@ -1446,6 +1486,7 @@ button.tool-tp.active { background: linear-gradient(#e05cc0, #a02c86); border-co
             <label title="fish_lava 1: only bites in lava (with a lava rod) — its own loot pool, apart from the water fish"><input type="checkbox" id="itemFishLava" disabled> Lives in lava</label>
             <label title="fish_bait 1: only bites when there's bait on the rod"><input type="checkbox" id="itemFishBait" disabled> Only bites on bait</label>
           </div>
+          <div class="animFields" title="fish_season: the seasons (30 game days each) it bites in — none ticked = all year"><span>Bites in</span><span class="animFields" id="itemFishSeasons"></span></div>
           <div class="animFields">
             <label>Difficulty <input type="number" id="itemFishDiff" min="1" max="100" value="30" style="width:52px;" disabled></label>
             <label>Swims <select id="itemFishMove" disabled>
@@ -4875,6 +4916,8 @@ const btnRemoveHidden = makeButton(rowFile, 'Remove hidden', removeHiddenPlaceme
 btnRemoveHidden.title = 'Remove placements that are completely covered by plain (not animated, not breakable) assets above them — they can never be seen, so the device shouldn\'t spend time on them';
 const btnExportMap = makeButton(rowFile, 'Export', exportMap);
 const btnExportFolder = makeButton(rowFile, 'Export Folder…', chooseMapExportFolder);
+const btnSeasons = makeButton(rowFile, 'Seasons…', () => openSeasonPreview());
+btnSeasons.title = 'See this map in spring, summer, fall and winter (assets\' Seasons… art)';
 const btnBackup = makeButton(rowFile, 'Backup', saveBackup);
 const btnConvertCloud = makeButton(rowFile, 'Convert to Cloud File', () => convertToCloud());
 const btnSaveActive = makeButton(rowFile, 'Save', () => saveActiveFile());
@@ -5783,6 +5826,7 @@ function duplicateAsset(i, folder) {
   while (existingNames.includes(name)) name = `${a.name} (${copyNum++})`;
   const copy = {
     name, folder: folder != null ? folder : (a.folder || ''), walkable: a.walkable, tillable: !!a.tillable, buildable: !!a.buildable, fishable: !!a.fishable, lava: !!a.lava, actions: a.actions ? a.actions.slice() : undefined, w: a.w, h: a.h,
+    seasons: seasonsClone(a.seasons),
     rgba_color: a.rgba_color.slice(), rgba_alpha: a.rgba_alpha.slice(),
     rgba_hitbox: (a.rgba_hitbox || new Uint8Array(a.w * a.h)).slice(),
     rgba_layer: (a.rgba_layer || new Uint8Array(a.w * a.h).fill(255)).slice(),
@@ -6221,7 +6265,8 @@ function axRenderDetails() {
              axButton('\u27f3 Rotate', 'Turn it 90\u00b0 clockwise', () => rotateAsset(i), editing),
              axButton(a.animation ? 'Animation\u2026' : 'Animate', a.breakable ? 'Remove Breakable first' : 'Play it as a Frame Bundle', () => openAnimModal(i), editing),
              axButton(a.breakable ? 'Breakable\u2026' : 'Breakable', a.animation ? 'Remove Animate first' : 'Hits, drops, levels, sounds', () => openBrkModal(i), editing),
-             axButton(a.actions && a.actions.length ? `Actions (${a.actions.length})` : 'Actions\u2026', 'What happens when the player taps it', () => openActModal(i), editing || !!a.breakable));
+             axButton(a.actions && a.actions.length ? `Actions (${a.actions.length})` : 'Actions\u2026', 'What happens when the player taps it', () => openActModal(i), editing || !!a.breakable),
+             axButton(seasonsAny(a.seasons) ? `Seasons (${seasonsCount(a.seasons)})` : 'Seasons\u2026', 'Its art in spring, summer, fall and winter', () => openSeasonModal(i), editing));
     return;
   }
   if (keys.length > 1) {
@@ -6520,7 +6565,8 @@ function axMenuForSelection() {
               { label: 'Rotate 90\u00b0', fn: () => rotateAsset(i), off: editing }, '-',
               { label: a.animation ? 'Animation\u2026' : 'Animate\u2026', fn: () => openAnimModal(i), off: editing },
               { label: a.breakable ? 'Breakable\u2026' : 'Make breakable\u2026', fn: () => openBrkModal(i), off: editing },
-              { label: 'Actions\u2026', fn: () => openActModal(i), off: editing || !!a.breakable });
+              { label: 'Actions\u2026', fn: () => openActModal(i), off: editing || !!a.breakable },
+              { label: seasonsAny(a.seasons) ? `Seasons (${seasonsCount(a.seasons)})\u2026` : 'Seasonal art\u2026', fn: () => openSeasonModal(i), off: editing });
     if (tileAssetCanTill(a)) list.push({ label: a.tillable ? 'Tillable \u2713' : 'Tillable', fn: () => { axRecordAssets([i], `tillable ${axAssetLabel(i)}`); a.tillable = !a.tillable; if (showTiles) redrawAll(); renderAssetList(); }, off: editing });
     if (tileAssetCanTill(a)) list.push({ label: a.buildable ? 'Buildable \u2713' : 'Buildable', fn: () => { axRecordAssets([i], `buildable ${axAssetLabel(i)}`); a.buildable = !a.buildable; if (showTiles) redrawAll(); renderAssetList(); }, off: editing });
     if (tileAssetCanTill(a)) list.push({ label: a.fishable ? 'Fishable \u2713' : 'Fishable', fn: () => { axRecordAssets([i], `fishable ${axAssetLabel(i)}`); a.fishable = !a.fishable; if (showTiles) redrawAll(); renderAssetList(); }, off: editing });
@@ -6963,7 +7009,7 @@ function axSnapAsset(a) {
            rgba_color: a.rgba_color.slice(), rgba_alpha: a.rgba_alpha.slice(),
            rgba_hitbox: a.rgba_hitbox ? a.rgba_hitbox.slice() : undefined, rgba_layer: a.rgba_layer ? a.rgba_layer.slice() : undefined,
            walkable: a.walkable, tillable: !!a.tillable, buildable: !!a.buildable, fishable: !!a.fishable, lava: !!a.lava, actions: a.actions ? a.actions.slice() : undefined,
-           animation: a.animation ? { ...a.animation } : undefined, breakable };
+           animation: a.animation ? { ...a.animation } : undefined, breakable, seasons: seasonsClone(a.seasons) };
 }
 function axRestoreSnaps(snaps) {
   let any = false;
@@ -6979,6 +7025,7 @@ function axRestoreSnaps(snaps) {
     if (sn.actions) a.actions = sn.actions.slice(); else delete a.actions;
     if (sn.animation) a.animation = { ...sn.animation }; else delete a.animation;
     if (breakable) a.breakable = breakable; else delete a.breakable;
+    if (sn.seasons) a.seasons = seasonsClone(sn.seasons); else delete a.seasons;
   }
   invalidatePlaceable(null);
   renderAssetList();
@@ -7309,6 +7356,7 @@ function axApplyMeta(a, m, bundleRef) {
   a.buildable = !!m.buildable;
   a.fishable = !!m.fishable;
   a.lava = !!m.lava;
+  a.seasons = m.seasons ? seasonsFromJson(m.seasons) : undefined;   // SEASONS: its art for each season (if any)
   a.actions = Array.isArray(m.actions) && m.actions.length ? m.actions.map(String) : undefined;
   if (m.hitbox) { const hb = base64ToU8(m.hitbox, Uint8Array); if (hb.length === n) a.rgba_hitbox = hb; }
   if (m.layer) { const ly = base64ToU8(m.layer, Uint8Array); if (ly.length === n) a.rgba_layer = ly; }
@@ -7405,6 +7453,7 @@ function axMetaFor(a, bref) {
   if (a.buildable) m.buildable = true;
   if (a.fishable) m.fishable = true;
   if (a.lava) m.lava = true;
+  if (seasonsAny(a.seasons)) m.seasons = seasonsToJson(a.seasons);
   if (a.actions && a.actions.length) m.actions = a.actions.slice();
   if (a.rgba_hitbox && a.rgba_hitbox.some(v => v)) m.hitbox = u8ToBase64(a.rgba_hitbox);
   if (a.rgba_layer && a.rgba_layer.some(v => v !== 255)) m.layer = u8ToBase64(a.rgba_layer);
@@ -8224,6 +8273,7 @@ function buildBackupData() {
     soundBundles: soundBundles.map(b => ({ name: b.name, sounds: b.sounds.slice() })),   // game-wide, kept here as a copy
     assets: assets.map(a => ({
       name: a.name, folder: a.folder || '', walkable: a.walkable, tillable: !!a.tillable, buildable: !!a.buildable, fishable: !!a.fishable, lava: !!a.lava, actions: a.actions || [], w: a.w, h: a.h, uid: assetUid(a),
+      seasons: seasonsAny(a.seasons) ? seasonsToJson(a.seasons) : undefined,
       color: u8ToBase64(a.rgba_color), alpha: u8ToBase64(a.rgba_alpha),
       hitbox: u8ToBase64(a.rgba_hitbox || new Uint8Array(a.w * a.h)),
       layer: u8ToBase64(a.rgba_layer || new Uint8Array(a.w * a.h).fill(255)),
@@ -8600,7 +8650,7 @@ function loadBackupData(data) {
       levels: (ad.breakable.levels || []).map(brkLevelFromJson).map(lv => ({ ...lv, bundleIndex: libIndex(lv.bundleIndex), finalIndex: libIndex(lv.finalIndex) }))
     } : undefined;
     makeImageFromPixels(ad.w, ad.h, color, alpha, img => {
-      resolve({ name: ad.name, folder: ad.folder || '', walkable: ad.walkable, tillable: !!ad.tillable, buildable: !!ad.buildable, fishable: !!ad.fishable, lava: !!ad.lava,
+      resolve({ name: ad.name, folder: ad.folder || '', walkable: ad.walkable, tillable: !!ad.tillable, buildable: !!ad.buildable, fishable: !!ad.fishable, lava: !!ad.lava, seasons: ad.seasons ? seasonsFromJson(ad.seasons) : undefined,
                 actions: Array.isArray(ad.actions) && ad.actions.length ? ad.actions.map(String) : undefined, w: ad.w, h: ad.h, uid: ad.uid || undefined, img, rgba_color: color, rgba_alpha: alpha, rgba_hitbox: hitbox, rgba_layer: layer, animation, breakable });
     });
   }));
@@ -8696,6 +8746,7 @@ function mergeAssetsIntoLibrary(loaded) {
       if (a.buildable) assets[same].buildable = true;
       if (a.fishable) assets[same].fishable = true;
       if (a.lava) assets[same].lava = true;
+      if (seasonsAny(a.seasons) && !seasonsAny(assets[same].seasons)) assets[same].seasons = a.seasons;
       if (a.actions) assets[same].actions = [...new Set([...(assets[same].actions || []), ...a.actions])].slice(0, TRIG_ACTIONS_MAX);
       return same;
     }
@@ -9838,6 +9889,148 @@ async function chooseMapExportFolder() {
   if (dir) alert(`Export now saves into "${dir.name}".`);
 }
 
+// ================================================================
+//  SEASONS (map art) — a library asset can have its own art for each
+//  season: asset.seasons = { spring|summer|fall|winter: { w, h, color, alpha } }
+//  (color 3 bytes a pixel, alpha 1, like the asset's own). The same size as
+//  the asset — or, for an animation, its frames side by side (one image =
+//  every frame). Export writes, next to <map>.map, a <map>.<season>.map with
+//  its own night files for every season some placed asset has art for; the
+//  device loads that one in its season (main.c SEASONS). Only the colours
+//  change: collision, layers, actions, tiles all stay the map's own, and the
+//  seasonal art can't paint past the asset's normal shape (a see-through
+//  pixel in it shows what's under the asset instead).
+// ================================================================
+function seasonsAny(s) { return !!s && SEASON_FILES.some(k => s[k]); }
+function seasonsCount(s) { return s ? SEASON_FILES.filter(k => s[k]).length : 0; }
+function seasonsClone(s) {
+  if (!seasonsAny(s)) return undefined;
+  const out = {};
+  for (const k of SEASON_FILES) if (s[k]) out[k] = { w: s[k].w, h: s[k].h, color: s[k].color.slice(), alpha: s[k].alpha.slice() };
+  return out;
+}
+function seasonsToJson(s) {
+  const out = {};
+  for (const k of SEASON_FILES) if (s && s[k]) out[k] = { w: s[k].w, h: s[k].h, color: u8ToBase64(s[k].color), alpha: u8ToBase64(s[k].alpha) };
+  return out;
+}
+function seasonsFromJson(j) {
+  const out = {};
+  for (const k of SEASON_FILES) {
+    const v = j && j[k];
+    if (!v || !v.w || !v.h) continue;
+    const color = base64ToU8(v.color, Uint8ClampedArray), alpha = base64ToU8(v.alpha, Uint8ClampedArray);
+    if (color.length === v.w * v.h * 3 && alpha.length === v.w * v.h) out[k] = { w: v.w, h: v.h, color, alpha };
+  }
+  return seasonsAny(out) ? out : undefined;
+}
+
+// Placement rec's art for season k (SEASONS index), or null: its library
+// asset has none, or it doesn't fit this copy (a rotated one, an old size).
+function seasonVariantFor(rec, k) {
+  if (!rec.snapshot) return null;
+  const a = placementSourceAsset(rec), v = a && a.seasons && a.seasons[SEASON_FILES[k]];
+  if (!v || v.h !== rec.h) return null;
+  const frames = rec.snapshot.anim ? rec.snapshot.anim.frames.length : 1;
+  return v.w === rec.w || (frames > 1 && v.w === rec.w * frames) ? v : null;
+}
+// Frame f of a seasonal image w wide (a strip of frames, or one image for all of them): { color, alpha }.
+function seasonVariantFrame(v, w, h, f) {
+  const n = v.w / w;
+  if (n <= 1) return v;
+  const ox = (f % n) * w, color = new Uint8ClampedArray(w * h * 3), alpha = new Uint8ClampedArray(w * h);
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++) {
+      const s = y * v.w + ox + x, d = y * w + x;
+      alpha[d] = v.alpha[s];
+      color[d * 3] = v.color[s * 3]; color[d * 3 + 1] = v.color[s * 3 + 1]; color[d * 3 + 2] = v.color[s * 3 + 2];
+    }
+  return { color, alpha };
+}
+// rec's snapshot as it looks in season k (same shape, collision and layers; new colours), or null.
+function seasonSnapshot(rec, k) {
+  const v = seasonVariantFor(rec, k);
+  if (!v) return null;
+  const sn = rec.snapshot, w = rec.w, h = rec.h, n = w * h, f0 = seasonVariantFrame(v, w, h, 0);
+  const paint = sn.rgba_alpha0 || sn.rgba_alpha, color = sn.rgba_color.slice(), mask = new Uint8ClampedArray(n);
+  for (let i = 0; i < n; i++) {
+    if (!f0.alpha[i]) continue;   // see-through here: what's under it shows (stampRegion's colour mask)
+    color[i * 3] = f0.color[i * 3]; color[i * 3 + 1] = f0.color[i * 3 + 1]; color[i * 3 + 2] = f0.color[i * 3 + 2];
+    if (paint[i]) mask[i] = 255;
+  }
+  const out = { ...sn, rgba_color: color, rgba_alpha0: mask };
+  if (sn.anim) {
+    const see = sn.anim.bundle && sn.anim.bundle.seeThrough;
+    out.anim = { ...sn.anim, frames: sn.anim.frames.map((fr, fi) => {
+      const vf = seasonVariantFrame(v, w, h, fi), c = fr.color.slice(), a = fr.alpha ? fr.alpha.slice() : undefined;
+      for (let i = 0; i < n; i++) {
+        if (vf.alpha[i]) { c[i * 3] = vf.color[i * 3]; c[i * 3 + 1] = vf.color[i * 3 + 1]; c[i * 3 + 2] = vf.color[i * 3 + 2]; }
+        else if (see && a) a[i] = 0;   // an opaque bundle keeps its own colour there
+      }
+      return { ...fr, color: c, alpha: a };
+    }) };
+  }
+  const lv0 = sn.brk && sn.brk.levels[0];
+  if (lv0 && lv0.w === w && lv0.h === h) {   // a breakable: its whole (unbroken) look
+    const c = lv0.color.slice(), a = lv0.alpha ? lv0.alpha.slice() : new Uint8ClampedArray(n).fill(255);
+    for (let i = 0; i < n; i++) {
+      if (f0.alpha[i]) { c[i * 3] = f0.color[i * 3]; c[i * 3 + 1] = f0.color[i * 3 + 1]; c[i * 3 + 2] = f0.color[i * 3 + 2]; }
+      else a[i] = 0;
+    }
+    out.brk = { ...sn.brk, levels: [{ ...lv0, color: c, alpha: a }, ...sn.brk.levels.slice(1)] };
+  }
+  return out;
+}
+// The map as it looks in season k: every placement taken off (top first) and
+// put back (bottom first) in its seasonal art — as buildNoBrkMap() does. A
+// pixel painted by hand over the placements stays as it is. Returns
+// { color, snaps, bgs }: the map pixels, each placement's seasonal snapshot
+// and what's under it in that season (a breakable's broken look shows that).
+function seasonComposite(k) {
+  const live = { color: colorData, hitbox: hitboxData, layer: layerData };
+  const snaps = placedAssets.map(r => seasonSnapshot(r, k) || r.snapshot), bgs = placedAssets.map(r => r.bg);
+  const run = season => {
+    colorData = live.color.slice(); hitboxData = live.hitbox.slice(); layerData = live.layer.slice();
+    for (let i = placedAssets.length - 1; i >= 0; i--) {
+      const r = placedAssets[i];
+      if (r.snapshot && r.bg) restoreUnderAsset(r.snapshot, r.cx, r.cy, r.bg);
+    }
+    for (let i = 0; i < placedAssets.length; i++) {
+      const r = placedAssets[i], sn = season ? snaps[i] : r.snapshot;
+      if (!sn) continue;
+      if (season && r.bg) bgs[i] = captureUnderAsset(sn, r.cx, r.cy);
+      stampAssetAt(sn, r.cx, r.cy);
+    }
+    return colorData;
+  };
+  try {
+    const all = run(false), out = run(true);
+    for (let c = 0; c < out.length; c++) if (all[c] !== live.color[c]) out[c] = live.color[c];
+    return { color: out, snaps, bgs };
+  } finally {
+    colorData = live.color; hitboxData = live.hitbox; layerData = live.layer;
+  }
+}
+// Export's files for season k, named <name>.map and <name>.n1..n6: the map
+// built from seasonComposite(k) — the same tiles and triggers as the map's own.
+function seasonExportFiles(k, name, tiles, trigs) {
+  const comp = seasonComposite(k), keep = { color: colorData, snaps: placedAssets.map(r => r.snapshot), bgs: placedAssets.map(r => r.bg) };
+  try {
+    colorData = comp.color;
+    placedAssets.forEach((r, i) => { r.snapshot = comp.snaps[i]; r.bg = comp.bgs[i]; });
+    const bundles = makeBundleCollector(), animInsts = collectAnimExport(bundles), brk = collectBrkExport(bundles);
+    const blocks = mapDayBlocks(bundles, brk), dayHash = fnvU16Blocks(blocks);
+    const out = [{ name: `${name}.map`, buf: buildMapFileBuffer(bundles, animInsts, brk, tiles, trigs) }];
+    for (let s = 1; s <= NIGHT_STAGES; s++) out.push({ name: `${name}.n${s}`, buf: buildNightFileBuffer(blocks, s, dayHash) });
+    return out;
+  } finally {
+    colorData = keep.color;
+    placedAssets.forEach((r, i) => { r.snapshot = keep.snaps[i]; r.bg = keep.bgs[i]; });
+  }
+}
+// The seasons (SEASONS indices) some placed asset on this map has art for.
+function mapSeasonsUsed() { return SEASONS.map((_, k) => k).filter(k => placedAssets.some(r => seasonVariantFor(r, k))); }
+
 async function exportMap() {
   const bundles = makeBundleCollector();
   const animInsts = collectAnimExport(bundles);
@@ -9870,6 +10063,9 @@ async function exportMap() {
   const blocks = mapDayBlocks(bundles, brk), dayHash = fnvU16Blocks(blocks);
   const files = [{ name: fileName, buf: buildMapFileBuffer(bundles, animInsts, brk, tiles, trigs) }];
   for (let s = 1; s <= NIGHT_STAGES; s++) files.push({ name: `${base}.n${s}`, buf: buildNightFileBuffer(blocks, s, dayHash) });
+  const seasons = mapSeasonsUsed();   // SEASONS: <base>.winter.map etc., each with its night files
+  for (const k of seasons) files.push(...seasonExportFiles(k, `${base}.${SEASON_FILES[k]}`, tiles, trigs));
+  const seasonInfo = seasons.length ? `\nSeasonal art: ${seasons.map(k => SEASONS[k]).join(', ')} (${seasons.length * (NIGHT_STAGES + 1)} more files: ${base}.${SEASON_FILES[seasons[0]]}.map …).` : '';
 
   const dir = await getMapExportDir(false);
   if (dir) {
@@ -9884,13 +10080,18 @@ async function exportMap() {
         await w.write(f.buf);
         await w.close();
       }
+      for (let k = 0; k < SEASONS.length; k++) {   // a season with no art any more: its old files would still be loaded
+        if (seasons.includes(k)) continue;
+        for (const ext of ['map', ...Array.from({ length: NIGHT_STAGES }, (_, s) => `n${s + 1}`)])
+          try { await out.removeEntry(`${base}.${SEASON_FILES[k]}.${ext}`); } catch (e) { /* wasn't there */ }
+      }
     } catch (e) {
       alert(`Couldn't write into "${out.name}": ${e.message}`);
       return;
     }
     alert(intoMaps
-      ? `Saved ${fileName} and its night files ${base}.n1 – ${base}.n${NIGHT_STAGES} into "maps/${base}/" — ready for the device.${tileInfo}`
-      : `Saved ${fileName} and its night files ${base}.n1 – ${base}.n${NIGHT_STAGES} into "${dir.name}".\nCopy all ${files.length} to CaptureIt/maps/${base}/ on the SD card.${tileInfo}`);
+      ? `Saved ${fileName} and its night files ${base}.n1 – ${base}.n${NIGHT_STAGES} into "maps/${base}/" — ready for the device.${seasonInfo}${tileInfo}`
+      : `Saved ${fileName} and its night files ${base}.n1 – ${base}.n${NIGHT_STAGES} into "${dir.name}".\nCopy all ${files.length} to CaptureIt/maps/${base}/ on the SD card.${seasonInfo}${tileInfo}`);
     return;
   }
   // No folder access: download them all (the browser may ask to allow multiple downloads).
@@ -11303,6 +11504,23 @@ const ITEM_FISH_LAVA_ATTR = 'fish_lava', ITEM_FISH_BAIT_ATTR = 'fish_bait';  // 
 const ITEM_SHOP_ATTR = 'shop';             // items.h ITEM_ATTR_SHOP: which counter sells it (none = its usual one)
 // main.c SHOP_* + 1 (0 = "usual": the attribute isn't written)
 const SHOP_COUNTERS = ['Usual', 'Seeds', 'Build', 'Ranch', 'Tackle', 'General'];
+// main.c SEASONS: 30 game days each; a set of them is a bit mask (bit k = SEASONS[k]), 0 = all year
+const SEASONS = ['Spring', 'Summer', 'Fall', 'Winter'], SEASON_FILES = ['spring', 'summer', 'fall', 'winter'];
+const ITEM_SEASON_ATTR = 'season', ITEM_FISH_SEASON_ATTR = 'fish_season';   // items.h: a seed packet's / a fish's seasons
+function seasonMaskText(m) { m &= 15; return !m || m === 15 ? 'all year' : SEASONS.filter((_, k) => m >> k & 1).join(', '); }
+// A row of 4 season checkboxes in `wrap` (ids prefix0..3); changed(mask) on every tick.
+function seasonBoxes(wrap, prefix, changed) {
+  wrap.innerHTML = '';
+  SEASONS.forEach((n, k) => {
+    const l = document.createElement('label'), b = document.createElement('input');
+    b.type = 'checkbox'; b.id = prefix + k;
+    b.addEventListener('change', () => changed && changed(seasonBoxesRead(prefix)));
+    l.append(b, ' ' + n);
+    wrap.appendChild(l);
+  });
+}
+function seasonBoxesRead(prefix) { return SEASONS.reduce((m, _, k) => m | (document.getElementById(prefix + k).checked ? 1 << k : 0), 0); }
+function seasonBoxesSet(prefix, mask) { SEASONS.forEach((_, k) => { document.getElementById(prefix + k).checked = !!(mask >> k & 1); }); }
 const ITEM_FISH_ATTRS = [ITEM_FISH_ATTR, ITEM_FISH_MOVE_ATTR, ITEM_FISH_FROM_ATTR, ITEM_FISH_TO_ATTR, ITEM_FISH_WEATHER_ATTR, ITEM_FISH_RARITY_ATTR, ITEM_FISH_MIN_ATTR, ITEM_FISH_MAX_ATTR, ITEM_FISH_TIER_ATTR];
 const ITEM_MUT_ATTR = 'mut';               // items.h ITEM_ATTR_MUT: mutation chance multiplier, % (none = 100, 0 = never)
 // items.c k_mutation[] (odds 1 in N, price %) and main.c k_mut_col — keep them in step. Index = MUT_*.
@@ -11976,6 +12194,7 @@ itemEl('itemShelfPreview').addEventListener('click', e => {
   drawItemShelfPreview();
 });
 SHOP_COUNTERS.forEach((n, i) => itemEl('itemShopKind').add(new Option(n, i)));
+seasonBoxes(itemEl('itemFishSeasons'), 'itemFishSeason');
 function setItemBuyable(on, price, counter) {
   itemEl('itemBuyable').checked = on;
   itemEl('itemBuyPrice').disabled = itemEl('itemShopKind').disabled = !on;
@@ -12039,6 +12258,8 @@ function setItemFish(on, vals) {
   itemEl('itemFishTagBtn').disabled = itemEl('itemFishLava').disabled = itemEl('itemFishBait').disabled = !on;
   if (vals && vals.lava !== undefined) itemEl('itemFishLava').checked = !!vals.lava;
   if (vals && vals.bait !== undefined) itemEl('itemFishBait').checked = !!vals.bait;
+  SEASONS.forEach((_, k) => { itemEl('itemFishSeason' + k).disabled = !on; });
+  if (vals && vals.seasons !== undefined) seasonBoxesSet('itemFishSeason', vals.seasons);
   for (const id in ITEM_FISH_FIELDS) {
     itemEl(id).disabled = !on;
     if (vals && vals[id] !== undefined) itemEl(id).value = vals[id];
@@ -12067,6 +12288,8 @@ function itemFishAttrs() {
   if (tier > 1) out.push({ name: ITEM_FISH_TIER_ATTR, value: tier });
   if (itemEl('itemFishLava').checked) out.push({ name: ITEM_FISH_LAVA_ATTR, value: 1 });
   if (itemEl('itemFishBait').checked) out.push({ name: ITEM_FISH_BAIT_ATTR, value: 1 });
+  const seasons = seasonBoxesRead('itemFishSeason');
+  if (seasons && seasons !== 15) out.push({ name: ITEM_FISH_SEASON_ATTR, value: seasons });   // none / all = all year
   return out;
 }
 
@@ -12238,7 +12461,7 @@ itemEl('fishTagOverlay').addEventListener('mousedown', e => { if (e.target.id ==
 itemMutRefresh();
 const ITEM_OWNED_ATTRS = () => [ITEM_SELL_ATTR, ITEM_DROP_ATTR, ITEM_QUALITY_ATTR, ITEM_BUY_ATTR, ITEM_PROP_ATTR, ITEM_PROP_ROWS_ATTR, ITEM_PROP_SOLID_ATTR, ITEM_SHELF_ATTR, ITEM_SHELF_Y_ATTR,
                                 ITEM_BED_ATTR, ITEM_AQUA_ATTR, ITEM_TILLS_ATTR, ITEM_WATERS_ATTR, ...ITEM_RANCH_ATTRS.map(r => r[1]), ITEM_ROD_ATTR, ...ROD_STATS.map(s => s.attr), ...ITEM_FISH_ATTRS, ITEM_MUT_ATTR,
-                                ITEM_SHOP_ATTR, ITEM_ROD_LAVA_ATTR, ITEM_ROD_BAIT_ATTR, ITEM_FISH_LAVA_ATTR, ITEM_FISH_BAIT_ATTR];
+                                ITEM_SHOP_ATTR, ITEM_ROD_LAVA_ATTR, ITEM_ROD_BAIT_ATTR, ITEM_FISH_LAVA_ATTR, ITEM_FISH_BAIT_ATTR, ITEM_FISH_SEASON_ATTR];
 function readItemSellPrice() {
   if (!itemEl('itemSellable').checked) return 0;
   return itemClamp(parseInt(itemEl('itemSellPrice').value) || 1, 1, 999999);
@@ -12463,7 +12686,8 @@ function importItemC(text, id) {
   setItemFish(av(ITEM_FISH_ATTR, 0) > 0, {
     itemFishDiff: av(ITEM_FISH_ATTR, 30) || 30, itemFishMove: av(ITEM_FISH_MOVE_ATTR, 0), itemFishFrom: av(ITEM_FISH_FROM_ATTR, 0), itemFishTo: av(ITEM_FISH_TO_ATTR, 24),
     itemFishWeather: av(ITEM_FISH_WEATHER_ATTR, 0), itemFishRarity: av(ITEM_FISH_RARITY_ATTR, 10), itemFishMin: av(ITEM_FISH_MIN_ATTR, 5), itemFishMax: av(ITEM_FISH_MAX_ATTR, 20),
-    itemFishTier: itemClamp(av(ITEM_FISH_TIER_ATTR, 1), 1, FISH_TIERS.length), lava: av(ITEM_FISH_LAVA_ATTR, 0) > 0, bait: av(ITEM_FISH_BAIT_ATTR, 0) > 0 });
+    itemFishTier: itemClamp(av(ITEM_FISH_TIER_ATTR, 1), 1, FISH_TIERS.length), lava: av(ITEM_FISH_LAVA_ATTR, 0) > 0, bait: av(ITEM_FISH_BAIT_ATTR, 0) > 0,
+    seasons: av(ITEM_FISH_SEASON_ATTR, 0) & 15 });
   setItemMut(Math.max(0, av(ITEM_MUT_ATTR, 100)) / 100);
   itemEl('itemBed').checked = av(ITEM_BED_ATTR, 0) > 0;
   setItemAquarium(av(ITEM_AQUA_ATTR, 0) > 0, itemClamp(av(ITEM_AQUA_ATTR, 3) || 3, 1, 3));
@@ -12523,7 +12747,7 @@ function resetItemEditor(ask) {
   setItemProp(false, 0, true);
   setItemBuyable(false, 10, 0);
   setItemRod(false, { [ITEM_ROD_LAVA_ATTR]: 0, [ITEM_ROD_BAIT_ATTR]: 0 });
-  setItemFish(false, { ...ITEM_FISH_FIELDS, lava: false, bait: false });
+  setItemFish(false, { ...ITEM_FISH_FIELDS, lava: false, bait: false, seasons: 0 });
   setItemMut(1);
   renderItemAttrList();
   renderItemListBox();
@@ -13149,7 +13373,7 @@ const cropEl = id => document.getElementById(id);
 
 // Images are { w, h, rgba: Uint8ClampedArray(w*h*4) }.
 function cropBlank() {
-  return { name: '', stageCount: 6, growDays: 4, regrows: false, regrowDays: 3, sellPrice: 10, seedPrice: 0, buyPrice: 20, quality: true, solid: false, extraChance: 0, extraMin: 2, extraMax: 3,
+  return { name: '', stageCount: 6, growDays: 4, regrows: false, regrowDays: 3, sellPrice: 10, seedPrice: 0, buyPrice: 20, quality: true, solid: false, extraChance: 0, extraMin: 2, extraMax: 3, seasons: 0,
            stages: [], icon: null, seedIcon: null,
            sheet: null, sheetRects: {} };   // which sprite sheet its art came from, and where: { stages, icon, seedIcon } rects
 }
@@ -13273,6 +13497,7 @@ function cropRender() {
   cropEl('cropExtraChance').value = c.extraChance || 0;   // ...and before bigger harvests: always 1
   cropEl('cropExtraMin').value = c.extraMin || 2;
   cropEl('cropExtraMax').value = c.extraMax || 3;
+  seasonBoxesSet('cropSeason', c.seasons || 0);   // crops from before seasons: all year
   cropRenderInfo();
 
   const box = cropEl('cropStages');
@@ -13326,6 +13551,7 @@ function cropReadForm() {
   c.extraChance = cropClampInt(cropEl('cropExtraChance').value, 0, 100, 0);
   c.extraMin = cropClampInt(cropEl('cropExtraMin').value, 1, 99, 2);
   c.extraMax = cropClampInt(cropEl('cropExtraMax').value, 1, 99, 3);   // below min counts as min (cropExtraRange)
+  c.seasons = seasonBoxesRead('cropSeason');
   c.stages.length = Math.min(c.stages.length, c.stageCount);
 }
 
@@ -13786,13 +14012,14 @@ function cropBuildC(c) {
   for (let s = 0; s < c.stageCount; s++) stagePx.set(cropPack(c.stages[s]), s * CROP_W * CROP_H);
   const meta = { name, stageCount: c.stageCount, growDays: c.growDays, regrows: c.regrows, regrowDays: c.regrowDays,
                  sellPrice: c.sellPrice, seedPrice: c.seedPrice, buyPrice: c.buyPrice, quality: c.quality, solid: c.solid !== false, extraChance: c.extraChance || 0, extraMin: cropExtraRange(c)[0], extraMax: cropExtraRange(c)[1],
-                 iconW: c.icon.w, iconH: c.icon.h, seedIconW: c.seedIcon.w, seedIconH: c.seedIcon.h };
+                 iconW: c.icon.w, iconH: c.icon.h, seedIconW: c.seedIcon.w, seedIconH: c.seedIcon.h, seasons: c.seasons || 0 };
   const cropAttrs = [];
   if (c.sellPrice > 0) cropAttrs.push([ITEM_SELL_ATTR, c.sellPrice]);
   if (c.quality) cropAttrs.push([ITEM_QUALITY_ATTR, 1]);
   const seedAttrs = [];
   if (c.seedPrice > 0) seedAttrs.push([ITEM_SELL_ATTR, c.seedPrice]);
   if (c.buyPrice > 0) seedAttrs.push([ITEM_BUY_ATTR, c.buyPrice]);
+  if ((c.seasons & 15) && (c.seasons & 15) !== 15) seedAttrs.push([ITEM_SEASON_ATTR, c.seasons & 15]);   // none / all = all year
   return `// AUTO-GENERATED by gameTools.html (Crops Editor) — "${name.replace(/\r?\n/g, ' ')}"
 // Lives in assets/crops/ as ${id}.c — the file name is the crop id, keep it.
 // One crop = the plant below + two items: "${id}" (the harvest) and "${id}_seeds" (what's planted).
@@ -13819,7 +14046,7 @@ const crop_def_t k_crop_${id} = {
 };
 
 ${cropItemBlock(id, name, c.icon, cropAttrs, `The harvest${c.sellPrice > 0 ? `: sells for ${c.sellPrice} (more at a better quality)` : ''}.`)}
-${cropItemBlock(`${id}_seeds`, seedName, c.seedIcon, seedAttrs, `The seed packet: hold it and tap a free tile to plant.${c.buyPrice > 0 ? ` Shops sell it for ${c.buyPrice}.` : ''}`)}`;
+${cropItemBlock(`${id}_seeds`, seedName, c.seedIcon, seedAttrs, `The seed packet: hold it and tap a free tile to plant (${seasonMaskText(c.seasons)}).${c.buyPrice > 0 ? ` Shops sell it for ${c.buyPrice}.` : ''}`)}`;
 }
 function cropSetStatus(t) { cropEl('cropExportStatus').textContent = t; }
 async function exportCrop() {
@@ -13901,6 +14128,7 @@ function closeCropEditor() {
 
 // ---- wiring ----
 (() => {
+  seasonBoxes(cropEl('cropSeasons'), 'cropSeason', () => cropReadForm());
   ['cropName', 'cropStageCount', 'cropGrowDays', 'cropRegrows', 'cropRegrowDays', 'cropSellPrice', 'cropSeedPrice', 'cropBuyPrice', 'cropQuality', 'cropSolid', 'cropExtraChance', 'cropExtraMin', 'cropExtraMax'].forEach(id => {
     const el = cropEl(id);
     el.addEventListener(el.tagName === 'SELECT' || el.type === 'checkbox' ? 'change' : 'input', () => {
@@ -17487,6 +17715,229 @@ function closeMachineEditor() { mchEl('mchEdOverlay').classList.remove('show'); 
     box.addEventListener('dragleave', () => box.classList.remove('over'));
     box.addEventListener('drop', e => { e.preventDefault(); box.classList.remove('over'); mchTakeArt(e.dataTransfer.files[0], target); });
   }
+})();
+</script>
+
+<script>
+// ================================================================
+//  SEASONAL ART — the Map Editor's "Seasons…" for one library asset (its
+//  art in each season: asset.seasons, see SEASONS (map art)), and the
+//  file row's "Seasons…": the whole map as it looks in each season.
+//  "Auto" makes a first try from the asset's own art (greens turn to
+//  blossom / deep summer / autumn colours / snow) to draw over.
+// ================================================================
+const snEl = id => document.getElementById(id);
+let snAsset = -1;   // assets[] index the dialog is for
+
+// The asset's own look: { w, h, frames: [{ color, alpha }] } — an animation's every frame.
+function seasonBaseArt(a) {
+  const p = getPlaceable(a);
+  if (p && p.anim && p.anim.frames && p.anim.frames.length > 1)
+    return { w: p.w, h: p.h, frames: p.anim.frames.map(f => ({ color: f.color, alpha: f.alpha || new Uint8ClampedArray(p.w * p.h).fill(255) })) };
+  return { w: p.w, h: p.h, frames: [{ color: p.rgba_color, alpha: p.rgba_alpha }] };
+}
+// Frames side by side as one image: { w, h, color, alpha }.
+function seasonStrip(base, frames) {
+  const n = frames.length, W = base.w * n, color = new Uint8ClampedArray(W * base.h * 3), alpha = new Uint8ClampedArray(W * base.h);
+  frames.forEach((f, k) => {
+    for (let y = 0; y < base.h; y++)
+      for (let x = 0; x < base.w; x++) {
+        const s = y * base.w + x, d = y * W + k * base.w + x;
+        alpha[d] = f.alpha[s] ? 255 : 0;
+        color[d * 3] = f.color[s * 3]; color[d * 3 + 1] = f.color[s * 3 + 1]; color[d * 3 + 2] = f.color[s * 3 + 2];
+      }
+  });
+  return { w: W, h: base.h, color, alpha };
+}
+
+// ---- Auto: one pixel of the asset's art in season k ----
+const SN_FALL = [[222, 128, 40], [196, 74, 30], [236, 178, 54], [160, 64, 32], [210, 100, 36]];
+function seasonAutoPx(k, r, g, b, x, y, edgeTop, depth) {
+  const l = (r * 77 + g * 151 + b * 28) >> 8, green = g > r + 6 && g > b + 6, clamp = v => v < 0 ? 0 : v > 255 ? 255 : v | 0;
+  const mix = (c, t, f) => c + (t - c) * f;
+  if (k === 0) {   // spring: fresher, lighter greens, now and then a blossom
+    if (green && ((x * 7 + y * 13) % 23 === 0)) return [250, 186, 210];
+    return green ? [clamp(r + 6), clamp(g + 18), clamp(b + 4)] : [clamp(r + 6), clamp(g + 6), clamp(b + 6)];
+  }
+  if (k === 1) {   // summer: deeper, warmer
+    return green ? [clamp(r * 0.92 + 4), clamp(g * 1.06), clamp(b * 0.8)] : [clamp(r * 1.05), clamp(g * 1.02), clamp(b * 0.92)];
+  }
+  if (k === 2) {   // fall: greens to orange / red / gold by brightness
+    if (green) {
+      const c = SN_FALL[((Math.imul(x, 73856093) ^ Math.imul(y >> 1, 19349663)) >>> 0) % SN_FALL.length], f = 0.55 + l / 400;   // leafy speckle
+      return [clamp(c[0] * f), clamp(c[1] * f), clamp(c[2] * f)];
+    }
+    return [clamp(r * 1.06 + 4), clamp(g * 0.96), clamp(b * 0.85)];
+  }
+  // winter: snow on the top edges, greens frosted pale, the rest a little cold and grey
+  if (edgeTop && depth < 2) return depth === 0 ? [246, 249, 255] : [226, 234, 246];
+  if (green) return [clamp(mix(r, 214, 0.7)), clamp(mix(g, 226, 0.7)), clamp(mix(b, 238, 0.7))];
+  const grey = l;
+  return [clamp(mix(r, grey, 0.35) * 0.95), clamp(mix(g, grey, 0.35) * 0.97), clamp(mix(b, grey, 0.35) + 14)];
+}
+function seasonAuto(a, k) {
+  const base = seasonBaseArt(a), w = base.w, h = base.h;
+  const full = base.frames.every(f => f.alpha.every(v => v));   // a ground tile: snow everywhere instead of on top
+  const frames = base.frames.map(f => {
+    const color = new Uint8ClampedArray(w * h * 3), alpha = f.alpha.slice();
+    for (let x = 0; x < w; x++) {
+      let depth = -1;   // rows since the last see-through pixel above (snow lies on the top 2)
+      for (let y = 0; y < h; y++) {
+        const i = y * w + x;
+        if (!f.alpha[i]) { depth = -1; continue; }
+        depth++;
+        let [r, g, b] = seasonAutoPx(k, f.color[i * 3], f.color[i * 3 + 1], f.color[i * 3 + 2], x, y, !full, depth);
+        if (k === 3 && full) {   // a ground tile under snow, a few darker flecks
+          const n = (x * 13 + y * 7) % 11;
+          r = n === 0 ? 206 : 238; g = n === 0 ? 216 : 243; b = n === 0 ? 232 : 252;
+        }
+        color[i * 3] = r; color[i * 3 + 1] = g; color[i * 3 + 2] = b;
+      }
+    }
+    return { color, alpha };
+  });
+  return frames.length > 1 ? seasonStrip(base, frames) : { w, h, color: frames[0].color, alpha: frames[0].alpha };
+}
+
+// ---- the dialog ----
+function seasonDraw(cv, v, w, h) {
+  const g = cv.getContext('2d');
+  for (let y = 0; y < cv.height; y += 8)
+    for (let x = 0; x < cv.width; x += 8) { g.fillStyle = ((x + y) / 8) % 2 ? '#1d1d1d' : '#262626'; g.fillRect(x, y, 8, 8); }
+  if (!v) return;
+  const img = new ImageData(w, h);
+  for (let i = 0; i < w * h; i++) {   // the first frame
+    const s = Math.floor(i / w) * v.w + (i % w);
+    if (!v.alpha[s]) continue;
+    img.data[i * 4] = v.color[s * 3]; img.data[i * 4 + 1] = v.color[s * 3 + 1]; img.data[i * 4 + 2] = v.color[s * 3 + 2]; img.data[i * 4 + 3] = 255;
+  }
+  const tmp = document.createElement('canvas');
+  tmp.width = w; tmp.height = h;
+  tmp.getContext('2d').putImageData(img, 0, 0);
+  const sc = Math.max(1, Math.floor(Math.min(cv.width / w, cv.height / h)));
+  g.imageSmoothingEnabled = false;
+  g.drawImage(tmp, Math.floor((cv.width - w * sc) / 2), Math.floor((cv.height - h * sc) / 2), w * sc, h * sc);
+}
+function seasonRender() {
+  const a = assets[snAsset];
+  if (!a) { closeSeasonModal(); return; }
+  const base = seasonBaseArt(a), n = base.frames.length;
+  snEl('snTitle').textContent = `Seasonal art — "${axStripPng(a.name)}"`;
+  snEl('snSize').textContent = n > 1
+    ? `An animation of ${n} frames, ${base.w}×${base.h}: a PNG of ${base.w * n}×${base.h} (its frames side by side) or ${base.w}×${base.h} (the same picture every frame).`
+    : `A PNG of ${base.w}×${base.h}, the size of the asset.`;
+  const grid = snEl('snGrid');
+  grid.innerHTML = '';
+  const card = (label, v, k) => {
+    const c = document.createElement('div');
+    c.className = 'snCard' + (k >= 0 && !v ? ' empty' : '');
+    const cv = document.createElement('canvas');
+    cv.width = 112; cv.height = 112;
+    seasonDraw(cv, v, base.w, base.h);
+    const t = document.createElement('b');
+    t.textContent = label;
+    c.append(t, cv);
+    if (k >= 0) {
+      const bad = v && (v.h !== base.h || (v.w !== base.w && v.w !== base.w * n));
+      const note = document.createElement('span');
+      note.textContent = bad ? `${v.w}×${v.h}: doesn't fit any more — load it again` : v ? (v.w > base.w ? `${v.w / base.w} frames` : 'set') : 'normal art';
+      if (bad) note.className = 'bad';
+      const row = document.createElement('div');
+      const load = document.createElement('button'), auto = document.createElement('button'), rm = document.createElement('button');
+      load.type = auto.type = rm.type = 'button';
+      load.textContent = 'Load PNG…'; auto.textContent = 'Auto'; rm.textContent = 'Remove';
+      auto.title = `Make ${SEASONS[k].toLowerCase()} art from the normal art (a start to draw over)`;
+      rm.disabled = !v;
+      load.onclick = () => { snEl('snFile').dataset.k = k; snEl('snFile').click(); };
+      auto.onclick = () => seasonSet(k, seasonAuto(a, k), 'auto');
+      rm.onclick = () => seasonSet(k, null, 'remove');
+      row.append(load, auto, rm);
+      c.append(note, row);
+      c.addEventListener('dragover', e => { e.preventDefault(); c.classList.add('over'); });
+      c.addEventListener('dragleave', () => c.classList.remove('over'));
+      c.addEventListener('drop', e => { e.preventDefault(); c.classList.remove('over'); seasonLoadFile(k, e.dataTransfer.files[0]); });
+    }
+    grid.appendChild(c);
+  };
+  card('Normal', seasonStrip(base, base.frames), -1);
+  SEASONS.forEach((name, k) => card(name, a.seasons && a.seasons[SEASON_FILES[k]], k));
+}
+function seasonSet(k, v, what) {
+  const a = assets[snAsset];
+  if (!a) return;
+  axRecordAssets([snAsset], `${SEASONS[k].toLowerCase()} art ${what} ${axAssetLabel(snAsset)}`);
+  const s = a.seasons ? { ...a.seasons } : {};
+  if (v) s[SEASON_FILES[k]] = v; else delete s[SEASON_FILES[k]];
+  if (seasonsAny(s)) a.seasons = s; else delete a.seasons;
+  invalidatePlaceable(a);   // the linked folder gets it
+  renderAssetList();
+  seasonRender();
+}
+async function seasonLoadFile(k, file) {
+  const a = assets[snAsset];
+  if (!a || !file) return;
+  let img;
+  try { img = await cropReadPng(file); } catch (e) { alert(`Couldn't read ${file.name} as an image.`); return; }
+  const base = seasonBaseArt(a), n = base.frames.length;
+  if (img.h !== base.h || (img.w !== base.w && img.w !== base.w * n)) {
+    alert(`${file.name} is ${img.w}×${img.h}. ${snEl('snSize').textContent}`);
+    return;
+  }
+  const N = img.w * img.h, color = new Uint8ClampedArray(N * 3), alpha = new Uint8ClampedArray(N);
+  for (let i = 0; i < N; i++) {
+    if (img.rgba[i * 4 + 3] < 128) continue;
+    alpha[i] = 255;
+    color[i * 3] = img.rgba[i * 4]; color[i * 3 + 1] = img.rgba[i * 4 + 1]; color[i * 3 + 2] = img.rgba[i * 4 + 2];
+  }
+  seasonSet(k, { w: img.w, h: img.h, color, alpha }, 'load');
+}
+function openSeasonModal(i) {
+  if (!assets[i]) return;
+  snAsset = i;
+  seasonRender();
+  snEl('seasonOverlay').classList.add('show');
+}
+function closeSeasonModal() { snEl('seasonOverlay').classList.remove('show'); snAsset = -1; }
+
+// ---- the map in each season ----
+let snPreviewK = 3;
+function openSeasonPreview(k) {
+  if (assetEditState) { alert('Finish editing the asset first.'); return; }
+  if (k != null) snPreviewK = k;
+  snEl('seasonPrevOverlay').classList.add('show');
+  seasonPreviewRender();
+}
+function seasonPreviewRender() {
+  const used = mapSeasonsUsed(), tabs = snEl('snPrevTabs');
+  tabs.innerHTML = '';
+  ['Normal', ...SEASONS].forEach((name, j) => {
+    const k = j - 1, b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = name + (k >= 0 && !used.includes(k) ? ' (no art)' : '');
+    b.classList.toggle('on', k === snPreviewK);
+    b.onclick = () => { snPreviewK = k; seasonPreviewRender(); };
+    tabs.appendChild(b);
+  });
+  const color = snPreviewK >= 0 && used.includes(snPreviewK) ? seasonComposite(snPreviewK).color : colorData;
+  const cv = snEl('snPrevCanvas'), img = new ImageData(REAL_MAP_W, REAL_MAP_H);
+  cv.width = REAL_MAP_W; cv.height = REAL_MAP_H;
+  for (let i = 0; i < REAL_MAP_W * REAL_MAP_H; i++) {
+    img.data[i * 4] = color[i * 3]; img.data[i * 4 + 1] = color[i * 3 + 1]; img.data[i * 4 + 2] = color[i * 3 + 2]; img.data[i * 4 + 3] = 255;
+  }
+  cv.getContext('2d').putImageData(img, 0, 0);
+  const withArt = new Set(placedAssets.filter(r => snPreviewK >= 0 && seasonVariantFor(r, snPreviewK)).map(r => r.srcUid || (r.snapshot && r.snapshot.name)));
+  snEl('snPrevInfo').textContent = snPreviewK < 0 ? 'The map as you drew it — used in any season that has no art of its own.'
+    : used.includes(snPreviewK) ? `${SEASONS[snPreviewK]}: ${withArt.size} kind${withArt.size === 1 ? '' : 's'} of asset with ${SEASONS[snPreviewK].toLowerCase()} art. Export writes it as its own map file; the device loads it from day 1 to 30 of ${SEASONS[snPreviewK]}.`
+    : `No asset on this map has ${SEASONS[snPreviewK].toLowerCase()} art, so in ${SEASONS[snPreviewK]} the device shows the normal map. Give assets art with their Seasons… button.`;
+}
+
+(() => {
+  snEl('snFile').addEventListener('change', e => { const f = e.target.files[0], k = +e.target.dataset.k; e.target.value = ''; seasonLoadFile(k, f); });
+  snEl('snClose').onclick = closeSeasonModal;
+  snEl('snPreview').onclick = () => openSeasonPreview();
+  snEl('seasonOverlay').addEventListener('mousedown', e => { if (e.target.id === 'seasonOverlay') closeSeasonModal(); });
+  snEl('snPrevClose').onclick = () => snEl('seasonPrevOverlay').classList.remove('show');
+  snEl('seasonPrevOverlay').addEventListener('mousedown', e => { if (e.target.id === 'seasonPrevOverlay') snEl('seasonPrevOverlay').classList.remove('show'); });
 })();
 </script>
 

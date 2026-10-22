@@ -227,6 +227,19 @@ bool                item_droppable(uint8_t item);
 #define ITEM_ATTR_FISH_MAX     "fish_max"
 #define ITEM_ATTR_FISH_TIER    "fish_tier"
 
+// Seasons (SEASONS in main.c): every 30 game days the next one of Spring,
+// Summer, Fall, Winter. A set of them is a bit mask, SEASON_BIT(s) each
+// (0 or no attribute = all year):
+//  - "season" on a crop's SEED PACKET (the Crops Editor writes it): it can
+//    only be planted then, shops only sell it then, and it withers the first
+//    day of a season outside it (not inside buildings — a greenhouse).
+//  - "fish_season" on a fish: it only bites then.
+#define ITEM_ATTR_SEASON       "season"
+#define ITEM_ATTR_FISH_SEASON  "fish_season"
+enum { SEASON_SPRING, SEASON_SUMMER, SEASON_FALL, SEASON_WINTER, SEASON_COUNT };
+#define SEASON_BIT(s)          (1u << (s))
+#define SEASON_ALL             0x0F
+
 // Lava fishing (FISHING in main.c). Ground ticked "Lava" in the Map Editor is
 // a second pool with its own fish:
 //  - "rod_lava 1": the rod can cast into lava (others: "it would burn up").

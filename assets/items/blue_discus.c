@@ -40,6 +40,7 @@ static const item_attr_t k_blue_discus_attrs[] = {
     { "fish_max", 8 },
     { "fish_tier", 3 },
     { "mut", 150 },
+    { "fish_season", 2 },
 };
 
 const item_asset_t k_item_blue_discus = {
@@ -49,5 +50,5 @@ const item_asset_t k_item_blue_discus = {
     .passive = { .w=16, .h=16, .frame_count=1, .interval_ms=150, .loop_count=-1, .pixels=k_blue_discus_passive_pixels },
     .use = { .frame_count = 0 },
     .attrs = k_blue_discus_attrs,
-    .attr_count = 11,
+    .attr_count = 12,
 };

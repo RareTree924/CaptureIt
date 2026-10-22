@@ -35,6 +35,7 @@ static const item_attr_t k_silver_seabream_attrs[] = {
     { "fish_rarity", 20 },
     { "fish_min", 8 },
     { "fish_max", 18 },
+    { "fish_season", 5 },
 };
 
 const item_asset_t k_item_silver_seabream = {
@@ -44,5 +45,5 @@ const item_asset_t k_item_silver_seabream = {
     .passive = { .w=16, .h=16, .frame_count=1, .interval_ms=150, .loop_count=-1, .pixels=k_silver_seabream_passive_pixels },
     .use = { .frame_count = 0 },
     .attrs = k_silver_seabream_attrs,
-    .attr_count = 6,
+    .attr_count = 7,
 };

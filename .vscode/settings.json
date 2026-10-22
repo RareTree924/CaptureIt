@@ -31,6 +31,13 @@
         "useVsCodeApi": true,
         "command": "workbench.action.tasks.runTask",
         "args": ["Git: Pull (overwrite local)"]
+      },
+      {
+        "name": "$(diff) Compare",
+        "tooltip": "List what's different between this computer and GitHub",
+        "useVsCodeApi": true,
+        "command": "workbench.action.tasks.runTask",
+        "args": ["Git: Compare with GitHub"]
       }
     ]
   }

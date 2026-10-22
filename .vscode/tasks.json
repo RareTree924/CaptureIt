@@ -82,6 +82,18 @@
                 "panel": "shared",
                 "clear": true
             }
+        },
+        {
+            "label": "Git: Compare with GitHub",
+            "type": "shell",
+            "command": "powershell.exe",
+            "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}\\tools\\git_compare.ps1"],
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared",
+                "clear": true
+            }
         }
     ]
 }

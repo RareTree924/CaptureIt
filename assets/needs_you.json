@@ -204,13 +204,12 @@
     {
       "id": "art_fishing",
       "kind": "art",
-      "title": "The fishing rod and four fish still use the stand-in art",
+      "title": "The fishing rod and three fish still use the stand-in art",
       "what": "These still match assets/placeholder_art/ (carp, rainbow trout and sunfish already have yours). Open each one and load your own 16x16 art.",
       "added": "2026-10-17",
       "files": [
         "items/fishing_rod.c",
         "items/catfish.c",
-        "items/eel.c",
         "items/golden_koi.c",
         "items/largemouth_bass.c"
       ],
@@ -861,6 +860,51 @@
           "path": "../main/main.c"
         }
       ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "data_new_stardew_fish",
+      "kind": "data",
+      "title": "8 new fish from your pictures: check Claude's numbers",
+      "what": "Added from your Stardew pictures (2026-10-22). Squid, Stingray and Crab use Stardew's numbers. Stingray only bites in Stardew's Pirate Cove, so here it's the deep ocean (3+ tiles out), all year. The other 5 are Stardew's 'Extended Family' fish under your names (Angry Crimson Fish = Son of Crimsonfish, Flower Angler = Ms. Angler, Pouch Fish = Legend II, Angry Mutant Carp = Radioactive Carp, Cool Glacier Fish = Glacierfish Jr.). Their numbers are Claude's: the parent's place and season, the parent's tricks plus one more, Mythic tier (very rare), one per save, a higher fishing level. The fish data file you mentioned never arrived, so nothing was checked against it. Change anything in the Fishing tab, or send the file and write here.",
+      "added": "2026-10-22",
+      "files": [
+        {
+          "path": "items/squid.c"
+        },
+        {
+          "path": "items/stingray.c"
+        },
+        {
+          "path": "items/crab.c"
+        },
+        {
+          "path": "items/angry_crimson_fish.c"
+        },
+        {
+          "path": "items/flower_angler.c"
+        },
+        {
+          "path": "items/pouch_fish.c"
+        },
+        {
+          "path": "items/angry_mutant_carp.c"
+        },
+        {
+          "path": "items/cool_glacier_fish.c"
+        }
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "test_new_stardew_fish",
+      "kind": "test",
+      "title": "Try the new fish and icons on the board",
+      "what": "40 fish / crab pot items now have your Stardew icons (32 replaced, 8 new). Check: dev 'give squid', 'give crab', 'give pouch_fish' and look at them in the bag; 'fish hook stingray' then 'fish catch'; the fish book lists the new ones; a crab pot in the ocean can bring up a Crab; the crab pot prop looks right on a water tile.",
+      "added": "2026-10-22",
+      "files": [],
       "done": false,
       "reply": ""
     }

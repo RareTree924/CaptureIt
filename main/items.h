@@ -61,6 +61,11 @@ int64_t             item_price_bonus_pct(uint8_t item);
 // asks this for the price.
 #define ITEM_ATTR_BUYABLE "buyable"
 int32_t             item_buy_price(uint8_t item);                        // 0 = no shop sells it
+// "shop N" puts an item with a price on one counter, whatever it is (the Item
+// Editor's / Shop Editor's "Counter"): 1 Seeds, 2 Build, 3 Ranch, 4 Tackle,
+// 5 General. None = its usual one (props: Build, seeds and farm tools: Seeds,
+// animal things: Ranch, rods and bait: Tackle, anything else: General).
+#define ITEM_ATTR_SHOP    "shop"
 
 // Quality (rarity): every stack has one. Most things are always Standard;
 // an item with "quality 1" (the Item Editor's "Rolls a quality" box, or the
@@ -221,6 +226,43 @@ bool                item_droppable(uint8_t item);
 #define ITEM_ATTR_FISH_MIN     "fish_min"
 #define ITEM_ATTR_FISH_MAX     "fish_max"
 #define ITEM_ATTR_FISH_TIER    "fish_tier"
+
+// Lava fishing (FISHING in main.c). Ground ticked "Lava" in the Map Editor is
+// a second pool with its own fish:
+//  - "rod_lava 1": the rod can cast into lava (others: "it would burn up").
+//    It still fishes water too.
+//  - "fish_lava 1": the fish lives in lava — it only bites there, and water
+//    fish never bite in lava.
+#define ITEM_ATTR_ROD_LAVA     "rod_lava"
+#define ITEM_ATTR_FISH_LAVA    "fish_lava"
+
+// Bait (FISHING + BAIT in main.c; the Game Tools Bait Editor). "bait 1" makes
+// an item bait: drop a stack of it on a rod in the inventory to put it on
+// (BAIT_MAX at most); the card's TAKE OFF button gives it back. Each catch
+// uses one. Bait stays with the rod's kind (two of the same rod share it).
+//  - "rod_bait 1": the rod only casts with bait on it.
+//  - "fish_bait 1": the fish only bites when there's bait on the line.
+// A bait's stats (all optional; none = no change):
+//  "bait_bite" % how soon fish bite (200 = in half the time)
+//  "bait_bar" px more catch bar (below 0: smaller)
+//  "bait_control" 0..100 bar control: the bar brakes and turns faster, bounces less
+//  "bait_calm" 0..80 % calmer fish: their difficulty goes down that much
+//  "bait_reel" / "bait_grip" % — times the rod's own (see rod_reel / rod_grip)
+//  "bait_luck" points added to the rod's luck
+//  "bait_mut" % mutation chance (200 = twice as likely)
+//  "bait_tier" 2..6: only fish of this tier or rarer bite (when any can)
+#define ITEM_ATTR_BAIT         "bait"
+#define ITEM_ATTR_ROD_NEEDS_BAIT "rod_bait"
+#define ITEM_ATTR_FISH_BAIT    "fish_bait"
+#define ITEM_ATTR_BAIT_BITE    "bait_bite"
+#define ITEM_ATTR_BAIT_BAR     "bait_bar"
+#define ITEM_ATTR_BAIT_CONTROL "bait_control"
+#define ITEM_ATTR_BAIT_CALM    "bait_calm"
+#define ITEM_ATTR_BAIT_REEL    "bait_reel"
+#define ITEM_ATTR_BAIT_GRIP    "bait_grip"
+#define ITEM_ATTR_BAIT_LUCK    "bait_luck"
+#define ITEM_ATTR_BAIT_MUT     "bait_mut"
+#define ITEM_ATTR_BAIT_TIER    "bait_tier"
 
 // Items made while the game runs (the camera viewer's "make it an item"). They
 // come after the compiled-in ones and go through item_get() like any other item;

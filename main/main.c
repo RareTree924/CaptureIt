@@ -3083,6 +3083,26 @@ static double trait_combo_mult(int good)
 // — e.g. { "~Crisp Shot", 130 }.
 #define TRAIT_FREE '~'
 
+// ---- BAIT: what's on each rod (FISHING; items.h ITEM_ATTR_BAIT*) ----------
+//  Kept per rod KIND (compiled-in rod items), not per bag slot, so it goes
+//  wherever the rod goes; two of the same rod share it. At most one full
+//  stack of one bait. Saved with the bag in world.txt:
+//      bait <rod id> <bait id> <count>
+typedef struct { uint8_t item; uint8_t count; } rod_bait_t;
+static rod_bait_t s_rod_bait[256];
+
+static uint8_t rod_bait_item(uint8_t rod)  { return s_rod_bait[rod].count ? s_rod_bait[rod].item : ITEM_NONE; }
+static int     rod_bait_count(uint8_t rod) { return s_rod_bait[rod].count; }
+
+// A catch with `bait` on `rod`: one used up. Returns how many are left.
+static int rod_bait_use(uint8_t rod, uint8_t bait)
+{
+    rod_bait_t *b = &s_rod_bait[rod];
+    if (b->count == 0 || b->item != bait) return 0;
+    if (--b->count == 0) b->item = ITEM_NONE;
+    return b->count;
+}
+
 // The item's traits, in its attribute order (up to max). Returns how many it has in all.
 static int item_traits(uint8_t item, trait_t *out, int max)
 {
@@ -3119,6 +3139,44 @@ static int item_traits(uint8_t item, trait_t *out, int max)
             if (n < max) out[n] = (trait_t){ k_rod[s].attr, lbl[s], (int16_t)(diff > 0 ? 101 : 99) };
             n++;
         }
+        // lava, needing bait, and the bait on it now (BAIT)
+        static char bait_lbl[32];
+        if (item_attr(item, ITEM_ATTR_ROD_LAVA, 0) > 0)        { if (n < max) out[n] = (trait_t){ ITEM_ATTR_ROD_LAVA, "Lava rod", 101 }; n++; }
+        if (item_attr(item, ITEM_ATTR_ROD_NEEDS_BAIT, 0) > 0)  { if (n < max) out[n] = (trait_t){ ITEM_ATTR_ROD_NEEDS_BAIT, "Needs bait", 100 }; n++; }
+        if (item < item_count && rod_bait_count(item)) {
+            snprintf(bait_lbl, sizeof(bait_lbl), "Bait: %s x%d", item_name(rod_bait_item(item)), rod_bait_count(item));
+            if (n < max) out[n] = (trait_t){ ITEM_ATTR_BAIT, bait_lbl, 100 };
+            n++;
+        }
+    }
+    // A bait's stats: green better, red worse
+    if (a && item_attr(item, ITEM_ATTR_BAIT, 0) > 0) {
+        static char blbl[8][16];
+        struct { const char *attr, *name, *unit; int def; } k_bait[8] = {
+            { ITEM_ATTR_BAIT_BITE, "Bite ", "%", 100 }, { ITEM_ATTR_BAIT_BAR, "Bar ", "px", 0 }, { ITEM_ATTR_BAIT_CONTROL, "Control ", "", 0 },
+            { ITEM_ATTR_BAIT_CALM, "Calm ", "%", 0 }, { ITEM_ATTR_BAIT_REEL, "Reel ", "%", 100 }, { ITEM_ATTR_BAIT_GRIP, "Grip ", "%", 100 },
+            { ITEM_ATTR_BAIT_LUCK, "Luck ", "", 0 }, { ITEM_ATTR_BAIT_MUT, "Mutation ", "%", 100 },
+        };
+        for (int s = 0; s < 8; s++) {
+            int v = (int)item_attr(item, k_bait[s].attr, k_bait[s].def), diff = v - k_bait[s].def;
+            if (!diff) continue;
+            snprintf(blbl[s], sizeof(blbl[s]), "%s%+d%s", k_bait[s].name, diff, k_bait[s].unit);
+            if (n < max) out[n] = (trait_t){ k_bait[s].attr, blbl[s], (int16_t)(diff > 0 ? 101 : 99) };
+            n++;
+        }
+        int tier = (int)item_attr(item, ITEM_ATTR_BAIT_TIER, 1);
+        static char tlbl[24];
+        if (tier >= 2 && tier <= 6) {
+            static const char *const k_t[5] = { "Uncommon", "Rare", "Epic", "Legendary", "Mythic" };
+            snprintf(tlbl, sizeof(tlbl), "%s+ only", k_t[tier - 2]);
+            if (n < max) out[n] = (trait_t){ ITEM_ATTR_BAIT_TIER, tlbl, 101 };
+            n++;
+        }
+    }
+    // A lava fish / a fish that only bites on bait
+    if (a && item_attr(item, ITEM_ATTR_FISH, 0) > 0) {
+        if (item_attr(item, ITEM_ATTR_FISH_LAVA, 0) > 0) { if (n < max) out[n] = (trait_t){ ITEM_ATTR_FISH_LAVA, "Lives in lava", 100 }; n++; }
+        if (item_attr(item, ITEM_ATTR_FISH_BAIT, 0) > 0) { if (n < max) out[n] = (trait_t){ ITEM_ATTR_FISH_BAIT, "Bites on bait", 100 }; n++; }
     }
     return n;
 }
@@ -3714,6 +3772,7 @@ static bool tp_bank_read(FILE *f, tp_bank_t *out)
 #define TILE_FLAG_TILLABLE     0x01
 #define TILE_FLAG_BUILDABLE    0x02  // the editor's "Buildable": buildings may stand on it (PLACEMENT)
 #define TILE_FLAG_FISHABLE     0x04  // the editor's "Fishable": water a fishing rod casts into (FISHING)
+#define TILE_FLAG_LAVA         0x08  // the editor's "Lava": fished only with a lava rod, its own fish (FISHING)
 #define TILE_CELL_COVERED      0x80
 #define TILE_NONE              0     // no tile type here (see above), off the map, or a map from before MAP11
 #define TILE_FARMLAND          254   // tilled with a hoe (FARMING) — the same on every map
@@ -3820,11 +3879,18 @@ bool tile_buildable(int tx, int ty)
     return t != TILE_NONE && (s_tiles->types[t].flags & TILE_FLAG_BUILDABLE) && !tile_covered(tx, ty);
 }
 
-// Water ticked "Fishable" in the editor (something on it, like a lily pad, doesn't matter).
+// Water ticked "Fishable" (or ground ticked "Lava") in the editor (something on it, like a lily pad, doesn't matter).
 bool tile_fishable(int tx, int ty)
 {
     uint8_t t = read_map_tile(tx, ty);
-    return t != TILE_NONE && (s_tiles->types[t].flags & TILE_FLAG_FISHABLE);
+    return t != TILE_NONE && (s_tiles->types[t].flags & (TILE_FLAG_FISHABLE | TILE_FLAG_LAVA));
+}
+
+// Ground ticked "Lava": fished like water, but only with a lava rod (FISHING).
+bool tile_lava(int tx, int ty)
+{
+    uint8_t t = read_map_tile(tx, ty);
+    return t != TILE_NONE && (s_tiles->types[t].flags & TILE_FLAG_LAVA);
 }
 
 // ---- Action triggers (MAP12 section) ---------------------------------------
@@ -11571,8 +11637,51 @@ static void inv_carry_return(void)
     s_inv_carry.count = 0;
 }
 
+// BAIT: the carried stack is bait and slot s holds a rod — it goes on the rod
+// (up to a full stack); different bait already on it comes back as the carry.
+// false = not bait on a rod (the tap is an ordinary one).
+static bool inv_bait_onto_rod(inv_slot_t *s)
+{
+    uint8_t bait = s_inv_carry.item, rod = s->item;
+    if (item_attr(bait, ITEM_ATTR_BAIT, 0) <= 0 || rod >= item_count || item_attr(rod, ITEM_ATTR_ROD, 0) <= 0) return false;
+    rod_bait_t *b = &s_rod_bait[rod];
+    if (b->count && b->item != bait) {   // other bait on it: swap the two
+        rod_bait_t old = *b;
+        *b = (rod_bait_t){ bait, s_inv_carry.count };
+        s_inv_carry = (inv_slot_t){ old.item, old.count, QUALITY_STANDARD };
+        message(2500, "Put %s on %s (took the %s off)", item_name(bait), item_name(rod), item_name(old.item));
+    } else {
+        int put = item_max_stack(bait) - b->count;
+        if (put > s_inv_carry.count) put = s_inv_carry.count;
+        if (put <= 0) { message(2000, "%s already has a full stack of %s", item_name(rod), item_name(bait)); return true; }
+        *b = (rod_bait_t){ bait, (uint8_t)(b->count + put) };
+        s_inv_carry.count -= put;
+        if (s_inv_carry.count == 0) s_inv_carry.item = ITEM_NONE;
+        message(2500, "%s: %s x%d on the hook", item_name(rod), item_name(bait), b->count);
+    }
+    s_ui_needs_redraw = true;
+    return true;
+}
+
+// BAIT: the card's TAKE OFF — the bait on `rod` back into the bag (or on the ground).
+static void inv_bait_take_off(uint8_t rod)
+{
+    rod_bait_t *b = &s_rod_bait[rod];
+    if (!b->count) return;
+    int left = inv_add_q(b->item, QUALITY_STANDARD, b->count);
+    if (left && !ground_drop(b->item, QUALITY_STANDARD, left)) {
+        message(2500, "No room for the bait");
+        b->count = (uint8_t)left;   // it stays on the rod
+    } else {
+        message(2500, left ? "Took the %s off - some is on the ground" : "Took the %s off", item_name(b->item));
+        b->count = 0;
+        b->item  = ITEM_NONE;
+    }
+    s_ui_needs_redraw = true;
+}
+
 // A tap on a slot: pick it up, put the carried stack down, top up a
-// matching stack, or swap with a different one.
+// matching stack, or swap with a different one (bait onto a rod goes on it).
 static void inv_click_slot(int slot)
 {
     inv_slot_t *s = &s_inv[slot];
@@ -11586,6 +11695,8 @@ static void inv_click_slot(int slot)
         *s = s_inv_carry;
         s_inv_carry.item  = ITEM_NONE;
         s_inv_carry.count = 0;
+    } else if (inv_bait_onto_rod(s)) {
+        return;
     } else if (s->item == s_inv_carry.item && s->quality == s_inv_carry.quality) {
         int room = item_max_stack(s->item) - s->count;
         int put  = room < s_inv_carry.count ? room : s_inv_carry.count;
@@ -11805,8 +11916,12 @@ static void inv_draw_money(int right, int cy, int max_w)
 #define INV_COL_DOWN    COLOR_RGB565(176,  76,  56)   // ...lowers it
 #define INV_COL_LEGEND  COLOR_RGB565(150,  60, 200)   // a LEGENDARY trait
 
+static rect_t  s_inv_bait_btn;    // BAIT: the card's TAKE OFF button as last drawn (w 0 = none)
+static uint8_t s_inv_bait_rod;    // ...the rod it's for
+
 static void inv_draw_card(void)
 {
+    s_inv_bait_btn = (rect_t){ 0, 0, 0, 0 };
     uint8_t item = ITEM_NONE, quality = QUALITY_STANDARD;
     if (s_inv_carry.count > 0) {
         item    = s_inv_carry.item;
@@ -11838,6 +11953,15 @@ static void inv_draw_card(void)
     // chips, two rows; what doesn't fit becomes "+N". A mutation comes first, then the
     // quality (each in its own colour), then a fish's tier.
     int cx = x + 10, cy = y + 28, right = x + w - 10, rows = 1;
+    if (!s_inv_sell_mode && item < item_count && rod_bait_count(item) > 0) {   // BAIT on this rod: TAKE OFF, bottom right
+        const int bw = 70, bh = 18, bx = x + w - 10 - bw, by = y + h - 8 - bh;
+        fill_round_rect(bx, by, bw, bh, 5, INV_COL_DROP, 255);
+        draw_round_rect(bx, by, bw, bh, 5, 1, INV_COL_EDGE);
+        draw_text(bx + (bw - text_width("TAKE OFF", 1)) / 2, by + (bh - 7) / 2, "TAKE OFF", 1, INV_COL_TEXT);
+        s_inv_bait_btn = (rect_t){ bx, by, bw, bh };
+        s_inv_bait_rod = item;
+        right = bx - 4;
+    }
     uint8_t grade = QUALITY_GRADE(quality), mut = QUALITY_MUT(quality);
     if (mut && mut < MUT_COUNT) {   // MUTATIONS: "Radioactive x4"
         char mt[24];
@@ -12094,6 +12218,10 @@ static void update_inventory_touch(const input_frame_t *in)
         inv_activate(INV_DROP_ROW, s_inv_cur_col);
         return;
     }
+    if (s_inv_bait_btn.w && pt_in(tx, ty, s_inv_bait_btn.x - 4, s_inv_bait_btn.y - 4, s_inv_bait_btn.w + 8, s_inv_bait_btn.h + 8)) {
+        inv_bait_take_off(s_inv_bait_rod);   // BAIT: the card's TAKE OFF
+        return;
+    }
 
     int row = -1, col = -1;
     if (in->hotbar_slot >= 0) {
@@ -12155,8 +12283,10 @@ static void update_inventory_touch(const input_frame_t *in)
 #define SHOP_CLOSE_X  (SHOP_PANEL_X + SHOP_PANEL_W - 10 - INV_BTN)
 #define SHOP_CARD_Y   (SHOP_PANEL_Y + SHOP_PANEL_H + 6)
 #define SHOP_CARD_H   44
-#define SHOP_TAB_W    66                     // the SEEDS / BUILD / RANCH tabs in the header...
-#define SHOP_TAB_W3   56                     // ...narrower when there are three
+#define SHOP_TAB_W    66                     // the SEEDS / BUILD / RANCH / TACKLE / GOODS tabs in the header...
+#define SHOP_TAB_W3   56                     // ...narrower when there are three...
+#define SHOP_TAB_W4   52                     // ...four (the money moves down to the footer)...
+#define SHOP_TAB_W5   44                     // ...or five
 #define SHOP_TAB_X    (SHOP_PANEL_X + INV_BTN + 22)
 
 static uint8_t s_shop_items[SHOP_MAX];   // what's for sale
@@ -12184,42 +12314,53 @@ static int inv_count_of(uint8_t item)
 
 static bool shop_show(void);
 
-// Three counters, one screen: SEEDS (farming tools with a "buyable" price, then
+// Five counters, one screen: SEEDS (farming tools with a "buyable" price, then
 // every crop's seed packet), BUILD (every prop and building with a "buyable"
-// price) and RANCH (every farm animal with a price — ANIMALS — then hay, grass
-// starter and the tools that take an animal's product: ranch_sells()). Each
-// asset action ("seed_shop", "build_shop", "ranch_shop") opens its own; the
-// counters that have stock get tabs in the header to switch between them, so
-// any shop on a map sells the animals too.
-enum { SHOP_SEEDS = 0, SHOP_BUILD, SHOP_RANCH, SHOP_KINDS };
+// price), RANCH (every farm animal with a price — ANIMALS — then hay, grass
+// starter and the tools that take an animal's product: ranch_sells()), TACKLE
+// (rods, then bait — FISHING) and GOODS (anything else with a price). An
+// item's "shop N" (items.h ITEM_ATTR_SHOP) puts it on counter N instead, so any
+// item can be sold anywhere. Each asset action ("seed_shop", "build_shop",
+// "ranch_shop", "tackle_shop", "general_shop") opens its own; the counters that
+// have stock get tabs in the header to switch between them, so any shop on a
+// map sells the animals too.
+enum { SHOP_SEEDS = 0, SHOP_BUILD, SHOP_RANCH, SHOP_TACKLE, SHOP_GENERAL, SHOP_KINDS };
+static const char *const k_shop_title[SHOP_KINDS] = { "SEED SHOP", "BUILD SHOP", "RANCH", "TACKLE SHOP", "GENERAL STORE" };
+static const char *const k_shop_tab[SHOP_KINDS]   = { "SEEDS", "BUILD", "RANCH", "TACKLE", "GOODS" };
+static const char *const k_shop_who[SHOP_KINDS]   = { "Seed shop", "Build shop", "Ranch", "Tackle shop", "General store" };
 static int s_shop_kind = SHOP_SEEDS;
 
 static int  animal_of_item(uint8_t item);   // ANIMALS section: the s_animals[] index item lets out, or -1
 static bool ranch_sells(uint8_t item);      // ...hay, grass starter, an animal tool
 static void ranch_shop_card(uint8_t item, char *line, size_t n);
 
-// Fills out[] with what counter `kind` sells. Returns how many.
+// The counter item is sold on (SHOP_*), or -1: it has no price.
+static int shop_kind_of(uint8_t item)
+{
+    if (item_buy_price(item) <= 0) return -1;
+    int k = (int)item_attr(item, ITEM_ATTR_SHOP, 0);
+    if (k >= 1 && k <= SHOP_KINDS) return k - 1;   // put on a counter by hand (Item Editor / Shop Editor)
+    if (animal_of_item(item) >= 0 || ranch_sells(item)) return SHOP_RANCH;
+    if (ITEM_TILLS(item) || ITEM_WATERS(item) || crop_of_seed(item) >= 0) return SHOP_SEEDS;
+    if (place_item_kind(item) != PLACE_NONE) return SHOP_BUILD;
+    if (item_attr(item, ITEM_ATTR_ROD, 0) > 0 || item_attr(item, ITEM_ATTR_BAIT, 0) > 0) return SHOP_TACKLE;
+    return SHOP_GENERAL;
+}
+
+// Fills out[] with what counter `kind` sells, its headliners first: the
+// animals (RANCH), the farming tools (SEEDS, then the packets in crop order),
+// the rods (TACKLE). Returns how many.
 static int shop_stock(int kind, uint8_t *out)
 {
     int n = 0;
-    if (kind == SHOP_RANCH) {
-        for (int i = 1; i < item_count && n < SHOP_MAX; i++)   // the animals first
-            if (animal_of_item((uint8_t)i) >= 0 && item_buy_price((uint8_t)i) > 0) out[n++] = (uint8_t)i;
-        for (int i = 1; i < item_count && n < SHOP_MAX; i++)
-            if (animal_of_item((uint8_t)i) < 0 && ranch_sells((uint8_t)i) && item_buy_price((uint8_t)i) > 0) out[n++] = (uint8_t)i;
-    } else if (kind == SHOP_SEEDS) {
-        for (int i = 1; i < item_count && n < SHOP_MAX; i++)   // farming tools with a price first (a watering can)
-            if ((ITEM_TILLS((uint8_t)i) || ITEM_WATERS((uint8_t)i)) && item_buy_price((uint8_t)i) > 0) out[n++] = (uint8_t)i;
-        for (int c = 0; c < crop_count && n < SHOP_MAX; c++) {
-            char id[48];
-            snprintf(id, sizeof(id), "%s_seeds", s_crops[c]->id);
-            uint8_t seeds = item_find(id);
-            if (seeds != ITEM_NONE && item_buy_price(seeds) > 0) out[n++] = seeds;
+    for (int pass = 0; pass < 2; pass++)
+        for (int i = 1; i < item_count && n < SHOP_MAX; i++) {
+            uint8_t it = (uint8_t)i;
+            if (shop_kind_of(it) != kind) continue;
+            bool head = kind == SHOP_RANCH ? animal_of_item(it) >= 0 : kind == SHOP_SEEDS ? crop_of_seed(it) < 0 :
+                        kind == SHOP_TACKLE ? item_attr(it, ITEM_ATTR_ROD, 0) > 0 : true;
+            if (head == (pass == 0)) out[n++] = it;
         }
-    } else {
-        for (int i = 1; i < item_count && n < SHOP_MAX; i++)
-            if (place_item_kind((uint8_t)i) != PLACE_NONE && item_buy_price((uint8_t)i) > 0) out[n++] = (uint8_t)i;
-    }
     return n;
 }
 
@@ -12233,13 +12374,13 @@ static int shop_tab_kinds(int kinds[SHOP_KINDS])
 }
 
 // Two counters or more have something: the header shows a tab each, this wide.
-static int shop_tab_w(int n) { return n > 2 ? SHOP_TAB_W3 : SHOP_TAB_W; }
+static int shop_tab_w(int n) { return n > 4 ? SHOP_TAB_W5 : n > 3 ? SHOP_TAB_W4 : n > 2 ? SHOP_TAB_W3 : SHOP_TAB_W; }
 
 static void shop_switch(int kind)
 {
     s_shop_kind  = kind;
     s_shop_count = shop_stock(kind, s_shop_items);
-    s_shop_title = kind == SHOP_SEEDS ? "SEED SHOP" : kind == SHOP_BUILD ? "BUILD SHOP" : "RANCH";
+    s_shop_title = k_shop_title[kind];
     s_shop_sel   = 0;
     s_shop_page  = 0;
 }
@@ -12259,6 +12400,8 @@ static bool shop_open_kind(int kind)
 bool seed_shop_open(void)  { return shop_open_kind(SHOP_SEEDS); }
 bool build_shop_open(void) { return shop_open_kind(SHOP_BUILD); }
 bool ranch_shop_open(void) { return shop_open_kind(SHOP_RANCH); }
+bool tackle_shop_open(void)  { return shop_open_kind(SHOP_TACKLE); }
+bool general_shop_open(void) { return shop_open_kind(SHOP_GENERAL); }
 
 // Opens the shop screen on what shop_switch() stocked.
 static bool shop_show(void)
@@ -12288,8 +12431,7 @@ static void shop_buy(int n)
     int got = n - inv_add_q(item, wet_if_raining(QUALITY_STANDARD), n);   // (a shop out in the rain: wet — WET ITEMS)
     if (got == 0) { message(2000, "No room in your bag"); return; }
     money_spend(price * (uint32_t)got);
-    ledger_add(false, item, QUALITY_STANDARD, got, price * (uint32_t)got, "",
-               s_shop_kind == SHOP_SEEDS ? "Seed shop" : s_shop_kind == SHOP_BUILD ? "Build shop" : "Ranch");
+    ledger_add(false, item, QUALITY_STANDARD, got, price * (uint32_t)got, "", k_shop_who[s_shop_kind]);
     if (got > 1) message(2000, "Bought %s x%d for $%lu", item_name(item), got, (unsigned long)(price * got));
     else         message(2000, "Bought %s for $%lu", item_name(item), (unsigned long)price);
 }
@@ -12329,8 +12471,13 @@ static void shop_draw_card(void)
                  s_crops[c]->grow_days, s_crops[c]->grow_days == 1 ? "" : "s", have);
     else if (s_shop_kind == SHOP_RANCH)
         ranch_shop_card(item, line, sizeof(line));   // what the animal gives, or what the tool is for
-    else
-        snprintf(line, sizeof(line), "In bag: %d", have);
+    else {   // a rod's or bait's stats, or whatever traits it has (TACKLE, GOODS)
+        trait_t t[4];
+        int nt = item_traits(item, t, 4), len = 0;
+        for (int i = 0; i < nt && i < 4 && len < (int)sizeof(line); i++)
+            len += snprintf(line + len, sizeof(line) - len, "%s%s", i ? ", " : "", t[i].label);
+        if (len < (int)sizeof(line)) snprintf(line + len, sizeof(line) - len, "%sIn bag: %d", len ? ".  " : "", have);
+    }
     draw_text_clip(x + 10, y + 28, line, 1, INV_COL_TEXT, w - 20);
 }
 
@@ -12343,12 +12490,11 @@ static void shop_draw(void)
     const char *title = s_shop_title;
     int kinds[SHOP_KINDS], tabs = shop_tab_kinds(kinds), tw = shop_tab_w(tabs);
     if (tabs >= 2) {
-        static const char *const k_tab[SHOP_KINDS] = { "SEEDS", "BUILD", "RANCH" };
         for (int k = 0; k < tabs; k++) {
             int tx = SHOP_TAB_X + k * (tw + 4);
             fill_round_rect(tx, SHOP_BTN_Y, tw, INV_BTN, 5, kinds[k] == s_shop_kind ? INV_COL_GOLD : INV_COL_SLOT_LT, 255);
             draw_round_rect(tx, SHOP_BTN_Y, tw, INV_BTN, 5, 1, INV_COL_EDGE);
-            draw_text_centered(tx, SHOP_BTN_Y + 7, tw, k_tab[kinds[k]], INV_COL_TEXT, INV_COL_SHINE);
+            draw_text_centered(tx, SHOP_BTN_Y + 7, tw, k_shop_tab[kinds[k]], INV_COL_TEXT, INV_COL_SHINE);
         }
     } else {
         draw_text_centered(px + INV_BTN + 16, py + 17, pw - 2 * (INV_BTN + 16), title, INV_COL_TEXT, INV_COL_SHINE);
@@ -12356,7 +12502,8 @@ static void shop_draw(void)
     draw_coin(px + 10 + INV_BTN / 2, SHOP_BTN_Y + INV_BTN / 2);
     draw_close_button(SHOP_CLOSE_X, SHOP_BTN_Y, INV_BTN, false, COLOR_WHITE);
     int title_right = tabs >= 2 ? SHOP_TAB_X + tabs * (tw + 4) : px + pw / 2 + text_width(title, 2) / 2;
-    inv_draw_money(SHOP_CLOSE_X - 8, SHOP_BTN_Y + INV_BTN / 2, SHOP_CLOSE_X - 8 - title_right - 8);
+    bool money_below = tabs >= 4;   // no room left in the header: the money goes in the footer
+    if (!money_below) inv_draw_money(SHOP_CLOSE_X - 8, SHOP_BTN_Y + INV_BTN / 2, SHOP_CLOSE_X - 8 - title_right - 8);
 
     // the packets on this page, each with its price (red when it's more than the money)
     int first = s_shop_page * SHOP_PAGE;
@@ -12384,9 +12531,17 @@ static void shop_draw(void)
     shop_draw_button(SHOP_BUY_X, SHOP_BTN_W, "BUY", price > 0 && money_get() >= price);
     shop_draw_button(SHOP_BUY5_X, SHOP_BTN_W, "BUY 5", price > 0 && money_get() >= price * 5);
     char hint[32];
+    int  hint_right = SHOP_BUY_X - 6;
+    if (money_below) {   // the money, right of the hint
+        char amount[12];
+        snprintf(amount, sizeof(amount), "%lu", (unsigned long)money_get());
+        int mw = text_width(amount, 1) + 16;
+        inv_draw_money(SHOP_BUY_X - 8, SHOP_FOOT_Y + SHOP_BTN_H / 2, mw);
+        hint_right -= mw + 6;
+    }
     if (pages > 1) snprintf(hint, sizeof(hint), "PAGE %d/%d", s_shop_page + 1, pages);
-    else           snprintf(hint, sizeof(hint), "TAP A PACKET");
-    draw_text_centered(text_x, SHOP_FOOT_Y + 2, SHOP_BUY_X - 6 - text_x, hint, INV_COL_TEXT, INV_COL_SHINE);
+    else           snprintf(hint, sizeof(hint), money_below ? "TAP ONE" : "TAP A PACKET");
+    draw_text_centered(text_x, SHOP_FOOT_Y + 2, hint_right - text_x, hint, INV_COL_TEXT, INV_COL_SHINE);
     shop_draw_card();
 }
 
@@ -15256,6 +15411,14 @@ static void ranch_dev_cmd(char *args)
 //  bite, out of those that can then. A catch can come out mutated
 //  (MUTATIONS): more likely when perfect, in the rain, with a lucky rod.
 //  A rod's "rod_bar" sets its catch bar (bigger = easier).
+//
+//  Lava: ground ticked "Lava" is a second pool. Only a rod with "rod_lava"
+//  casts into it, and only fish with "fish_lava" bite there (and never in
+//  water) — the minigame glows orange. Bait (BAIT, items.h ITEM_ATTR_BAIT*):
+//  whatever is on the rod at the cast adds its stats to the rod's for that
+//  fish; one is used up per catch. "rod_bait" rods won't cast without it,
+//  "fish_bait" fish won't bite without it, and "bait_tier" keeps the commoner
+//  fish off the hook.
 //  The line and bobber are drawn by fish_paint_rect() from
 //  map_repaint_rect(), like the shoppers, so whatever repaints over them
 //  puts them back. Timers only run while the game world does.
@@ -15311,6 +15474,9 @@ typedef struct {
     int      inches;
     int      left;                // 1 = no room in the bag: on the ground; 2 = nowhere: let go
     bool     first;               // the first of its kind (FISH BOOK): "NEW!" on the card
+    bool     lava;                // cast into lava (its own fish, an orange minigame)
+    uint8_t  bait;                // the bait on the line at the cast (ITEM_NONE = none): its stats count
+    int      bait_left;           // the card: how many of it are left on the rod after this catch (-1 = no bait)
 } fish_t;
 static fish_t s_fish;
 static rect_t s_fish_clip;
@@ -15327,16 +15493,29 @@ static bool fish_rod_held(void)
 
 static bool fish_line_out(void) { return s_fish.state == FISH_CAST || s_fish.state == FISH_WAIT || s_fish.state == FISH_BITE; }
 
-// One of the rod's stats (items.h ITEM_ATTR_ROD_*), kept between lo and hi; `def` = a normal rod.
-static int fish_rod_stat(const char *attr, int def, int lo, int hi)
+// One of the bait's stats (items.h ITEM_ATTR_BAIT_*); `def` without bait.
+static int fish_bait_stat(const char *attr, int def)
 {
-    int v = (int)item_attr(s_fish.rod, attr, def);
-    return v < lo ? lo : v > hi ? hi : v;
+    return s_fish.bait != ITEM_NONE ? (int)item_attr(s_fish.bait, attr, def) : def;
 }
-#define FISH_REEL() fish_rod_stat(ITEM_ATTR_ROD_REEL, 100, 10, 400)   // % the meter fills
-#define FISH_BITE() fish_rod_stat(ITEM_ATTR_ROD_BITE, 100, 10, 400)   // % how soon they bite
-#define FISH_LUCK() fish_rod_stat(ITEM_ATTR_ROD_LUCK, 0, -100, 100)   // rarer fish, better quality
-#define FISH_GRIP() fish_rod_stat(ITEM_ATTR_ROD_GRIP, 100, 10, 400)   // % slower the meter drains
+
+// A rod % stat (items.h ITEM_ATTR_ROD_*) times the bait's, 10..400.
+static int fish_rod_pct(const char *rod_attr, const char *bait_attr)
+{
+    int v = (int)item_attr(s_fish.rod, rod_attr, 100) * fish_bait_stat(bait_attr, 100) / 100;
+    return v < 10 ? 10 : v > 400 ? 400 : v;
+}
+
+// The rod's luck plus the bait's, -100..100.
+static int fish_luck(void)
+{
+    int v = (int)item_attr(s_fish.rod, ITEM_ATTR_ROD_LUCK, 0) + fish_bait_stat(ITEM_ATTR_BAIT_LUCK, 0);
+    return v < -100 ? -100 : v > 100 ? 100 : v;
+}
+#define FISH_REEL() fish_rod_pct(ITEM_ATTR_ROD_REEL, ITEM_ATTR_BAIT_REEL)   // % the meter fills
+#define FISH_BITE() fish_rod_pct(ITEM_ATTR_ROD_BITE, ITEM_ATTR_BAIT_BITE)   // % how soon they bite
+#define FISH_LUCK() fish_luck()                                              // rarer fish, better quality
+#define FISH_GRIP() fish_rod_pct(ITEM_ATTR_ROD_GRIP, ITEM_ATTR_BAIT_GRIP)   // % slower the meter drains
 
 // nav_plan(): a tap on water (tx,ty) with a rod in hand — remembered as where to cast.
 static bool fish_tap_target(int tx, int ty)
@@ -15437,7 +15616,8 @@ static void fish_paint_rect(int x, int y, int w, int h)
         int rr = 6 + (int)(s_fish.look % 3) * 2;
         for (int a = 0; a < 48; a++) {
             float ang = a * (6.2831853f / 48);
-            fish_px(s_fish.bx + (int)(cosf(ang) * rr), s_fish.by + 3 + (int)(sinf(ang) * rr / 2), COLOR_RGB565(200, 232, 250), true);
+            fish_px(s_fish.bx + (int)(cosf(ang) * rr), s_fish.by + 3 + (int)(sinf(ang) * rr / 2),
+                    s_fish.lava ? COLOR_RGB565(255, 170, 60) : COLOR_RGB565(200, 232, 250), true);
         }
         fish_px_sprite(s_fish.bx - 3, s_fish.by - 3, k_fish_bobber, 3, true);
         fish_px_sprite(s_player_x + PLAYER_W / 2 - 5, s_player_y - 15, k_fish_alert, 13, false);
@@ -15476,6 +15656,13 @@ static bool fish_on_action(void)
     int fx = s_selected_tile_x, fy = s_selected_tile_y;
     if (!tile_fishable(fx, fy)) return false;
     if (fish_line_out()) return true;
+    uint8_t rod  = inv_held_item();
+    bool    lava = tile_lava(fx, fy);
+    if (lava && item_attr(rod, ITEM_ATTR_ROD_LAVA, 0) <= 0) { message(3000, "%s would burn up in lava - it takes a lava rod", item_name(rod)); return true; }
+    if (item_attr(rod, ITEM_ATTR_ROD_NEEDS_BAIT, 0) > 0 && rod_bait_count(rod) == 0) {
+        message(3000, "%s needs bait - drop some on it in your bag", item_name(rod));
+        return true;
+    }
     int dx, dy;
     direction_to_delta(s_player_facing, &dx, &dy);
     int want = 1;   // out toward the tapped water, as far as the water and the rod go
@@ -15483,7 +15670,7 @@ static bool fish_on_action(void)
     if (dy && !dx) want += (s_fish.aim_y - fy) * dy;
     if (want > FISH_CAST_TILES) want = FISH_CAST_TILES;
     int n = 1;
-    while (n < want && tile_fishable(fx + dx * n, fy + dy * n)) n++;
+    while (n < want && tile_fishable(fx + dx * n, fy + dy * n) && tile_lava(fx + dx * n, fy + dy * n) == lava) n++;   // not from water out into lava
     s_fish.wx = fx + dx * (n - 1);
     s_fish.wy = fy + dy * (n - 1);
     fish_rod_tip(&s_fish.sx, &s_fish.sy);
@@ -15491,7 +15678,9 @@ static bool fish_on_action(void)
     s_fish.ey = s_fish.wy * TILE_SIZE + TILE_SIZE / 2 + (int)(esp_random() % 5) - 2;
     s_fish.bx = s_fish.sx;
     s_fish.by = s_fish.sy;
-    s_fish.rod     = inv_held_item();
+    s_fish.rod     = rod;
+    s_fish.lava    = lava;
+    s_fish.bait    = rod_bait_count(rod) ? rod_bait_item(rod) : ITEM_NONE;
     s_fish_tier_col = 0;
     s_fish.state   = FISH_CAST;
     s_fish.t_ms    = 0;
@@ -15523,17 +15712,37 @@ static uint32_t fish_weight(uint8_t it)
     return (uint32_t)(powf((float)w, k) * scale + 0.5f);
 }
 
+// Can fish `it` take this line now: its pool (lava or water), bait it needs,
+// at least tier `min_tier`, and its hours and weather?
+static bool fish_on_line(uint8_t it, int hour, bool rain, int min_tier)
+{
+    if (!fish_bites_now(it, hour, rain)) return false;
+    if ((item_attr(it, ITEM_ATTR_FISH_LAVA, 0) > 0) != s_fish.lava) return false;
+    if (item_attr(it, ITEM_ATTR_FISH_BAIT, 0) > 0 && s_fish.bait == ITEM_NONE) return false;
+    return fish_tier_of(it) >= min_tier;
+}
+
+// fish_weight() of every fish that can take the line now (fish_on_line()).
+static uint32_t fish_total(int hour, bool rain, int min_tier)
+{
+    uint32_t total = 0;
+    for (int it = 1; it < item_count; it++) if (fish_on_line((uint8_t)it, hour, rain, min_tier)) total += fish_weight((uint8_t)it);
+    return total;
+}
+
 // Which fish bites, out of those that can now (by rarity). ITEM_NONE = none can.
+// A "bait_tier" bait only lets that tier and rarer on — unless none of them can bite.
 static uint8_t fish_pick(void)
 {
     int hour = clock_minute_of_day() / 60;
     bool rain = rain_now();
-    uint32_t total = 0;
-    for (int it = 1; it < item_count; it++) if (fish_bites_now((uint8_t)it, hour, rain)) total += fish_weight((uint8_t)it);
+    int min_tier = fish_bait_stat(ITEM_ATTR_BAIT_TIER, 1) - 1;
+    uint32_t total = fish_total(hour, rain, min_tier);
+    if (!total && min_tier > 0) total = fish_total(hour, rain, min_tier = 0);
     if (!total) return ITEM_NONE;
     uint32_t r = esp_random() % total;
     for (int it = 1; it < item_count; it++) {
-        if (!fish_bites_now((uint8_t)it, hour, rain)) continue;
+        if (!fish_on_line((uint8_t)it, hour, rain, min_tier)) continue;
         uint32_t w = fish_weight((uint8_t)it);
         if (r < w) return (uint8_t)it;
         r -= w;
@@ -15562,7 +15771,7 @@ static rect_t fish_ui_rect(void)
 // Hooked: the minigame starts, the bar beside the player.
 static void fish_game_start(void)
 {
-    int bar = (int)item_attr(s_fish.rod, ITEM_ATTR_ROD_BAR, FISH_BAR_H);
+    int bar = (int)item_attr(s_fish.rod, ITEM_ATTR_ROD_BAR, FISH_BAR_H) + fish_bait_stat(ITEM_ATTR_BAIT_BAR, 0);   // a cork bait: a bigger bar
     if (bar < 24) bar = 24;
     if (bar > FISH_WATER_H - 20) bar = FISH_WATER_H - 20;
     s_fish.bar_h   = bar;
@@ -15641,7 +15850,11 @@ static void fish_tick(void)
         s_fish.by = s_fish.ey + (int)look;
         if (s_fish.t_ms >= s_fish.wait_ms) {
             s_fish.fish = fish_pick();
-            if (s_fish.fish == ITEM_NONE) { fish_stop("Not even a nibble... nothing bites here at this hour"); return; }
+            if (s_fish.fish == ITEM_NONE) {
+                fish_stop(s_fish.lava ? "Nothing stirs in the lava... nothing lives here at this hour"
+                                      : "Not even a nibble... nothing bites here at this hour");
+                return;
+            }
             int tier = fish_tier_of(s_fish.fish);   // a Rare or better shows in the "!"'s colour
             s_fish_tier_col = tier >= FISH_TIER_RARE ? k_fish_tier[tier].col : 0;
             s_fish.state = FISH_BITE;
@@ -15741,6 +15954,11 @@ static void fish_draw_card(void)
     else           snprintf(t, sizeof(t), "%d in", s_fish.inches);
     draw_text(tx, r.y + (row2 ? 92 : 76), t, 1, INV_COL_TEXT);
     if (s_fish.perfect) draw_text(tx, r.y + (row2 ? 104 : 88), "PERFECT!", 1, INV_COL_GOLD);
+    if (s_fish.bait_left >= 0) {   // BAIT: what's left on the rod
+        if (s_fish.bait_left) snprintf(t, sizeof(t), "%s left: %d", item_name(s_fish.bait), s_fish.bait_left);
+        else                  snprintf(t, sizeof(t), "Out of %s!", item_name(s_fish.bait));
+        draw_text_clip(tx, r.y + (row2 ? 116 : 100), t, 1, s_fish.bait_left ? INV_COL_TEXT_DIM : INV_COL_DOWN, tw);
+    }
     const char *foot = s_fish.left == 2 ? "No room - you let it go" : s_fish.left == 1 ? "No room in your bag - it's on the ground" : "TAP TO CONTINUE";
     draw_text_clip(r.x + (r.w - text_width(foot, 1)) / 2, r.y + r.h - 18, foot, 1, INV_COL_TEXT_DIM, r.w - 16);
 }
@@ -15758,15 +15976,16 @@ static void fish_draw(void)
     // the water
     const int cx = px + FISH_COL_DX, cy = py + FISH_COL_DY, CH = FISH_WATER_H;
     fill_rect(cx - 3, cy - 3, FISH_COL_W + 6, CH + 6, FISH_WOOD_DK);
-    for (int r = 0; r < CH; r++) {
+    for (int r = 0; r < CH; r++) {   // water: light blue to deep; lava: bright orange to dark red
         int k = r * 255 / CH;
-        fill_rect(cx, cy + r, FISH_COL_W, 1, COLOR_RGB565((96 * (255 - k) + 20 * k) / 255, (176 * (255 - k) + 62 * k) / 255, (220 * (255 - k) + 124 * k) / 255));
+        if (s_fish.lava) fill_rect(cx, cy + r, FISH_COL_W, 1, COLOR_RGB565((255 * (255 - k) + 120 * k) / 255, (190 * (255 - k) + 16 * k) / 255, (60 * (255 - k) + 8 * k) / 255));
+        else             fill_rect(cx, cy + r, FISH_COL_W, 1, COLOR_RGB565((96 * (255 - k) + 20 * k) / 255, (176 * (255 - k) + 62 * k) / 255, (220 * (255 - k) + 124 * k) / 255));
     }
-    for (int i = 0; i < 5; i++) {   // bubbles drifting up
+    for (int i = 0; i < 5; i++) {   // bubbles drifting up (embers in lava)
         float sp = 22.0f + i * 7.0f;
         int yy = CH - 4 - (int)fmodf(s_fish.t * sp + i * 61.0f, (float)(CH - 8));
         int xx = 4 + (i * 9) % (FISH_COL_W - 10) + (int)(sinf(s_fish.t * 3.0f + i) * 2.0f);
-        fill_round_rect(cx + xx, cy + yy, 3, 3, 1, COLOR_RGB565(196, 232, 250), 150);
+        fill_round_rect(cx + xx, cy + yy, 3, 3, 1, s_fish.lava ? COLOR_RGB565(255, 236, 140) : COLOR_RGB565(196, 232, 250), 150);
     }
     // the catch bar: brighter with the fish in it
     int bh = s_fish.bar_h, by = cy + CH - (int)s_fish.bar - bh;
@@ -15808,6 +16027,8 @@ static void fish_caught(void)
     if (s_fish.perfect && item_has_quality(it) && q + 1 < QUALITY_COUNT) q++;   // (q is just the grade until the mutation below)
     // a mutation (MUTATIONS): the fish's own "mut", more likely for a perfect catch, in the rain, with a lucky rod
     float boost = (s_fish.perfect ? 2.0f : 1.0f) * (rain_now() ? 1.25f : 1.0f) * (luck >= 0 ? 1.0f + luck / 100.0f : 1.0f + luck / 200.0f);
+    int bmut = fish_bait_stat(ITEM_ATTR_BAIT_MUT, 100);   // ...and with a mutation bait
+    boost *= (float)(bmut < 0 ? 0 : bmut > 1000 ? 1000 : bmut) / 100.0f;
     uint8_t mut = s_fish_force_mut >= 0 ? (uint8_t)s_fish_force_mut : mut_roll(it, boost);
     s_fish_force_mut = -1;
     q = wet_if_raining(QUALITY_MAKE(q, mut));   // caught in the rain: wet (WET ITEMS)
@@ -15820,6 +16041,7 @@ static void fish_caught(void)
     s_fish.inches  = in;
     s_fish.first   = fishbook_record(it, q, in);   // FISH BOOK
     s_fish.left    = inv_add_q(it, q, 1) == 0 ? 0 : ground_drop(it, q, 1) ? 1 : 2;
+    s_fish.bait_left = s_fish.bait != ITEM_NONE ? rod_bait_use(s_fish.rod, s_fish.bait) : -1;   // BAIT: one used up
     s_fish.state   = FISH_DONE;
     s_fish.t       = 0;
     s_ui_needs_redraw = true;
@@ -15853,18 +16075,25 @@ static void update_fishing_touch(const input_frame_t *in)
     if (s_fish.state != FISH_GAME) { fish_close(NULL); return; }
     s_fish.t += dt;
 
-    // the catch bar: held, it rises; let go, it sinks (and bounces a little off the bottom)
-    s_fish.bar_v += (in->touch_active ? FISH_LIFT : -FISH_LIFT) * dt;
+    // the catch bar: held, it rises; let go, it sinks (and bounces a little off the bottom).
+    // A bait's "bait_control": it brakes and turns harder, and bounces less.
+    int   ctrl  = fish_bait_stat(ITEM_ATTR_BAIT_CONTROL, 0);
+    ctrl = ctrl < 0 ? 0 : ctrl > 100 ? 100 : ctrl;
+    bool  turn  = in->touch_active ? s_fish.bar_v < 0 : s_fish.bar_v > 0;   // pushing against the way it's moving
+    float lift  = FISH_LIFT * (turn ? 1.0f + ctrl / 50.0f : 1.0f);          // control 100: brakes three times as hard
+    s_fish.bar_v += (in->touch_active ? lift : -lift) * dt;
     if (s_fish.bar_v >  FISH_SPEED_MAX) s_fish.bar_v =  FISH_SPEED_MAX;
     if (s_fish.bar_v < -FISH_SPEED_MAX) s_fish.bar_v = -FISH_SPEED_MAX;
     s_fish.bar += s_fish.bar_v * dt;
     float top = (float)(FISH_WATER_H - s_fish.bar_h);
-    if (s_fish.bar < 0)   { s_fish.bar = 0;   s_fish.bar_v = s_fish.bar_v < -80.0f ? -s_fish.bar_v * 0.4f : 0; }
+    if (s_fish.bar < 0)   { s_fish.bar = 0;   s_fish.bar_v = s_fish.bar_v < -80.0f ? -s_fish.bar_v * 0.4f * (1.0f - ctrl / 100.0f) : 0; }
     if (s_fish.bar > top) { s_fish.bar = top; if (s_fish.bar_v > 0) s_fish.bar_v = 0; }
 
     // the fish: now and then it heads somewhere new — further and more often the harder it is
     uint8_t it = s_fish.fish;
-    float d = (float)item_attr(it, ITEM_ATTR_FISH, 30) / 100.0f;
+    int calm = fish_bait_stat(ITEM_ATTR_BAIT_CALM, 0);   // a calming bait: the fish swims as if it were easier
+    calm = calm < 0 ? 0 : calm > 80 ? 80 : calm;
+    float d = (float)item_attr(it, ITEM_ATTR_FISH, 30) / 100.0f * (100 - calm) / 100.0f;
     if (d < 0.01f) d = 0.01f;
     if (d > 1.0f) d = 1.0f;
     int move = (int)item_attr(it, ITEM_ATTR_FISH_MOVE, 0);
@@ -16265,7 +16494,9 @@ static void book_draw_page(void)
     draw_text(lx, y, t, 1, INV_COL_TEXT); y += L;
     int weather = (int)item_attr(it, ITEM_ATTR_FISH_WEATHER, 0);
     draw_text(lx, y, weather == 1 ? "Weather: rainy days only" : weather == 2 ? "Weather: dry days only" : "Weather: any", 1, INV_COL_TEXT); y += L;
-    draw_text(lx, y, "Where:   any Fishable water", 1, INV_COL_TEXT); y += L;
+    bool lava_fish = item_attr(it, ITEM_ATTR_FISH_LAVA, 0) > 0, bait_fish = item_attr(it, ITEM_ATTR_FISH_BAIT, 0) > 0;
+    draw_text(lx, y, lava_fish ? (bait_fish ? "Where:   lava, on bait only" : "Where:   lava, with a lava rod")
+                               : (bait_fish ? "Where:   water, on bait only" : "Where:   any Fishable water"), 1, INV_COL_TEXT); y += L;
     int32_t w = item_attr(it, ITEM_ATTR_FISH_RARITY, 10);
     float rel = (float)(w < 1 ? 1 : w) / 10.0f * (tier == FISH_TIER_MYTHIC ? 0.25f : 1.0f);
     const char *often = rel >= 1.5f ? "very often" : rel >= 0.75f ? "often" : rel >= 0.35f ? "sometimes" : rel >= 0.15f ? "rarely" : rel >= 0.06f ? "very rarely" : "almost never";
@@ -19594,6 +19825,11 @@ static bool world_save(void)
             snprintf(line, sizeof(line), "item %d %s %d %d\n", i, item_get(s_inv[i].item)->id, s_inv[i].count, s_inv[i].quality);
             fputs(line, f);
         }
+        for (int r = 1; r < item_count; r++) {   // the bait on each rod (BAIT)
+            if (!s_rod_bait[r].count || s_rod_bait[r].item >= item_count) continue;
+            snprintf(line, sizeof(line), "bait %s %s %d\n", item_get((uint8_t)r)->id, item_get(s_rod_bait[r].item)->id, s_rod_bait[r].count);
+            fputs(line, f);
+        }
         ok = !ferror(f);
         if (fclose(f) != 0) ok = false;
     }
@@ -19631,6 +19867,7 @@ static bool world_read(int slot, bool apply, world_info_t *info)
     if (apply) {
         s_load_inst_next = 0;            // unless it says the player is inside a building ("inst")
         memset(s_inv, 0, sizeof(s_inv));
+        memset(s_rod_bait, 0, sizeof(s_rod_bait));   // no bait on any rod but what the save says (BAIT)
         item_custom_reset();             // the save's own photo items come back from photos.bin, below
         s_photo_kinds_n = 0;
         s_inv_held = 0;
@@ -19664,6 +19901,12 @@ static bool world_read(int slot, bool apply, world_info_t *info)
             s_money = (uint32_t)(v[0] < 0 ? 0 : v[0] > MONEY_MAX ? MONEY_MAX : v[0]);
         } else if (mapsave_match(word, nw, "held #", v, &any)) {
             if (v[0] >= 0 && v[0] < HOTBAR_SLOTS) s_inv_held = v[0];
+        } else if (nw == 4 && strcmp(word[0], "bait") == 0) {   // bait <rod id> <bait id> <count> (BAIT)
+            uint8_t rod = item_find(word[1]), bait = item_find(word[2]);
+            int     cnt = atoi(word[3]);
+            if (rod == ITEM_NONE || bait == ITEM_NONE) ESP_LOGW(TAG, "save: bait \"%s\" on \"%s\" isn't in this build — dropped", word[2], word[1]);
+            else if (rod < item_count && bait < item_count && cnt > 0)
+                s_rod_bait[rod] = (rod_bait_t){ bait, (uint8_t)(cnt < item_max_stack(bait) ? cnt : item_max_stack(bait)) };
         } else if (mapsave_match(word, nw, "item # * #", v, &any) || mapsave_match(word, nw, "item # * # #", v, &any)) {
             uint8_t item = item_find(any), q = (nw > 4 && v[2] > 0 && v[2] <= 255 && item_quality_ok((uint8_t)v[2])) ? (uint8_t)v[2] : QUALITY_STANDARD;
             if (item == ITEM_NONE) ESP_LOGW(TAG, "save: bag item \"%s\" isn't in this build — dropped", any);
@@ -19709,6 +19952,7 @@ static void world_new(void)
     ledger_reset();                     // nothing bought or sold (LEDGER)
     fishbook_reset();                   // no fish caught (FISH BOOK)
     memset(s_inv, 0, sizeof(s_inv));
+    memset(s_rod_bait, 0, sizeof(s_rod_bait));   // no bait on any rod (BAIT)
     item_custom_reset();                // no photo items from another game
     s_inv_held      = 0;
     s_money         = MONEY_START;

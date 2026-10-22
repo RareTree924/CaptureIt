@@ -235,6 +235,7 @@ button.tool-anim.active { background: linear-gradient(#a672dc, #663a9e); border-
 .swTillCovered { background: rgba(255,170,40,.75); }
 .swBuildable { background: rgba(80,150,255,.75); }
 .swFishable { background: rgba(40,220,230,.75); }
+.swLava { background: rgba(255,110,30,.8); }
 /* Item Editor: a fishing rod's stat sliders */
 .rodStats { border: 1px solid #3a3a3a; border-radius: 4px; padding: 6px 8px; margin: 4px 0; background: rgba(255,255,255,.03); }
 .rodStatHead { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; font-weight: 600; }
@@ -499,6 +500,39 @@ button.tool-tp.active { background: linear-gradient(#e05cc0, #a02c86); border-co
 .mchRecipe .mchDays { width: 56px !important; }
 .mchRecipe .mchArrow { color: #40c8ff; font-weight: bold; padding: 0 2px; }
 .mchRecipe .aniX { min-height: 24px !important; padding: 0 8px !important; color: #ff9a9a; margin-left: auto; }
+/* ---- Bait Editor + Shop Editor (the Game Tools "Bait Editor" / "Shop Editor" tabs): the Machines Editor's layout ---- */
+#btEdOverlay, #shEdOverlay { display: none; position: fixed; left: 0; right: 0; bottom: 0; top: 31px; background: #1a1a1a; z-index: 1000; align-items: flex-start; justify-content: center; overflow: auto; padding: 16px 0; box-sizing: border-box; }
+#btEdOverlay.show, #shEdOverlay.show { display: flex; }
+#btEdPanel, #shEdPanel { background: #222; padding: 16px 18px; border-radius: 8px; border: 1px solid #444; display: flex; flex-direction: column; gap: 12px; width: min(1080px, 96vw); box-sizing: border-box; }
+#btEdPanel button, #shEdPanel button { min-height: 30px; padding: 5px 11px; }
+#btEdPanel .aniMain { grid-template-columns: minmax(260px, 0.7fr) minmax(0, 1.3fr); }
+.btList { display: flex; flex-direction: column; gap: 4px; max-height: 560px; overflow: auto; }
+.btRow { display: flex; gap: 8px; align-items: center; padding: 5px 6px; border: 1px solid #333; border-radius: 5px; cursor: pointer; font-size: 13px; color: #ddd; }
+.btRow:hover { border-color: #40c8ff; }
+.btRow.editing { border-color: #7fe08a; background: rgba(127,224,138,.07); }
+.btRow canvas { width: 32px; height: 32px; image-rendering: pixelated; border-radius: 3px; flex: 0 0 auto; }
+.btRow .btRowText { display: flex; flex-direction: column; min-width: 0; }
+.btRow .btRowText span { font-size: 11px; color: #999; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.btLook { display: flex; gap: 16px; align-items: center; }
+#btIcon { width: 96px; height: 96px; border: 1px dashed #666; border-radius: 4px; image-rendering: pixelated; background: #141414; cursor: pointer; flex: 0 0 auto; }
+#btIcon:hover, #btIcon.over { border-color: #40c8ff; }
+.btPresets { display: flex; flex-wrap: wrap; gap: 6px; }
+.btStat { display: grid; grid-template-columns: 110px minmax(0, 1fr) 150px; gap: 8px; align-items: center; font-size: 13px; color: #ccc; }
+.btStat input[type=range] { width: 100%; }
+.btStat .btVal { font-size: 12px; color: #aaa; font-variant-numeric: tabular-nums; }
+.btStat .btVal.up { color: #7fd36a; } .btStat .btVal.down { color: #ff8a7a; }
+#btSummary { font-size: 12px; color: #ddd; background: #181818; border: 1px solid #333; border-radius: 5px; padding: 8px 10px; line-height: 1.5; }
+.shBar { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; font-size: 13px; color: #ccc; }
+.shTable { width: 100%; border-collapse: collapse; font-size: 13px; color: #ddd; }
+.shTable th { text-align: left; color: #999; font-weight: normal; padding: 4px 6px; border-bottom: 1px solid #3a3a3a; position: sticky; top: 0; background: #1c1c1c; }
+.shTable td { padding: 3px 6px; border-bottom: 1px solid #2c2c2c; vertical-align: middle; }
+.shTable tr.changed td { background: rgba(255,215,107,.08); }
+.shTable tr.changed td:first-child { box-shadow: inset 3px 0 #ffd76b; }
+.shTable canvas { width: 32px; height: 32px; image-rendering: pixelated; border-radius: 3px; display: block; }
+.shTable input[type=number] { width: 80px; }
+.shTable .shWhere { font-size: 12px; color: #9ad; }
+.shTable .shSub { font-size: 11px; color: #888; }
+.shWrap { max-height: calc(100vh - 260px); overflow: auto; border: 1px solid #333; border-radius: 6px; }
 #cropSheetTabs button { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* ---- Browse folder (Crops / Item Editor): every .c in the folder as a card ---- */
 #cfOverlay { display: none; position: fixed; left: 0; right: 0; bottom: 0; top: 31px; background: rgba(0,0,0,.7); z-index: 1100; align-items: flex-start; justify-content: center; overflow: auto; padding: 24px 0; box-sizing: border-box; }
@@ -535,6 +569,8 @@ button.tool-tp.active { background: linear-gradient(#e05cc0, #a02c86); border-co
   <button type="button" class="gtTab" data-tool="building">Buildings Editor</button>
   <button type="button" class="gtTab" data-tool="animal">Animals Editor</button>
   <button type="button" class="gtTab" data-tool="machine">Machines Editor</button>
+  <button type="button" class="gtTab" data-tool="bait">Bait Editor</button>
+  <button type="button" class="gtTab" data-tool="shop">Shop Editor</button>
   <button type="button" class="gtTab" data-tool="image">Image Editor</button>
 </div>
 <iframe id="gtImage" title="Image Editor" hidden></iframe>
@@ -926,6 +962,94 @@ button.tool-tp.active { background: linear-gradient(#e05cc0, #a02c86); border-co
   </div>
 </div>
 
+<div id="btEdOverlay">
+  <div id="btEdPanel">
+    <div class="itemHead">
+      <div class="itemTitle">Bait Editor</div>
+      <button type="button" id="btNewBtn">Make new bait</button>
+      <button type="button" onclick="document.getElementById('btOpenFile').click()" title="Load a bait item .c back in to change it">Open bait .c…</button>
+      <button type="button" id="btFolderBtn" title="Where Save bait writes (assets/items)">Choose items folder…</button>
+    </div>
+    <input type="file" id="btOpenFile" accept=".c" style="display:none">
+    <input type="file" id="btArtFile" accept="image/png" style="display:none">
+
+    <div class="aniMain">
+      <div class="aniCol">
+        <div class="itemCard">
+          <div class="aniStep">Your bait
+            <div class="aniStepRight" style="margin-left:auto;"><button type="button" id="btRescanBtn" title="Read the items folder again">Rescan</button></div>
+          </div>
+          <div class="btList" id="btList"></div>
+          <div class="animCap">Every item in assets/items that is bait. Click one to change it.</div>
+        </div>
+        <div class="itemCard">
+          <div class="aniStep">How bait works in game</div>
+          <div class="animCap">Pick up a stack of bait in the bag and drop it on a fishing rod: it goes on the hook (up to one full stack; other bait already on it comes back). The rod's card shows "Bait: Worm x12" and a TAKE OFF button. Every fish caught uses one, and while it's on, its stats add to the rod's. A rod with "Needs bait" (Item Editor) won't cast without it, and a fish with "Only bites on bait" never bites a bare hook. Bait stays with the rod's kind, so two of the same rod share it.</div>
+        </div>
+      </div>
+
+      <div class="aniCol">
+        <div class="itemCard">
+          <div class="aniStep"><b>1</b>Look &amp; name</div>
+          <div class="btLook">
+            <canvas id="btIcon" width="96" height="96" title="Click (or drop a PNG) — its 16×16 icon"></canvas>
+            <div class="aniForm" style="flex:1;">
+              <span>Name</span><div><input type="text" id="btName" maxlength="40" placeholder="Worm" style="width:170px;"></div>
+              <span>Stack</span><div><input type="number" id="btStack" min="1" max="99" value="99"> per slot (and on a rod)</div>
+              <span>Sells for</span><div><input type="number" id="btSell" min="0" max="999999" value="2" style="width:80px;"> coins <span class="animCap">(0 = can't be sold)</span></div>
+              <span>Shop price</span><div><input type="number" id="btBuy" min="0" max="999999" value="5" style="width:80px;"> coins
+                <select id="btCounter"></select> <span class="animCap">(0 = not sold)</span></div>
+            </div>
+          </div>
+          <div id="btIdPreview" class="animCap"></div>
+          <div class="animCap">A 16×16 PNG is used as it is; a smaller one is centred, a bigger one is shrunk to fit. "Usual" sells bait at the Tackle shop.</div>
+        </div>
+
+        <div class="itemCard">
+          <div class="aniStep"><b>2</b>What it does
+            <div class="aniStepRight" style="margin-left:auto;"><button type="button" id="btResetBtn" title="Every stat back to plain bait">Plain bait</button></div>
+          </div>
+          <div class="btPresets" id="btPresets"></div>
+          <div id="btStats"></div>
+          <div id="btSummary"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="row itemFoot">
+      <div id="btStatus" class="animCap"></div>
+      <button type="button" id="btSaveBtn">Save bait (.c)</button>
+    </div>
+  </div>
+</div>
+
+<div id="shEdOverlay">
+  <div id="shEdPanel">
+    <div class="itemHead">
+      <div class="itemTitle">Shop Editor</div>
+      <button type="button" id="shRescanBtn" title="Read the items folder again">Rescan</button>
+      <button type="button" id="shFolderBtn" title="The assets/items folder">Choose items folder…</button>
+    </div>
+    <div class="animCap">Put any item up for sale: tick it, give it a price and pick a counter. "Usual" sends it where it belongs (props → Build, seeds and farm tools → Seeds, animal things → Ranch, rods and bait → Tackle, anything else → General store). In game every shop has a tab for each counter with stock; put a shop on a map with an asset action (Map Editor › Actions…: Seed / Build / Ranch / Tackle shop, General store). Seeds, animals, buildings and machines keep their price in their own editors.</div>
+    <div class="shBar">
+      <label>Search <input type="search" id="shFilter" placeholder="name or id" style="width:160px;"></label>
+      <label>Show <select id="shShow"><option value="all">every item</option><option value="sale">for sale</option><option value="not">not for sale</option><option value="changed">changed</option></select></label>
+      <label>Counter <select id="shCounterFilter"><option value="-1">any</option></select></label>
+      <span style="flex:1"></span>
+      <label title="Every item shown: put it up for sale at its sell price × this">Price shown items at sell price × <input type="number" id="shMult" min="0.1" max="100" step="0.1" value="2" style="width:56px;"></label>
+      <button type="button" id="shMultBtn">Apply</button>
+    </div>
+    <div class="shWrap">
+      <table class="shTable"><thead><tr><th></th><th>Item</th><th>For sale</th><th>Price</th><th>Counter</th><th>Sold at</th><th>Sells for</th></tr></thead><tbody id="shBody"></tbody></table>
+    </div>
+    <div class="row itemFoot">
+      <div id="shStatus" class="animCap"></div>
+      <button type="button" id="shRevertBtn">Undo changes</button>
+      <button type="button" id="shSaveBtn">Save changes</button>
+    </div>
+  </div>
+</div>
+
 <div id="startupOverlay">
   <div id="startupPanel">
     <h2 id="startupTitle">Load a Map</h2>
@@ -1220,6 +1344,12 @@ button.tool-tp.active { background: linear-gradient(#e05cc0, #a02c86); border-co
           </div>
           <div class="animCap">DROP in the inventory puts the stack on the map as a 16×16 tile; walking onto it picks it back up.</div>
           <div class="animFields">
+            <label><input type="checkbox" id="itemBuyable"> Sold in shops</label>
+            <label>Price <input type="number" id="itemBuyPrice" min="1" max="999999" value="10" disabled> coins</label>
+            <label>Counter <select id="itemShopKind" disabled></select></label>
+          </div>
+          <div class="animCap">Any item with a price is for sale. "Usual" puts it where it belongs: props and buildings in the Build shop, seeds and farm tools in the Seed shop, animal things at the Ranch, rods and bait in the Tackle shop, anything else in the General store — or pick a counter. Each shop is an asset action in the Map Editor; every shop has a tab for each counter that has stock. The Shop Editor tab sets this for many items at once.</div>
+          <div class="animFields">
             <label><input type="checkbox" id="itemQuality"> Rolls a quality (rarity)</label>
           </div>
           <div class="animCap">Each time the player gets one (a breakable drops it) it can come out Silver ★ (20%, ×1.25 price), Gold ★ (6%, ×1.5) or Emerald ★ (1.5%, ×2); otherwise Standard, no star.</div>
@@ -1278,17 +1408,14 @@ button.tool-tp.active { background: linear-gradient(#e05cc0, #a02c86); border-co
             <label>holds <input type="number" id="itemAquaFish" min="1" max="3" value="3" style="width:44px;" disabled> fish</label>
           </div>
           <div class="animCap">Tapping a placed aquarium while holding a fish puts the fish in, and it swims around the tank (only on the map the player is on). With empty hands it takes the last fish out, and picks the tank up once it's empty. The fish keep inside the box set by the attributes aqua_x, aqua_y, aqua_w, aqua_h (px from the art's top-left; none = 3 px in from each side).</div>
-          <div class="animFields">
-            <label><input type="checkbox" id="itemBuyable"> Sold in shops</label>
-            <label>Price <input type="number" id="itemBuyPrice" min="1" max="999999" value="10" disabled> coins</label>
-          </div>
-          <div class="animCap">A prop with a price is sold in the Build shop (the "Build shop" asset action in the Map Editor); a hoe or watering can with a price, in the Seed shop.</div>
         </div>
 
         <div class="itemCard">
           <div class="itemCardTitle">Fishing</div>
           <div class="animFields">
             <label><input type="checkbox" id="itemRod"> Fishing rod</label>
+            <label title="rod_lava 1: can cast into tiles ticked Lava in the Map Editor (and still fishes water)"><input type="checkbox" id="itemRodLava" disabled> Can fish in lava</label>
+            <label title="rod_bait 1: won't cast without bait on it"><input type="checkbox" id="itemRodNeedsBait" disabled> Needs bait</label>
           </div>
           <div class="animCap">Held in game, tap water (ground ticked "Fishable" in the Map Editor) to cast. In the minigame, hold the screen to lift the green catch bar, let go and it sinks — keep the fish inside it until the meter fills.</div>
           <div id="itemRodStats" class="rodStats" style="display:none;">
@@ -1316,6 +1443,10 @@ button.tool-tp.active { background: linear-gradient(#e05cc0, #a02c86); border-co
             <button type="button" id="itemFishTagBtn" disabled title="How rare it is, and its mutation multiplier">Rarity &amp; mutations…</button>
           </div>
           <div class="animFields">
+            <label title="fish_lava 1: only bites in lava (with a lava rod) — its own loot pool, apart from the water fish"><input type="checkbox" id="itemFishLava" disabled> Lives in lava</label>
+            <label title="fish_bait 1: only bites when there's bait on the rod"><input type="checkbox" id="itemFishBait" disabled> Only bites on bait</label>
+          </div>
+          <div class="animFields">
             <label>Difficulty <input type="number" id="itemFishDiff" min="1" max="100" value="30" style="width:52px;" disabled></label>
             <label>Swims <select id="itemFishMove" disabled>
               <option value="0">mixed</option><option value="1">smooth</option><option value="2">darting</option><option value="3">sinker</option><option value="4">floater</option>
@@ -1333,7 +1464,7 @@ button.tool-tp.active { background: linear-gradient(#e05cc0, #a02c86); border-co
             <label>Size <input type="number" id="itemFishMin" min="1" max="999" value="5" style="width:48px;" disabled></label>
             <label>to <input type="number" id="itemFishMax" min="1" max="999" value="20" style="width:48px;" disabled> in</label>
           </div>
-          <div class="animCap">Any rod can catch it on Fishable water between those hours (to lower than from = overnight, e.g. 20 to 4) in that weather. Rarity is how often it bites against the other fish that could (10 = normal, 1 = rare). Difficulty 1-100 is how wildly it swims in the minigame; "Swims": darting = sudden jumps, smooth = slow glides, sinker / floater = keeps to the bottom / top. Tick "Rolls a quality" for Silver / Gold / Emerald catches — a perfect catch (it never left the bar) is one better.</div>
+          <div class="animCap">Any rod can catch it on Fishable water (a lava fish: lava tiles, with a lava rod) between those hours (to lower than from = overnight, e.g. 20 to 4) in that weather. Rarity is how often it bites against the other fish that could (10 = normal, 1 = rare). Difficulty 1-100 is how wildly it swims in the minigame; "Swims": darting = sudden jumps, smooth = slow glides, sinker / floater = keeps to the bottom / top. Tick "Rolls a quality" for Silver / Gold / Emerald catches — a perfect catch (it never left the bar) is one better.</div>
         </div>
 
         <div class="itemCard">
@@ -1892,7 +2023,7 @@ let teleporters = [];
 let showTeleporters = true;
 // Tile types (see TILE TYPES): mirror main.c's Tile types notes.
 const TILE_TYPE_MAX = 127, TILE_NAME_MAX = 31;
-const TILE_FLAG_TILLABLE = 0x01, TILE_FLAG_BUILDABLE = 0x02, TILE_FLAG_FISHABLE = 0x04, TILE_CELL_COVERED = 0x80;   // main.c TILE_FLAG_*
+const TILE_FLAG_TILLABLE = 0x01, TILE_FLAG_BUILDABLE = 0x02, TILE_FLAG_FISHABLE = 0x04, TILE_FLAG_LAVA = 0x08, TILE_CELL_COVERED = 0x80;   // main.c TILE_FLAG_*
 let showTiles = false;        // the "Show tiles" overlay
 const COORDS_KEY = 'captureit.showCoords';
 let showCoords = false;       // View ▸ Show grid + coords (drawCoordOverlay)
@@ -3805,7 +3936,7 @@ function updateCursorInfo(p) {
 function updateHud() {
   const chips = [];
   if (collisionView) chips.push(['swCollision', 'Blocked']);
-  if (showTiles) chips.push(['swTillable', 'Tillable'], ['swBuildable', 'Buildable'], ['swFishable', 'Fishable'], ['swTillCovered', 'Tillable / buildable, but something is on it'], ['swTileTyped', 'Has a tile type']);
+  if (showTiles) chips.push(['swTillable', 'Tillable'], ['swBuildable', 'Buildable'], ['swFishable', 'Fishable'], ['swLava', 'Lava (lava rods only)'], ['swTillCovered', 'Tillable / buildable, but something is on it'], ['swTileTyped', 'Has a tile type']);
   if (layerViewMode === 'tint') chips.push(['swForeground', 'Foreground (the player walks under it)']);
   else if (layerViewMode === 'fg') chips.push(['swForeground', 'Foreground only, ground dimmed']);
   else if (layerViewMode === 'ground') chips.push(['swGround', 'Ground only, foreground dimmed']);
@@ -5651,7 +5782,7 @@ function duplicateAsset(i, folder) {
   const existingNames = assets.map(x => x.name);
   while (existingNames.includes(name)) name = `${a.name} (${copyNum++})`;
   const copy = {
-    name, folder: folder != null ? folder : (a.folder || ''), walkable: a.walkable, tillable: !!a.tillable, buildable: !!a.buildable, fishable: !!a.fishable, actions: a.actions ? a.actions.slice() : undefined, w: a.w, h: a.h,
+    name, folder: folder != null ? folder : (a.folder || ''), walkable: a.walkable, tillable: !!a.tillable, buildable: !!a.buildable, fishable: !!a.fishable, lava: !!a.lava, actions: a.actions ? a.actions.slice() : undefined, w: a.w, h: a.h,
     rgba_color: a.rgba_color.slice(), rgba_alpha: a.rgba_alpha.slice(),
     rgba_hitbox: (a.rgba_hitbox || new Uint8Array(a.w * a.h)).slice(),
     rgba_layer: (a.rgba_layer || new Uint8Array(a.w * a.h).fill(255)).slice(),
@@ -6077,7 +6208,10 @@ function axRenderDetails() {
       c2.appendChild(bd);
       const fs = axButton(a.fishable ? 'Fishable ✓' : 'Not fishable', 'On the device, holding a fishing rod and tapping this tile casts into it (water). Export the map again after changing it.', () => { axRecordAssets([i], `fishable ${axAssetLabel(i)}`); a.fishable = !a.fishable; if (showTiles) redrawAll(); renderAssetList(); }, editing);
       fs.classList.toggle('on', !!a.fishable);
+      const lv = axButton(a.lava ? 'Lava ✓' : 'Not lava', 'On the device, only a rod with "Can fish in lava" casts into this tile, and only lava fish bite there. Export the map again after changing it.', () => { axRecordAssets([i], `lava ${axAssetLabel(i)}`); a.lava = !a.lava; if (showTiles) redrawAll(); renderAssetList(); }, editing);
+      lv.classList.toggle('on', !!a.lava);
       c2.appendChild(fs);
+      c2.appendChild(lv);
     }
     const r = row();
     r.append(axButton(stampAssetIndex === i ? '\ud83d\udd8c Stamping' : '\ud83d\udd8c Stamp', 'Place it on the map', () => axArm(i), editing),
@@ -6390,6 +6524,7 @@ function axMenuForSelection() {
     if (tileAssetCanTill(a)) list.push({ label: a.tillable ? 'Tillable \u2713' : 'Tillable', fn: () => { axRecordAssets([i], `tillable ${axAssetLabel(i)}`); a.tillable = !a.tillable; if (showTiles) redrawAll(); renderAssetList(); }, off: editing });
     if (tileAssetCanTill(a)) list.push({ label: a.buildable ? 'Buildable \u2713' : 'Buildable', fn: () => { axRecordAssets([i], `buildable ${axAssetLabel(i)}`); a.buildable = !a.buildable; if (showTiles) redrawAll(); renderAssetList(); }, off: editing });
     if (tileAssetCanTill(a)) list.push({ label: a.fishable ? 'Fishable \u2713' : 'Fishable', fn: () => { axRecordAssets([i], `fishable ${axAssetLabel(i)}`); a.fishable = !a.fishable; if (showTiles) redrawAll(); renderAssetList(); }, off: editing });
+    if (tileAssetCanTill(a)) list.push({ label: a.lava ? 'Lava \u2713' : 'Lava', fn: () => { axRecordAssets([i], `lava ${axAssetLabel(i)}`); a.lava = !a.lava; if (showTiles) redrawAll(); renderAssetList(); }, off: editing });
     if (!a.diskPath && axRoot) list.push('-', { label: `Save into ${AX_MAPDIR}\\`, fn: () => axSaveUnsaved([a]) });
     if (axQuery && one.dir !== axCwd) list.push({ label: 'Open file location', fn: () => { const key = one.key; axGo(one.dir); axSelectOnly(key); renderAssetList(); } });
     list.push('-');
@@ -6827,7 +6962,7 @@ function axSnapAsset(a) {
   return { uid: assetUid(a), w: a.w, h: a.h, img: a.img,
            rgba_color: a.rgba_color.slice(), rgba_alpha: a.rgba_alpha.slice(),
            rgba_hitbox: a.rgba_hitbox ? a.rgba_hitbox.slice() : undefined, rgba_layer: a.rgba_layer ? a.rgba_layer.slice() : undefined,
-           walkable: a.walkable, tillable: !!a.tillable, buildable: !!a.buildable, fishable: !!a.fishable, actions: a.actions ? a.actions.slice() : undefined,
+           walkable: a.walkable, tillable: !!a.tillable, buildable: !!a.buildable, fishable: !!a.fishable, lava: !!a.lava, actions: a.actions ? a.actions.slice() : undefined,
            animation: a.animation ? { ...a.animation } : undefined, breakable };
 }
 function axRestoreSnaps(snaps) {
@@ -6840,7 +6975,7 @@ function axRestoreSnaps(snaps) {
     try { breakable = sn.breakable ? structuredClone(sn.breakable) : undefined; } catch (e) { breakable = sn.breakable; }
     Object.assign(a, { w: sn.w, h: sn.h, img: sn.img, rgba_color: sn.rgba_color.slice(), rgba_alpha: sn.rgba_alpha.slice(),
                        rgba_hitbox: sn.rgba_hitbox && sn.rgba_hitbox.slice(), rgba_layer: sn.rgba_layer && sn.rgba_layer.slice(),
-                       walkable: sn.walkable, tillable: sn.tillable, buildable: sn.buildable, fishable: sn.fishable });
+                       walkable: sn.walkable, tillable: sn.tillable, buildable: sn.buildable, fishable: sn.fishable, lava: sn.lava });
     if (sn.actions) a.actions = sn.actions.slice(); else delete a.actions;
     if (sn.animation) a.animation = { ...sn.animation }; else delete a.animation;
     if (breakable) a.breakable = breakable; else delete a.breakable;
@@ -7173,6 +7308,7 @@ function axApplyMeta(a, m, bundleRef) {
   a.tillable = !!m.tillable;
   a.buildable = !!m.buildable;
   a.fishable = !!m.fishable;
+  a.lava = !!m.lava;
   a.actions = Array.isArray(m.actions) && m.actions.length ? m.actions.map(String) : undefined;
   if (m.hitbox) { const hb = base64ToU8(m.hitbox, Uint8Array); if (hb.length === n) a.rgba_hitbox = hb; }
   if (m.layer) { const ly = base64ToU8(m.layer, Uint8Array); if (ly.length === n) a.rgba_layer = ly; }
@@ -7268,6 +7404,7 @@ function axMetaFor(a, bref) {
   if (a.tillable) m.tillable = true;
   if (a.buildable) m.buildable = true;
   if (a.fishable) m.fishable = true;
+  if (a.lava) m.lava = true;
   if (a.actions && a.actions.length) m.actions = a.actions.slice();
   if (a.rgba_hitbox && a.rgba_hitbox.some(v => v)) m.hitbox = u8ToBase64(a.rgba_hitbox);
   if (a.rgba_layer && a.rgba_layer.some(v => v !== 255)) m.layer = u8ToBase64(a.rgba_layer);
@@ -8086,7 +8223,7 @@ function buildBackupData() {
     bundleLibrary: bundleLibrary.map(bundleToJson),
     soundBundles: soundBundles.map(b => ({ name: b.name, sounds: b.sounds.slice() })),   // game-wide, kept here as a copy
     assets: assets.map(a => ({
-      name: a.name, folder: a.folder || '', walkable: a.walkable, tillable: !!a.tillable, buildable: !!a.buildable, fishable: !!a.fishable, actions: a.actions || [], w: a.w, h: a.h, uid: assetUid(a),
+      name: a.name, folder: a.folder || '', walkable: a.walkable, tillable: !!a.tillable, buildable: !!a.buildable, fishable: !!a.fishable, lava: !!a.lava, actions: a.actions || [], w: a.w, h: a.h, uid: assetUid(a),
       color: u8ToBase64(a.rgba_color), alpha: u8ToBase64(a.rgba_alpha),
       hitbox: u8ToBase64(a.rgba_hitbox || new Uint8Array(a.w * a.h)),
       layer: u8ToBase64(a.rgba_layer || new Uint8Array(a.w * a.h).fill(255)),
@@ -8463,7 +8600,7 @@ function loadBackupData(data) {
       levels: (ad.breakable.levels || []).map(brkLevelFromJson).map(lv => ({ ...lv, bundleIndex: libIndex(lv.bundleIndex), finalIndex: libIndex(lv.finalIndex) }))
     } : undefined;
     makeImageFromPixels(ad.w, ad.h, color, alpha, img => {
-      resolve({ name: ad.name, folder: ad.folder || '', walkable: ad.walkable, tillable: !!ad.tillable, buildable: !!ad.buildable, fishable: !!ad.fishable,
+      resolve({ name: ad.name, folder: ad.folder || '', walkable: ad.walkable, tillable: !!ad.tillable, buildable: !!ad.buildable, fishable: !!ad.fishable, lava: !!ad.lava,
                 actions: Array.isArray(ad.actions) && ad.actions.length ? ad.actions.map(String) : undefined, w: ad.w, h: ad.h, uid: ad.uid || undefined, img, rgba_color: color, rgba_alpha: alpha, rgba_hitbox: hitbox, rgba_layer: layer, animation, breakable });
     });
   }));
@@ -8558,6 +8695,7 @@ function mergeAssetsIntoLibrary(loaded) {
       if (a.tillable) assets[same].tillable = true;   // ticked in the backup: stays ticked
       if (a.buildable) assets[same].buildable = true;
       if (a.fishable) assets[same].fishable = true;
+      if (a.lava) assets[same].lava = true;
       if (a.actions) assets[same].actions = [...new Set([...(assets[same].actions || []), ...a.actions])].slice(0, TRIG_ACTIONS_MAX);
       return same;
     }
@@ -9030,13 +9168,13 @@ function collectTileExport() {
     }
     return numberOf.get(key);
   };
-  let tillable = 0, buildable = 0, fishable = 0;
+  let tillable = 0, buildable = 0, fishable = 0, lava = 0;
   for (let c = 0; c < n; c++) {
     let t = 0, cov = covered[c];
     if (ground[c]) {
       const a = placementSourceAsset(ground[c]), ok = tileAssetCanTill(a);
       t = typeNumber(tileTypeName(a ? a.name : ground[c].snapshot.name),
-                     (ok && a.tillable ? TILE_FLAG_TILLABLE : 0) | (ok && a.buildable ? TILE_FLAG_BUILDABLE : 0) | (ok && a.fishable ? TILE_FLAG_FISHABLE : 0));
+                     (ok && a.tillable ? TILE_FLAG_TILLABLE : 0) | (ok && a.buildable ? TILE_FLAG_BUILDABLE : 0) | (ok && a.fishable ? TILE_FLAG_FISHABLE : 0) | (ok && a.lava ? TILE_FLAG_LAVA : 0));
     } else if (importedTiles && (importedTiles.cells[c] & ~TILE_CELL_COVERED)) {
       const it = importedTiles.types[(importedTiles.cells[c] & ~TILE_CELL_COVERED) - 1];
       if (it) {
@@ -9049,10 +9187,11 @@ function collectTileExport() {
     if (!cov && (types[t - 1].flags & TILE_FLAG_TILLABLE)) tillable++;
     if (!cov && (types[t - 1].flags & TILE_FLAG_BUILDABLE)) buildable++;
     if (types[t - 1].flags & TILE_FLAG_FISHABLE) fishable++;   // something on the water (a lily pad) doesn't stop the fishing
+    if (types[t - 1].flags & TILE_FLAG_LAVA) lava++;
   }
   const problems = [];
   if (dropped.size) problems.push(`more than ${TILE_TYPE_MAX} different tile types — these export as "no tile": ${[...dropped].slice(0, 8).join(', ')}${dropped.size > 8 ? '…' : ''}`);
-  return { types, cells, tillable, buildable, fishable, problems };
+  return { types, cells, tillable, buildable, fishable, lava, problems };
 }
 // Reads the MAP11 tile section (after the teleporters) — see buildMapFileBuffer.
 function readTileSection(view, offset, len) {
@@ -9084,7 +9223,12 @@ function drawTileOverlay() {
     const v = g.cells[c];
     if (!v) continue;
     const x = (c % cols) * T, y = Math.floor(c / cols) * T, flags = g.types[(v & ~TILE_CELL_COVERED) - 1].flags;
-    if (flags & TILE_FLAG_FISHABLE) {   // cyan = fishable water
+    if (flags & TILE_FLAG_LAVA) {   // orange = lava (lava rods only)
+      ctx.fillStyle = 'rgba(255,110,30,.32)';
+      ctx.fillRect(x, y, T, T);
+      ctx.setLineDash([]);
+      ctx.strokeStyle = 'rgba(255,110,30,.95)';
+    } else if (flags & TILE_FLAG_FISHABLE) {   // cyan = fishable water
       ctx.fillStyle = 'rgba(40,220,230,.30)';
       ctx.fillRect(x, y, T, T);
       ctx.setLineDash([]);
@@ -9113,6 +9257,7 @@ function tileCursorChip(p) {
   if (t.flags & TILE_FLAG_TILLABLE) bits.push('tillable');
   if (t.flags & TILE_FLAG_BUILDABLE) bits.push('buildable');
   if (t.flags & TILE_FLAG_FISHABLE) bits.push('fishable');
+  if (t.flags & TILE_FLAG_LAVA) bits.push('lava');
   if (v & TILE_CELL_COVERED) bits.push('covered');
   const state = bits.join(', ');
   return `<span>"${t.name}"${state ? ' · ' + state : ''}</span>`;
@@ -9715,6 +9860,7 @@ async function exportMap() {
     (tiles.types.length && !tiles.tillable ? ' — tick "Tillable" on a 16x16 ground asset to make farmland possible.' : '.') +
     `\n${tiles.buildable} tile${tiles.buildable === 1 ? '' : 's'} buildings can stand on` + (tiles.buildable ? '.' : ' (tick "Buildable" on a 16x16 ground asset for that).') +
     `\n${tiles.fishable} tile${tiles.fishable === 1 ? '' : 's'} to fish in` + (tiles.fishable ? '.' : ' (tick "Fishable" on a 16x16 water asset for that).') +
+    (tiles.lava ? `\n${tiles.lava} lava tile${tiles.lava === 1 ? '' : 's'} (lava rods only).` : '') +
     `\nObjects with actions: ${trigs.list.length}.`;
   const suggested = `${tabBaseName()}.map`;
   let fileName = (prompt('File name (its 6 night files are saved next to it):', suggested) || suggested).trim();
@@ -11152,6 +11298,11 @@ const ITEM_ROD_ATTR = 'rod', ITEM_ROD_BAR_ATTR = 'rod_bar';                     
 const ITEM_FISH_ATTR = 'fish', ITEM_FISH_MOVE_ATTR = 'fish_move', ITEM_FISH_FROM_ATTR = 'fish_from', ITEM_FISH_TO_ATTR = 'fish_to',
       ITEM_FISH_WEATHER_ATTR = 'fish_weather', ITEM_FISH_RARITY_ATTR = 'fish_rarity', ITEM_FISH_MIN_ATTR = 'fish_min', ITEM_FISH_MAX_ATTR = 'fish_max';   // items.h ITEM_ATTR_FISH*
 const ITEM_FISH_TIER_ATTR = 'fish_tier';   // items.h ITEM_ATTR_FISH_TIER: 1..6 Common..Mythic, none = Common
+const ITEM_ROD_LAVA_ATTR = 'rod_lava', ITEM_ROD_BAIT_ATTR = 'rod_bait';      // items.h: a rod that fishes lava / needs bait
+const ITEM_FISH_LAVA_ATTR = 'fish_lava', ITEM_FISH_BAIT_ATTR = 'fish_bait';  // items.h: a fish that lives in lava / only bites on bait
+const ITEM_SHOP_ATTR = 'shop';             // items.h ITEM_ATTR_SHOP: which counter sells it (none = its usual one)
+// main.c SHOP_* + 1 (0 = "usual": the attribute isn't written)
+const SHOP_COUNTERS = ['Usual', 'Seeds', 'Build', 'Ranch', 'Tackle', 'General'];
 const ITEM_FISH_ATTRS = [ITEM_FISH_ATTR, ITEM_FISH_MOVE_ATTR, ITEM_FISH_FROM_ATTR, ITEM_FISH_TO_ATTR, ITEM_FISH_WEATHER_ATTR, ITEM_FISH_RARITY_ATTR, ITEM_FISH_MIN_ATTR, ITEM_FISH_MAX_ATTR, ITEM_FISH_TIER_ATTR];
 const ITEM_MUT_ATTR = 'mut';               // items.h ITEM_ATTR_MUT: mutation chance multiplier, % (none = 100, 0 = never)
 // items.c k_mutation[] (odds 1 in N, price %) and main.c k_mut_col — keep them in step. Index = MUT_*.
@@ -11824,10 +11975,12 @@ itemEl('itemShelfPreview').addEventListener('click', e => {
   itemEl('itemShelfY').value = itemClamp(y, 1, out.h);
   drawItemShelfPreview();
 });
-function setItemBuyable(on, price) {
+SHOP_COUNTERS.forEach((n, i) => itemEl('itemShopKind').add(new Option(n, i)));
+function setItemBuyable(on, price, counter) {
   itemEl('itemBuyable').checked = on;
-  itemEl('itemBuyPrice').disabled = !on;
+  itemEl('itemBuyPrice').disabled = itemEl('itemShopKind').disabled = !on;
   if (price !== undefined) itemEl('itemBuyPrice').value = price;
+  if (counter !== undefined) itemEl('itemShopKind').value = itemClamp(counter | 0, 0, SHOP_COUNTERS.length - 1);
 }
 itemEl('itemBuyable').addEventListener('change', e => setItemBuyable(e.target.checked));
 // Fishing: a rod ("rod 1" + its stats, the sliders) and fish ("fish" = difficulty 1..100 + the fish_* fields) — items.h ITEM_ATTR_ROD* / ITEM_ATTR_FISH*.
@@ -11856,6 +12009,9 @@ function rodStatLabels() {
 function setItemRod(on, vals) {
   itemEl('itemRod').checked = on;
   itemEl('itemRodStats').style.display = on ? '' : 'none';
+  itemEl('itemRodLava').disabled = itemEl('itemRodNeedsBait').disabled = !on;
+  if (vals && vals[ITEM_ROD_LAVA_ATTR] !== undefined) itemEl('itemRodLava').checked = vals[ITEM_ROD_LAVA_ATTR] > 0;   // ("Normal rod" leaves these)
+  if (vals && vals[ITEM_ROD_BAIT_ATTR] !== undefined) itemEl('itemRodNeedsBait').checked = vals[ITEM_ROD_BAIT_ATTR] > 0;
   for (const s of ROD_STATS) {
     itemEl(s.id).disabled = !on;
     if (vals) itemEl(s.id).value = vals[s.attr] !== undefined ? vals[s.attr] : s.def;
@@ -11872,13 +12028,17 @@ function itemRodAttrs() {
     const el = itemEl(s.id), v = itemClamp(parseInt(el.value), parseInt(el.min), parseInt(el.max));
     if (!isNaN(v) && v !== s.def) out.push({ name: s.attr, value: v });
   }
+  if (itemEl('itemRodLava').checked) out.push({ name: ITEM_ROD_LAVA_ATTR, value: 1 });
+  if (itemEl('itemRodNeedsBait').checked) out.push({ name: ITEM_ROD_BAIT_ATTR, value: 1 });
   return out;
 }
 const ITEM_FISH_FIELDS = { itemFishDiff: 30, itemFishMove: 0, itemFishFrom: 0, itemFishTo: 24, itemFishWeather: 0, itemFishRarity: 10, itemFishMin: 5, itemFishMax: 20, itemFishTier: 1 };
 FISH_TIERS.forEach((t, i) => itemEl('itemFishTier').add(new Option(t.name, i + 1)));
 function setItemFish(on, vals) {
   itemEl('itemFish').checked = on;
-  itemEl('itemFishTagBtn').disabled = !on;
+  itemEl('itemFishTagBtn').disabled = itemEl('itemFishLava').disabled = itemEl('itemFishBait').disabled = !on;
+  if (vals && vals.lava !== undefined) itemEl('itemFishLava').checked = !!vals.lava;
+  if (vals && vals.bait !== undefined) itemEl('itemFishBait').checked = !!vals.bait;
   for (const id in ITEM_FISH_FIELDS) {
     itemEl(id).disabled = !on;
     if (vals && vals[id] !== undefined) itemEl(id).value = vals[id];
@@ -11905,6 +12065,8 @@ function itemFishAttrs() {
   if (rarity !== 10) out.push({ name: ITEM_FISH_RARITY_ATTR, value: rarity });
   out.push({ name: ITEM_FISH_MIN_ATTR, value: lo }, { name: ITEM_FISH_MAX_ATTR, value: hi });
   if (tier > 1) out.push({ name: ITEM_FISH_TIER_ATTR, value: tier });
+  if (itemEl('itemFishLava').checked) out.push({ name: ITEM_FISH_LAVA_ATTR, value: 1 });
+  if (itemEl('itemFishBait').checked) out.push({ name: ITEM_FISH_BAIT_ATTR, value: 1 });
   return out;
 }
 
@@ -12075,7 +12237,8 @@ itemEl('fishTagOk').addEventListener('click', () => closeFishTag(true));
 itemEl('fishTagOverlay').addEventListener('mousedown', e => { if (e.target.id === 'fishTagOverlay') closeFishTag(false); });
 itemMutRefresh();
 const ITEM_OWNED_ATTRS = () => [ITEM_SELL_ATTR, ITEM_DROP_ATTR, ITEM_QUALITY_ATTR, ITEM_BUY_ATTR, ITEM_PROP_ATTR, ITEM_PROP_ROWS_ATTR, ITEM_PROP_SOLID_ATTR, ITEM_SHELF_ATTR, ITEM_SHELF_Y_ATTR,
-                                ITEM_BED_ATTR, ITEM_AQUA_ATTR, ITEM_TILLS_ATTR, ITEM_WATERS_ATTR, ...ITEM_RANCH_ATTRS.map(r => r[1]), ITEM_ROD_ATTR, ...ROD_STATS.map(s => s.attr), ...ITEM_FISH_ATTRS, ITEM_MUT_ATTR];
+                                ITEM_BED_ATTR, ITEM_AQUA_ATTR, ITEM_TILLS_ATTR, ITEM_WATERS_ATTR, ...ITEM_RANCH_ATTRS.map(r => r[1]), ITEM_ROD_ATTR, ...ROD_STATS.map(s => s.attr), ...ITEM_FISH_ATTRS, ITEM_MUT_ATTR,
+                                ITEM_SHOP_ATTR, ITEM_ROD_LAVA_ATTR, ITEM_ROD_BAIT_ATTR, ITEM_FISH_LAVA_ATTR, ITEM_FISH_BAIT_ATTR];
 function readItemSellPrice() {
   if (!itemEl('itemSellable').checked) return 0;
   return itemClamp(parseInt(itemEl('itemSellPrice').value) || 1, 1, 999999);
@@ -12293,13 +12456,14 @@ function importItemC(text, id) {
   setItemProp(!!prop && prop.value > 0, rows ? rows.value : 0, !solid || solid.value !== 0);
   const shelf = p.attrs.find(a => a.name === ITEM_SHELF_ATTR), shelfY = p.attrs.find(a => a.name === ITEM_SHELF_Y_ATTR);
   setItemShelf(!!shelf && shelf.value > 0, shelf && shelf.value > 0 ? shelf.value : 2, shelfY ? shelfY.value : 0);
-  setItemBuyable(!!buy && buy.value > 0, buy && buy.value > 0 ? buy.value : 10);
   const av = (n, d) => { const a = p.attrs.find(x => x.name === n); return a ? a.value : d; };
-  setItemRod(av(ITEM_ROD_ATTR, 0) > 0, Object.fromEntries(ROD_STATS.map(s => [s.attr, av(s.attr, s.def)])));
+  setItemBuyable(!!buy && buy.value > 0, buy && buy.value > 0 ? buy.value : 10, av(ITEM_SHOP_ATTR, 0));
+  setItemRod(av(ITEM_ROD_ATTR, 0) > 0, { ...Object.fromEntries(ROD_STATS.map(s => [s.attr, av(s.attr, s.def)])),
+    [ITEM_ROD_LAVA_ATTR]: av(ITEM_ROD_LAVA_ATTR, 0), [ITEM_ROD_BAIT_ATTR]: av(ITEM_ROD_BAIT_ATTR, 0) });
   setItemFish(av(ITEM_FISH_ATTR, 0) > 0, {
     itemFishDiff: av(ITEM_FISH_ATTR, 30) || 30, itemFishMove: av(ITEM_FISH_MOVE_ATTR, 0), itemFishFrom: av(ITEM_FISH_FROM_ATTR, 0), itemFishTo: av(ITEM_FISH_TO_ATTR, 24),
     itemFishWeather: av(ITEM_FISH_WEATHER_ATTR, 0), itemFishRarity: av(ITEM_FISH_RARITY_ATTR, 10), itemFishMin: av(ITEM_FISH_MIN_ATTR, 5), itemFishMax: av(ITEM_FISH_MAX_ATTR, 20),
-    itemFishTier: itemClamp(av(ITEM_FISH_TIER_ATTR, 1), 1, FISH_TIERS.length) });
+    itemFishTier: itemClamp(av(ITEM_FISH_TIER_ATTR, 1), 1, FISH_TIERS.length), lava: av(ITEM_FISH_LAVA_ATTR, 0) > 0, bait: av(ITEM_FISH_BAIT_ATTR, 0) > 0 });
   setItemMut(Math.max(0, av(ITEM_MUT_ATTR, 100)) / 100);
   itemEl('itemBed').checked = av(ITEM_BED_ATTR, 0) > 0;
   setItemAquarium(av(ITEM_AQUA_ATTR, 0) > 0, itemClamp(av(ITEM_AQUA_ATTR, 3) || 3, 1, 3));
@@ -12357,9 +12521,9 @@ function resetItemEditor(ask) {
   itemEl('itemBed').checked = itemEl('itemTills').checked = itemEl('itemWaters').checked = false;
   ITEM_RANCH_ATTRS.forEach(([el]) => { itemEl(el).checked = false; });
   setItemProp(false, 0, true);
-  setItemBuyable(false, 10);
-  setItemRod(false, {});
-  setItemFish(false, ITEM_FISH_FIELDS);
+  setItemBuyable(false, 10, 0);
+  setItemRod(false, { [ITEM_ROD_LAVA_ATTR]: 0, [ITEM_ROD_BAIT_ATTR]: 0 });
+  setItemFish(false, { ...ITEM_FISH_FIELDS, lava: false, bait: false });
   setItemMut(1);
   renderItemAttrList();
   renderItemListBox();
@@ -12472,7 +12636,11 @@ async function exportItemAsset(asNew) {
   if (itemEl('itemTills').checked) validAttrs.push({ name: ITEM_TILLS_ATTR, value: 1 });
   if (itemEl('itemWaters').checked) validAttrs.push({ name: ITEM_WATERS_ATTR, value: 1 });
   ITEM_RANCH_ATTRS.forEach(([el, at]) => { if (itemEl(el).checked) validAttrs.push({ name: at, value: 1 }); });
-  if (itemEl('itemBuyable').checked) validAttrs.push({ name: ITEM_BUY_ATTR, value: itemClamp(parseInt(itemEl('itemBuyPrice').value) || 1, 1, 999999) });
+  if (itemEl('itemBuyable').checked) {
+    validAttrs.push({ name: ITEM_BUY_ATTR, value: itemClamp(parseInt(itemEl('itemBuyPrice').value) || 1, 1, 999999) });
+    const counter = itemClamp(parseInt(itemEl('itemShopKind').value) || 0, 0, SHOP_COUNTERS.length - 1);
+    if (counter) validAttrs.push({ name: ITEM_SHOP_ATTR, value: counter });   // none = its usual counter
+  }
   if (itemEl('itemRod').checked) validAttrs.push(...itemRodAttrs());
   if (itemEl('itemFish').checked) validAttrs.push(...itemFishAttrs());
   validAttrs.push(...itemMutAttrs());   // mutation chance multiplier, any item (none = x1)
@@ -17323,6 +17491,487 @@ function closeMachineEditor() { mchEl('mchEdOverlay').classList.remove('show'); 
 </script>
 
 <script>
+// ================================================================
+//  BAIT EDITOR — the Game Tools "Bait Editor" tab. One bait = a 16x16 icon,
+//  a name, prices and its stats (items.h ITEM_ATTR_BAIT*). Save writes an
+//  ordinary item .c into assets/items/ (the Item Editor's format, so it opens
+//  there too) with "bait 1" and every stat that isn't plain. The list on the
+//  left is every item in that folder with "bait".
+// ================================================================
+const BT_PX = 16;
+const ITEM_BAIT_ATTR = 'bait';   // items.h ITEM_ATTR_BAIT: 1 = bait
+// items.h ITEM_ATTR_BAIT_*: slider range, plain value (not written), how it reads
+const BAIT_STATS = [
+  { id: 'btBite', attr: 'bait_bite', name: 'Bite speed', min: 25, max: 300, step: 5, def: 100, help: 'How soon a fish bites. 200% = in half the time.',
+    text: v => `${v}%` + (v === 100 ? '' : v > 100 ? ' (sooner)' : ' (later)') },
+  { id: 'btBar', attr: 'bait_bar', name: 'Catch bar', min: -32, max: 64, step: 2, def: 0, help: 'Px added to the green catch bar (a normal rod: 64 of 280). Bigger = easier.',
+    text: v => (v > 0 ? '+' : '') + v + ' px' + (v ? ` (${64 + v} on a normal rod)` : '') },
+  { id: 'btControl', attr: 'bait_control', name: 'Bar control', min: 0, max: 100, step: 5, def: 0, help: 'The bar brakes and turns faster and bounces less off the bottom: easier to hold steady. 100 = it brakes 3× as hard.',
+    text: v => v ? `${v} (steadier)` : 'normal' },
+  { id: 'btCalm', attr: 'bait_calm', name: 'Calm fish', min: 0, max: 80, step: 5, def: 0, help: 'The hooked fish swims as if it were this % easier.',
+    text: v => v ? `${v}% calmer` : 'normal' },
+  { id: 'btReel', attr: 'bait_reel', name: 'Reel speed', min: 50, max: 250, step: 5, def: 100, help: 'How fast the catch meter fills (times the rod\'s own).',
+    text: v => `${v}%` + (v === 100 ? '' : v > 100 ? ' (faster)' : ' (slower)') },
+  { id: 'btGrip', attr: 'bait_grip', name: 'Grip', min: 50, max: 250, step: 5, def: 100, help: 'How slowly the meter drains with the fish out of the bar (times the rod\'s own).',
+    text: v => `${v}%` + (v === 100 ? '' : v > 100 ? ' (holds on)' : ' (slips)') },
+  { id: 'btLuck', attr: 'bait_luck', name: 'Luck', min: -50, max: 100, step: 5, def: 0, help: 'Added to the rod\'s luck: rarer fish and better quality.',
+    text: v => (v > 0 ? '+' : '') + v + (v === 0 ? '' : v > 0 ? ' (lucky)' : ' (unlucky)') },
+  { id: 'btMut', attr: 'bait_mut', name: 'Mutations', min: 0, max: 1000, step: 25, def: 100, help: 'How likely a catch comes out mutated. 200% = twice as likely.',
+    text: v => `×${(v / 100).toFixed(v % 100 ? 2 : 0)}` + (v === 100 ? '' : v > 100 ? ' (more)' : ' (fewer)') },
+];
+const BAIT_TIER_ATTR = 'bait_tier';
+const BAIT_PRESETS = [
+  { name: 'Worm',    tip: 'Fish bite sooner',                       v: { bait_bite: 150 } },
+  { name: 'Cork',    tip: 'A bigger, steadier catch bar',            v: { bait_bar: 24, bait_control: 30 } },
+  { name: 'Steady',  tip: 'Easy to control, calmer fish',            v: { bait_control: 80, bait_calm: 25 } },
+  { name: 'Magnet',  tip: 'Only Rare fish or better bite, a bit lucky', v: { bait_tier: 3, bait_luck: 20, bait_bite: 75 } },
+  { name: 'Lucky',   tip: 'Luck and more mutations',                 v: { bait_luck: 40, bait_mut: 200 } },
+  { name: 'Glitter', tip: 'Mutations ×5, but fish slip off',         v: { bait_mut: 500, bait_grip: 70 } },
+];
+const btEl = id => document.getElementById(id);
+let bt = null, btEditingId = null, btLib = [];   // btLib: [{ id, name, icon, attrs }] from the items folder
+
+function btBlank() { return { name: '', icon: null, stack: 99, sell: 2, buy: 5, counter: 0, stats: {}, tier: 1 }; }
+function btId(b) { return btEditingId || sanitizeItemId(b.name || 'bait'); }
+function btStatus(t, bad) { const e = btEl('btStatus'); e.textContent = t || ''; e.className = 'animCap' + (bad ? ' itemMsg bad' : ''); }
+function btStat(b, s) { return b.stats[s.attr] !== undefined ? b.stats[s.attr] : s.def; }
+
+// Any PNG into 16x16: as it is, centred if smaller, shrunk (nearest pixel) if bigger.
+function btFit16(img) {
+  if (img.w === BT_PX && img.h === BT_PX) return img;
+  const k = Math.min(1, BT_PX / Math.max(img.w, img.h)), w = Math.max(1, Math.round(img.w * k)), h = Math.max(1, Math.round(img.h * k));
+  const out = new Uint8ClampedArray(BT_PX * BT_PX * 4), ox = Math.floor((BT_PX - w) / 2), oy = Math.floor((BT_PX - h) / 2);
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++) {
+      const sx = Math.min(img.w - 1, Math.floor((x + 0.5) / k)), sy = Math.min(img.h - 1, Math.floor((y + 0.5) / k));
+      out.set(img.rgba.subarray((sy * img.w + sx) * 4, (sy * img.w + sx) * 4 + 4), ((oy + y) * BT_PX + ox + x) * 4);
+    }
+  return { w: BT_PX, h: BT_PX, rgba: out };
+}
+// A parsed item's first held frame as an image (parseItemC's bundle).
+function btBundleImg(b) { return b ? cropUnpack(b.pixels.slice(0, b.w * b.h), b.w, b.h) : null; }
+// img scaled up by whole pixels, centred on a checkerboard (see-through shows).
+function btDrawIcon(cv, img) {
+  const g = cv.getContext('2d');
+  for (let y = 0; y < cv.height; y += 8)
+    for (let x = 0; x < cv.width; x += 8) { g.fillStyle = ((x + y) / 8) % 2 ? '#1d1d1d' : '#262626'; g.fillRect(x, y, 8, 8); }
+  if (!img) return;
+  const scale = Math.max(1, Math.floor(Math.min(cv.width / img.w, cv.height / img.h))), tmp = document.createElement('canvas');
+  tmp.width = img.w; tmp.height = img.h;
+  tmp.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(img.rgba), img.w, img.h), 0, 0);
+  g.imageSmoothingEnabled = false;
+  g.drawImage(tmp, Math.floor((cv.width - img.w * scale) / 2), Math.floor((cv.height - img.h * scale) / 2), img.w * scale, img.h * scale);
+}
+
+// ---- what it does, in words ----
+function btSummaryText(b) {
+  const parts = [], v = s => btStat(b, BAIT_STATS.find(x => x.attr === s));
+  if (v('bait_bite') !== 100) parts.push(`fish bite ${v('bait_bite') > 100 ? `${(v('bait_bite') / 100).toFixed(2).replace(/\.?0+$/, '')}× sooner` : `${(100 / v('bait_bite')).toFixed(2).replace(/\.?0+$/, '')}× later`}`);
+  if (v('bait_bar')) parts.push(`the catch bar is ${Math.abs(v('bait_bar'))} px ${v('bait_bar') > 0 ? 'bigger' : 'smaller'}`);
+  if (v('bait_control')) parts.push(`the bar is ${v('bait_control') >= 60 ? 'much ' : ''}steadier`);
+  if (v('bait_calm')) parts.push(`fish fight ${v('bait_calm')}% less`);
+  if (v('bait_reel') !== 100) parts.push(`the meter fills ${v('bait_reel') > 100 ? 'faster' : 'slower'} (${v('bait_reel')}%)`);
+  if (v('bait_grip') !== 100) parts.push(`fish ${v('bait_grip') > 100 ? 'slip away slower' : 'slip away faster'} (${v('bait_grip')}%)`);
+  if (v('bait_luck')) parts.push(`${v('bait_luck') > 0 ? '+' : ''}${v('bait_luck')} luck`);
+  if (v('bait_mut') !== 100) parts.push(v('bait_mut') === 0 ? 'catches never mutate' : `mutations ×${(v('bait_mut') / 100).toFixed(2).replace(/\.?0+$/, '')}`);
+  if (b.tier > 1) parts.push(`only ${FISH_TIERS[b.tier - 1].name} fish or rarer bite (any fish when none of those can)`);
+  const name = b.name || 'This bait';
+  return parts.length ? `${name}: ${parts.join('; ')}. One is used up per catch.` : `${name} does nothing special — but a rod with "Needs bait" casts with it, and "Only bites on bait" fish take it. One is used up per catch.`;
+}
+
+// ---- drawing the form ----
+function btRenderStats() {
+  const box = btEl('btStats');
+  box.innerHTML = '';
+  for (const s of BAIT_STATS) {
+    const row = document.createElement('div');
+    row.className = 'btStat';
+    row.innerHTML = `<span title="${s.help}">${s.name}</span><input type="range" min="${s.min}" max="${s.max}" step="${s.step}"><span class="btVal"></span>`;
+    const [range, val] = [row.querySelector('input'), row.querySelector('.btVal')];
+    const show = () => {
+      const x = btStat(bt, s);
+      val.textContent = s.text(x);
+      val.classList.toggle('up', x > s.def);
+      val.classList.toggle('down', x < s.def);
+    };
+    range.value = btStat(bt, s);
+    range.oninput = () => { const x = parseInt(range.value); if (x === s.def) delete bt.stats[s.attr]; else bt.stats[s.attr] = x; show(); btRenderSummary(); };
+    show();
+    box.appendChild(row);
+  }
+  const row = document.createElement('div');
+  row.className = 'btStat';
+  row.innerHTML = `<span title="Only fish of this tier or rarer bite while it's on (when none of them can bite right there and then, any fish can)">Attracts</span><select></select><span class="btVal"></span>`;
+  const sel = row.querySelector('select');
+  sel.add(new Option('any fish', 1));
+  FISH_TIERS.slice(1).forEach((t, i) => sel.add(new Option(`${t.name} or rarer`, i + 2)));
+  sel.value = bt.tier;
+  sel.onchange = () => { bt.tier = parseInt(sel.value) || 1; btRenderSummary(); };
+  box.appendChild(row);
+}
+function btRenderSummary() { btEl('btSummary').textContent = btSummaryText(bt); }
+function btRenderInfo() {
+  const id = btId(bt);
+  btEl('btIdPreview').textContent = btEditingId ? `Editing ${id}.c — Save writes over it and keeps the id.` : `Saves as ${id}.c in assets/items.`;
+}
+function btRender() {
+  btEl('btName').value = bt.name;
+  btEl('btStack').value = bt.stack;
+  btEl('btSell').value = bt.sell;
+  btEl('btBuy').value = bt.buy;
+  btEl('btCounter').value = bt.counter;
+  btDrawIcon(btEl('btIcon'), bt.icon);
+  btRenderStats();
+  btRenderSummary();
+  btRenderInfo();
+  btRenderList();
+}
+function btRenderList() {
+  const box = btEl('btList');
+  box.innerHTML = '';
+  if (!btLib.length) { box.innerHTML = '<div class="animCap">No bait yet — make one on the right. (Choose the items folder if it isn\'t connected.)</div>'; return; }
+  for (const it of btLib) {
+    const row = document.createElement('div');
+    row.className = 'btRow' + (it.id === btEditingId ? ' editing' : '');
+    const cv = document.createElement('canvas');
+    cv.width = 32; cv.height = 32;
+    btDrawIcon(cv, it.icon);
+    const text = document.createElement('div');
+    text.className = 'btRowText';
+    const b = btFromAttrs(it.name, it.icon, it.attrs, it.maxStack);
+    const buy = it.attrs.find(a => a.name === ITEM_BUY_ATTR);
+    text.innerHTML = `<b></b><span></span>`;
+    text.querySelector('b').textContent = it.name;
+    text.querySelector('span').textContent = `${it.id}.c${buy && buy.value > 0 ? ` · $${buy.value}` : ' · not sold'} · ${btSummaryText(b).replace(/^[^:]*: /, '').replace(/ One is used up per catch\.$/, '')}`;
+    row.append(cv, text);
+    row.onclick = () => btLoad(it);
+    box.appendChild(row);
+  }
+}
+
+// ---- items folder: every bait in it ----
+async function btScan() {
+  const dir = await getItemsDir(false);
+  btLib = [];
+  if (dir) {
+    for await (const [name, handle] of dir.entries()) {
+      if (handle.kind !== 'file' || !name.endsWith('.c')) continue;
+      const id = name.slice(0, -2);
+      if (!ITEM_ID_RE.test(id)) continue;
+      let p;
+      try { p = parseItemC(await (await handle.getFile()).text()); } catch (e) { continue; }
+      if (!p.attrs.some(a => a.name === ITEM_BAIT_ATTR && a.value > 0)) continue;
+      btLib.push({ id, name: p.name || id, icon: btBundleImg(p.passive), attrs: p.attrs, maxStack: p.maxStack });
+    }
+    btLib.sort((a, b) => a.name.localeCompare(b.name));
+  }
+  btRenderList();
+  if (!btEl('btStatus').textContent)
+    btStatus(dir ? `Saves into "${dir.name}" (should be assets/items).` : 'No items folder connected — Save downloads the .c; put it in assets/items/ and rebuild.');
+}
+function btFromAttrs(name, icon, attrs, maxStack) {
+  const av = (n, d) => { const a = attrs.find(x => x.name === n); return a ? a.value : d; };
+  const b = { ...btBlank(), name, icon, stack: maxStack || 99, sell: Math.max(0, av(ITEM_SELL_ATTR, 0)), buy: Math.max(0, av(ITEM_BUY_ATTR, 0)),
+              counter: itemClamp(av(ITEM_SHOP_ATTR, 0), 0, SHOP_COUNTERS.length - 1), tier: itemClamp(av(BAIT_TIER_ATTR, 1), 1, FISH_TIERS.length), stats: {} };
+  for (const s of BAIT_STATS) { const v = av(s.attr, s.def); if (v !== s.def) b.stats[s.attr] = v; }
+  b.extra = attrs.filter(a => ![ITEM_SELL_ATTR, ITEM_BUY_ATTR, ITEM_SHOP_ATTR, ITEM_BAIT_ATTR, BAIT_TIER_ATTR, ...BAIT_STATS.map(s => s.attr)].includes(a.name));   // kept as they are
+  return b;
+}
+function btLoad(it) {
+  if (bt && (bt.icon || bt.name) && btEditingId !== it.id && !confirm('Open this bait? Anything not saved on the one you\'re making is lost.')) return;
+  bt = btFromAttrs(it.name, it.icon, it.attrs, it.maxStack);
+  btEditingId = it.id;
+  btStatus(`Opened ${it.id}.c.`);
+  btRender();
+}
+async function btOpenFile(file) {
+  if (!file) return;
+  const id = file.name.replace(/\.c$/i, '');
+  if (!ITEM_ID_RE.test(id)) { alert(`${file.name} isn't an item file name (lowercase letters, digits and _).`); return; }
+  const p = parseItemC(await file.text());
+  if (!p.passive) { alert(`${file.name} has no art this editor can read — was it saved from the Item or Bait Editor?`); return; }
+  btLoad({ id, name: p.name || id, icon: btBundleImg(p.passive), attrs: p.attrs, maxStack: p.maxStack });
+}
+
+async function btTakeArt(file) {
+  if (!file) return;
+  let img;
+  try { img = await cropReadPng(file); } catch (e) { btStatus(`Couldn't read ${file.name}: ${e.message}`, true); return; }
+  bt.icon = btFit16(img);
+  if (!bt.name) bt.name = file.name.replace(/\.png$/i, '').replace(/[_-]+/g, ' ').replace(/\s*\(.*\)\s*$/, '').trim().replace(/\b\w/g, c => c.toUpperCase());
+  btStatus(img.w === BT_PX && img.h === BT_PX ? '' : `${file.name} is ${img.w}×${img.h}: ${img.w > BT_PX || img.h > BT_PX ? 'shrunk to fit' : 'centred in'} 16×16.`);
+  btRender();
+}
+
+// ---- save: an item .c (the Item Editor's format) ----
+function btBuildC(b, id) {
+  const attrs = (b.extra || []).slice();
+  if (b.sell > 0) attrs.push({ name: ITEM_SELL_ATTR, value: b.sell });
+  if (b.buy > 0) {
+    attrs.push({ name: ITEM_BUY_ATTR, value: b.buy });
+    if (b.counter) attrs.push({ name: ITEM_SHOP_ATTR, value: b.counter });
+  }
+  attrs.push({ name: ITEM_BAIT_ATTR, value: 1 });
+  for (const s of BAIT_STATS) if (btStat(b, s) !== s.def) attrs.push({ name: s.attr, value: btStat(b, s) });
+  if (b.tier > 1) attrs.push({ name: BAIT_TIER_ATTR, value: b.tier });
+  const px = cropPack(b.icon);
+  const block = buildItemAnimBlock(`${id}_passive`, { w: BT_PX, h: BT_PX, frameCount: 1, pixels: px }, 150, -1);
+  return `// AUTO-GENERATED by gameTools.html (Bait Editor) — "${b.name.replace(/\r?\n/g, ' ')}"
+// Lives in assets/items/ as ${id}.c — the file name is the item id, keep it.
+// Bait: drop it on a fishing rod in the bag. ${btSummaryText(b).replace(/\r?\n/g, ' ')}
+#include "items.h"
+
+${block.decl}
+static const item_attr_t k_${id}_attrs[] = {
+${attrs.map(a => `    { "${cString(a.name)}", ${a.value} },`).join('\n')}
+};
+
+const item_asset_t k_item_${id} = {
+    .id = "${id}",
+    .display_name = "${cString(b.name)}",
+    .max_stack = ${b.stack},
+    .passive = ${block.initExpr},
+    .use = { .frame_count = 0 },
+    .attrs = k_${id}_attrs,
+    .attr_count = ${attrs.length},
+};
+`;
+}
+async function btSave() {
+  const b = bt;
+  b.name = btEl('btName').value.trim();
+  b.stack = itemClamp(parseInt(btEl('btStack').value) || 99, 1, 99);
+  b.sell = itemClamp(parseInt(btEl('btSell').value) || 0, 0, 999999);
+  b.buy = itemClamp(parseInt(btEl('btBuy').value) || 0, 0, 999999);
+  b.counter = itemClamp(parseInt(btEl('btCounter').value) || 0, 0, SHOP_COUNTERS.length - 1);
+  const problems = [];
+  if (!b.name) problems.push('Give the bait a name.');
+  if (!b.icon) problems.push('Load its 16×16 icon.');
+  const id = btId(b);
+  if (id === 'none') problems.push('"none" is reserved — pick another name.');
+  if (problems.length) { alert(problems.join('\n')); return; }
+  const text = btBuildC(b, id);
+  const dir = await getItemsDir(false);
+  if (dir) {
+    let exists = false;
+    try { await dir.getFileHandle(`${id}.c`); exists = true; } catch (e) { /* new */ }
+    if (exists && btEditingId !== id && !confirm(`${id}.c already exists in "${dir.name}". Replace it?`)) return;
+    try {
+      const w = await (await dir.getFileHandle(`${id}.c`, { create: true })).createWritable();
+      await w.write(text);
+      await w.close();
+      btStatus(`Saved ${id}.c into "${dir.name}" — rebuild the firmware to put it in the game.`);
+    } catch (e) { alert(`Couldn't write ${id}.c into "${dir.name}": ${e.message}`); return; }
+  } else {
+    const l = document.createElement('a');
+    l.href = URL.createObjectURL(new Blob([text], { type: 'text/x-c' }));
+    l.download = `${id}.c`;
+    l.click();
+    URL.revokeObjectURL(l.href);
+    btStatus(`Downloaded ${id}.c — put it in assets/items/ and rebuild.`);
+  }
+  upsertItem(id, b.name);
+  setItemListPrice(id, b.sell);
+  btEditingId = id;
+  await btScan();
+  btRenderInfo();
+}
+
+function openBaitEditor() {
+  btEl('btEdOverlay').classList.add('show');
+  if (!bt) bt = btBlank();
+  btRender();
+  btScan();
+}
+function closeBaitEditor() { btEl('btEdOverlay').classList.remove('show'); }
+
+(() => {
+  SHOP_COUNTERS.forEach((n, i) => btEl('btCounter').add(new Option(i ? n : 'Usual (Tackle)', i)));
+  for (const p of BAIT_PRESETS) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = p.name;
+    b.title = p.tip + ' — sets the stats (the name and look stay)';
+    b.onclick = () => {
+      bt.stats = {};
+      bt.tier = 1;
+      for (const [k, v] of Object.entries(p.v)) { if (k === BAIT_TIER_ATTR) bt.tier = v; else bt.stats[k] = v; }
+      btRenderStats();
+      btRenderSummary();
+    };
+    btEl('btPresets').appendChild(b);
+  }
+  btEl('btName').addEventListener('input', () => { bt.name = btEl('btName').value.trim(); btRenderInfo(); btRenderSummary(); });
+  btEl('btStack').addEventListener('input', () => { bt.stack = itemClamp(parseInt(btEl('btStack').value) || 99, 1, 99); });
+  btEl('btSell').addEventListener('input', () => { bt.sell = itemClamp(parseInt(btEl('btSell').value) || 0, 0, 999999); });
+  btEl('btBuy').addEventListener('input', () => { bt.buy = itemClamp(parseInt(btEl('btBuy').value) || 0, 0, 999999); });
+  btEl('btCounter').addEventListener('change', () => { bt.counter = parseInt(btEl('btCounter').value) || 0; });
+  btEl('btResetBtn').onclick = () => { bt.stats = {}; bt.tier = 1; btRenderStats(); btRenderSummary(); };
+  btEl('btNewBtn').onclick = () => {
+    if (bt && (bt.icon || bt.name) && !confirm('Start a new bait? Anything not saved is lost.')) return;
+    bt = btBlank(); btEditingId = null;
+    btStatus('');
+    btRender();
+    btEl('btName').focus();
+  };
+  btEl('btRescanBtn').onclick = () => btScan();
+  btEl('btFolderBtn').onclick = async () => { btStatus(''); await getItemsDir(true, true); btScan(); };
+  btEl('btSaveBtn').onclick = btSave;
+  btEl('btOpenFile').addEventListener('change', e => { const f = e.target.files[0]; e.target.value = ''; btOpenFile(f); });
+  btEl('btArtFile').addEventListener('change', e => { const f = e.target.files[0]; e.target.value = ''; btTakeArt(f); });
+  const icon = btEl('btIcon');
+  icon.addEventListener('click', () => btEl('btArtFile').click());
+  icon.addEventListener('dragover', e => { e.preventDefault(); icon.classList.add('over'); });
+  icon.addEventListener('dragleave', () => icon.classList.remove('over'));
+  icon.addEventListener('drop', e => { e.preventDefault(); icon.classList.remove('over'); btTakeArt(e.dataTransfer.files[0]); });
+})();
+
+// ================================================================
+//  SHOP EDITOR — the Game Tools "Shop Editor" tab. Every item in
+//  assets/items/ in one table: tick "For sale", give it a price ("buyable")
+//  and a counter ("shop", items.h ITEM_ATTR_SHOP; Usual = not written).
+//  Save rewrites only the attribute table of each changed .c (everything
+//  else in the file stays as it was).
+// ================================================================
+const shEl = id => document.getElementById(id);
+let shRows = [];   // [{ id, name, icon, attrs, handle, text, sale, price, counter, orig: { sale, price, counter } }]
+
+// main.c shop_kind_of() for an item without "shop": its usual counter (1..5).
+function shUsualCounter(attrs) {
+  const has = n => attrs.some(a => a.name === n && a.value > 0);
+  if (ITEM_RANCH_ATTRS.some(r => has(r[1]))) return 3;
+  if (has(ITEM_TILLS_ATTR) || has(ITEM_WATERS_ATTR)) return 1;
+  if (has(ITEM_PROP_ATTR)) return 2;
+  if (has(ITEM_ROD_ATTR) || has(ITEM_BAIT_ATTR)) return 4;
+  return 5;
+}
+function shWhere(r) { return SHOP_COUNTERS[r.counter || shUsualCounter(r.attrs)]; }
+function shChanged(r) { return r.sale !== r.orig.sale || (r.sale && (r.price !== r.orig.price || r.counter !== r.orig.counter)); }
+function shStatus(t, bad) { const e = shEl('shStatus'); e.textContent = t || ''; e.className = 'animCap' + (bad ? ' itemMsg bad' : ''); }
+function shShown() {
+  const q = shEl('shFilter').value.trim().toLowerCase(), show = shEl('shShow').value, cf = parseInt(shEl('shCounterFilter').value);
+  return shRows.filter(r => (!q || r.name.toLowerCase().includes(q) || r.id.includes(q)) &&
+    (show === 'all' || (show === 'sale' && r.sale) || (show === 'not' && !r.sale) || (show === 'changed' && shChanged(r))) &&
+    (cf < 0 || (r.sale && (r.counter || shUsualCounter(r.attrs)) === cf)));
+}
+function shRefreshCount() {
+  const n = shRows.filter(shChanged).length;
+  shEl('shSaveBtn').textContent = n ? `Save ${n} change${n === 1 ? '' : 's'}` : 'Save changes';
+  shEl('shSaveBtn').disabled = shEl('shRevertBtn').disabled = !n;
+}
+function shRender() {
+  const body = shEl('shBody');
+  body.innerHTML = '';
+  for (const r of shShown()) {
+    const tr = document.createElement('tr');
+    tr.className = shChanged(r) ? 'changed' : '';
+    tr.innerHTML = `<td><canvas width="32" height="32"></canvas></td><td><b></b><div class="shSub"></div></td>
+      <td><input type="checkbox"></td><td><input type="number" min="1" max="999999"></td><td><select></select></td><td class="shWhere"></td><td class="shSub"></td>`;
+    btDrawIcon(tr.querySelector('canvas'), r.icon);
+    tr.querySelector('b').textContent = r.name;
+    tr.querySelector('.shSub').textContent = `${r.id}.c`;
+    const [chk, price] = tr.querySelectorAll('input'), sel = tr.querySelector('select'), where = tr.querySelector('.shWhere');
+    SHOP_COUNTERS.forEach((n, i) => sel.add(new Option(i ? n : `Usual (${SHOP_COUNTERS[shUsualCounter(r.attrs)]})`, i)));
+    const sell = r.attrs.find(a => a.name === ITEM_SELL_ATTR);
+    tr.lastElementChild.textContent = sell && sell.value > 0 ? `$${sell.value}` : '—';
+    const sync = () => {
+      chk.checked = r.sale; price.value = r.price; sel.value = r.counter;
+      price.disabled = sel.disabled = !r.sale;
+      where.textContent = r.sale ? `${shWhere(r)} shop` : '';
+      tr.className = shChanged(r) ? 'changed' : '';
+      shRefreshCount();
+    };
+    chk.onchange = () => { r.sale = chk.checked; sync(); };
+    price.oninput = () => { r.price = itemClamp(parseInt(price.value) || 1, 1, 999999); tr.className = shChanged(r) ? 'changed' : ''; shRefreshCount(); };
+    sel.onchange = () => { r.counter = parseInt(sel.value) || 0; sync(); };
+    sync();
+    body.appendChild(tr);
+  }
+  if (!body.children.length) body.innerHTML = `<tr><td colspan="7" class="animCap">${shRows.length ? 'Nothing matches.' : 'No items — choose the assets/items folder.'}</td></tr>`;
+  shRefreshCount();
+}
+async function shScan() {
+  const dir = await getItemsDir(false);
+  shRows = [];
+  if (dir) {
+    for await (const [name, handle] of dir.entries()) {
+      if (handle.kind !== 'file' || !name.endsWith('.c')) continue;
+      const id = name.slice(0, -2);
+      if (!ITEM_ID_RE.test(id) || id === 'none') continue;
+      let text, p;
+      try { text = await (await handle.getFile()).text(); p = parseItemC(text); } catch (e) { continue; }
+      const buy = p.attrs.find(a => a.name === ITEM_BUY_ATTR), shop = p.attrs.find(a => a.name === ITEM_SHOP_ATTR);
+      const sale = !!buy && buy.value > 0, sell = p.attrs.find(a => a.name === ITEM_SELL_ATTR);
+      const price = sale ? buy.value : Math.max(1, (sell && sell.value > 0 ? sell.value : 5) * 2), counter = shop ? itemClamp(shop.value, 0, SHOP_COUNTERS.length - 1) : 0;
+      shRows.push({ id, name: p.name || id, icon: btBundleImg(p.passive), attrs: p.attrs, handle, text, sale, price, counter, orig: { sale, price, counter } });
+    }
+    shRows.sort((a, b) => a.name.localeCompare(b.name));
+  }
+  shStatus(dir ? `${shRows.length} items in "${dir.name}".` : 'No items folder connected — Choose items folder… (assets/items).');
+  shRender();
+}
+
+// The .c with its attribute table replaced by `attrs` (and .attrs / .attr_count to match).
+function shRewriteAttrs(text, id, attrs) {
+  const table = /static const item_attr_t (\w+)\[\] = \{[\s\S]*?\};\n?/;
+  const name = `k_${id}_attrs`, decl = attrs.length ? `static const item_attr_t ${name}[] = {\n${attrs.map(a => `    { "${cString(a.name)}", ${a.value} },`).join('\n')}\n};\n` : '';
+  let out;
+  if (table.test(text)) out = text.replace(table, decl);
+  else {
+    const at = text.indexOf(`const item_asset_t k_item_${id}`);
+    if (at < 0) throw new Error(`no k_item_${id} in it`);
+    out = text.slice(0, at) + decl + (decl ? '\n' : '') + text.slice(at);
+  }
+  if (!/\.attrs\s*=\s*[^,]+,/.test(out) || !/\.attr_count\s*=\s*\d+/.test(out)) throw new Error('its item has no .attrs / .attr_count to update');
+  return out.replace(/\.attrs\s*=\s*[^,]+,/, `.attrs = ${attrs.length ? name : 'NULL'},`).replace(/\.attr_count\s*=\s*\d+/, `.attr_count = ${attrs.length}`);
+}
+async function shSave() {
+  const todo = shRows.filter(shChanged);
+  if (!todo.length) return;
+  const dir = await getItemsDir(true);
+  if (!dir) return;
+  const done = [], failed = [];
+  for (const r of todo) {
+    const attrs = r.attrs.filter(a => a.name !== ITEM_BUY_ATTR && a.name !== ITEM_SHOP_ATTR);
+    if (r.sale) {
+      attrs.push({ name: ITEM_BUY_ATTR, value: r.price });
+      if (r.counter) attrs.push({ name: ITEM_SHOP_ATTR, value: r.counter });
+    }
+    try {
+      const fresh = await (await (await dir.getFileHandle(`${r.id}.c`)).getFile()).text();   // as it is on disk now
+      const text = shRewriteAttrs(fresh, r.id, attrs);
+      const w = await (await dir.getFileHandle(`${r.id}.c`, { create: false })).createWritable();
+      await w.write(text);
+      await w.close();
+      r.attrs = attrs; r.text = text; r.orig = { sale: r.sale, price: r.price, counter: r.counter };
+      done.push(r.id);
+    } catch (e) { failed.push(`${r.id}.c: ${e.message}`); }
+  }
+  shRender();
+  shStatus(`Saved ${done.length} item${done.length === 1 ? '' : 's'} — rebuild the firmware to update the shops.` + (failed.length ? ` Couldn't save: ${failed.join('; ')}` : ''), failed.length > 0);
+}
+
+function openShopEditor() { shEl('shEdOverlay').classList.add('show'); shScan(); }
+function closeShopEditor() { shEl('shEdOverlay').classList.remove('show'); }
+
+(() => {
+  SHOP_COUNTERS.slice(1).forEach((n, i) => shEl('shCounterFilter').add(new Option(n, i + 1)));
+  ['shFilter', 'shShow', 'shCounterFilter'].forEach(id => shEl(id).addEventListener('input', shRender));
+  shEl('shRescanBtn').onclick = () => { if (!shRows.some(shChanged) || confirm('Read the folder again? Unsaved changes are lost.')) shScan(); };
+  shEl('shFolderBtn').onclick = async () => { await getItemsDir(true, true); shScan(); };
+  shEl('shSaveBtn').onclick = shSave;
+  shEl('shRevertBtn').onclick = () => { shRows.forEach(r => { r.sale = r.orig.sale; r.price = r.orig.price; r.counter = r.orig.counter; }); shRender(); };
+  shEl('shMultBtn').onclick = () => {
+    const k = parseFloat(shEl('shMult').value) || 2, rows = shShown().filter(r => r.attrs.some(a => a.name === ITEM_SELL_ATTR && a.value > 0));
+    if (!rows.length) { shStatus('None of the items shown has a sell price.'); return; }
+    if (!confirm(`Put ${rows.length} shown item${rows.length === 1 ? '' : 's'} up for sale at their sell price × ${k}?`)) return;
+    rows.forEach(r => { r.sale = true; r.price = Math.max(1, Math.round(r.attrs.find(a => a.name === ITEM_SELL_ATTR).value * k)); });
+    shRender();
+  };
+})();
+</script>
+
+<script>
 // ---------- Game Tools: Map Editor / Item Editor / Image Editor tabs ----------
 // The Item Editor is the map editor's Item Mode (it shares the map's item
 // list), shown as a page of its own; the Image Editor is #gtImage.
@@ -17343,15 +17992,19 @@ function closeMachineEditor() { mchEl('mchEdOverlay').classList.remove('show'); 
     else if (document.getElementById('aniEdOverlay').classList.contains('show')) closeAnimalEditor();
     if (tool === 'machine') openMachineEditor();
     else if (document.getElementById('mchEdOverlay').classList.contains('show')) closeMachineEditor();
+    if (tool === 'bait') openBaitEditor();
+    else if (document.getElementById('btEdOverlay').classList.contains('show')) closeBaitEditor();
+    if (tool === 'shop') openShopEditor();
+    else if (document.getElementById('shEdOverlay').classList.contains('show')) closeShopEditor();
     tabs.forEach(t => t.classList.toggle('on', t.dataset.tool === tool));
-    document.title = 'Game Tools · ' + { map: 'Map Editor', item: 'Item Editor', crop: 'Crops Editor', building: 'Buildings Editor', animal: 'Animals Editor', machine: 'Machines Editor', image: 'Image Editor' }[tool];
+    document.title = 'Game Tools · ' + { map: 'Map Editor', item: 'Item Editor', crop: 'Crops Editor', building: 'Buildings Editor', animal: 'Animals Editor', machine: 'Machines Editor', bait: 'Bait Editor', shop: 'Shop Editor', image: 'Image Editor' }[tool];
     if (tool === 'image') frame.focus(); else if (document.activeElement === frame) frame.blur();
     try { localStorage.setItem('gameTools.tool', tool); } catch {}
   }
   window.gtShowTool = showTool;
   tabs.forEach(t => t.addEventListener('click', () => showTool(t.dataset.tool)));
   let tool = 'map';
-  try { const t = localStorage.getItem('gameTools.tool'); if (t === 'item' || t === 'crop' || t === 'building' || t === 'animal' || t === 'machine' || t === 'image') tool = t; } catch {}
+  try { const t = localStorage.getItem('gameTools.tool'); if (['item', 'crop', 'building', 'animal', 'machine', 'bait', 'shop', 'image'].includes(t)) tool = t; } catch {}
   showTool(tool);
 })();
 </script>

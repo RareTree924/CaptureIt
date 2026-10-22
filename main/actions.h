@@ -48,6 +48,8 @@ int asset_action_find(const char *id);   // index into k_asset_actions[], -1 = n
 bool     seed_shop_open(void);    // the shop selling every crop's seeds (SEED SHOP in main.c)
 bool     build_shop_open(void);   // the shop selling every prop and building with a "buyable" price
 bool     ranch_shop_open(void);   // the ranch: every farm animal, hay and animal tools with a "buyable" price (ANIMALS in main.c)
+bool     tackle_shop_open(void);  // rods and bait with a "buyable" price (FISHING, BAIT in main.c)
+bool     general_shop_open(void); // anything else with a "buyable" price (items.h ITEM_ATTR_SHOP)
 bool     auction_open(void);      // the auction house: lots running, and putting a stack up (MARKET in main.c)
 void     auction_bench_info(void); // a bench, tapped: how the soonest-ending lot is going
 bool     ledger_open(void);       // every buy and sell of the last 20 days (LEDGER in main.c)

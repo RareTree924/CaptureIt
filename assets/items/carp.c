@@ -36,6 +36,8 @@ static const item_attr_t k_carp_attrs[] = {
     { "fish_rarity", 12 },
     { "fish_min", 10 },
     { "fish_max", 30 },
+    { "fish_water", 1 },
+    { "fish_seasons", 7 },
 };
 
 const item_asset_t k_item_carp = {
@@ -45,5 +47,5 @@ const item_asset_t k_item_carp = {
     .passive = { .w=16, .h=16, .frame_count=1, .interval_ms=150, .loop_count=-1, .pixels=k_carp_passive_pixels },
     .use = { .frame_count = 0 },
     .attrs = k_carp_attrs,
-    .attr_count = 7,
+    .attr_count = 9,
 };

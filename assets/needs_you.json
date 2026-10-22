@@ -1,0 +1,868 @@
+{
+  "about": "The Needs You list in Game Tools (the tab at the right of the top bar). Claude adds a task here whenever it makes something that waits on you: placeholder art to swap for your own, a number it had to guess, a sound to put on the SD card, something to try on the board. Ticks, 'done' and your replies are written back here, and Claude reads them. File paths are under assets/; '../' = the project folder, 'sd:' = the SD card's CaptureIt folder. 'marker' = text the file has while it's still the placeholder.",
+  "tasks": [
+    {
+      "id": "art_farm_tools",
+      "kind": "art",
+      "title": "Farming tools have placeholder art",
+      "what": "Hoe, watering can, scythe, shears and milk pail are simple drawings Claude made so the tools could be tested. Open each one, load your own 16x16 held art (Load sheet… / the art box) and Export — every setting stays.",
+      "added": "2026-10-17",
+      "files": [
+        {
+          "path": "items/hoe.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/watering_can.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/scythe.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/shears.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/milk_pail.c",
+          "marker": "Placeholder art"
+        }
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "art_animal_products",
+      "kind": "art",
+      "title": "Animal products and feed have placeholder art",
+      "what": "What the animals make (egg, goat milk, wool, truffle, rabbit's foot) and what you feed or plant for them (hay, grass starter). Open each one, load your own 16x16 art and Export.",
+      "added": "2026-10-17",
+      "files": [
+        {
+          "path": "items/egg.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/goat_milk.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/wool.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/truffle.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/rabbits_foot.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/hay.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/grass_starter.c",
+          "marker": "Placeholder art"
+        }
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "art_sprinklers_scarecrow",
+      "kind": "art",
+      "title": "Sprinklers and the scarecrow have placeholder art",
+      "what": "Four sprinklers (16x16) and the scarecrow (16x32). Load your own art and Export; keep \"Can be placed\" and \"Sprinkler\" / \"Scarecrow\" ticked.",
+      "added": "2026-10-17",
+      "files": [
+        {
+          "path": "items/bronze_sprinkler.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/silver_sprinkler.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/gold_sprinkler.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/emerald_sprinkler.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/scarecrow.c",
+          "marker": "Placeholder art"
+        }
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "art_bed",
+      "kind": "art",
+      "title": "The bed has placeholder art",
+      "what": "A 32x32 stand-in. Load your own (at most 32x32) and Export.",
+      "added": "2026-10-17",
+      "files": [
+        {
+          "path": "items/bed.c",
+          "marker": "Placeholder art"
+        }
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "art_farm_buildings",
+      "kind": "art",
+      "title": "Barns, coops, silo and well now use your art — tick this off if they look right",
+      "what": "Claude's old placeholder barn, coop and silo are gone. The game now uses your own pictures: small, medium and large barns and coops (they hold 2 / 4 / 8 animals), your silo and your well. If they look right in the game, tick this off. To change one, open it in Farm › Barns, coops & silos.",
+      "added": "2026-10-17",
+      "files": [
+        "buildings/small_barn.c",
+        "buildings/medium_barn.c",
+        "buildings/large_barn.c",
+        "buildings/small_coop.c",
+        "buildings/medium_coop.c",
+        "buildings/large_coop.c",
+        "buildings/silo.c",
+        "buildings/well.c"
+      ],
+      "reply": "",
+      "done": false
+    },
+    {
+      "id": "art_fences",
+      "kind": "art",
+      "title": "Wood fence, gate and hay pipe have placeholder art",
+      "what": "Farm › Fences & pipes: Save as PNG… gives the grid of 16 looks (32 for the gate). Paint over it keeping the grid, Load sheet… and Save. The pipe's ends now carry on right up to a barn's or silo's wall by themselves, so you don't have to draw that part.",
+      "added": "2026-10-17",
+      "files": [
+        "fences/wood_fence.c",
+        "fences/wood_gate.c",
+        "fences/hay_pipe.c"
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "art_farm_rooms",
+      "kind": "art",
+      "title": "Barn and coop insides are placeholder rooms",
+      "what": "Each barn and coop leads into its own inside map, which Claude made as a plain wooden room: small ones have 2 troughs, medium 4, large 8 (a trough is any object with the \"Trough\" action; the hay shown in it is the Hay item's art). Open one in the Map Editor and paint over it, or make your own — keep a \"Building exit\" teleporter by its door (the animals walk out through it too) and one trough tile per animal. Export it to the SD card as maps/<name>/<name>.map (the copies in the project's maps folder are only copies).",
+      "added": "2026-10-17",
+      "files": [
+        "../maps/small_barn_inside.map",
+        "../maps/medium_barn_inside.map",
+        "../maps/large_barn_inside.map",
+        "../maps/small_coop_inside.map",
+        "../maps/medium_coop_inside.map",
+        "../maps/large_coop_inside.map",
+        "sd:maps/small_barn_inside/small_barn_inside.map",
+        "sd:maps/medium_barn_inside/medium_barn_inside.map",
+        "sd:maps/large_barn_inside/large_barn_inside.map",
+        "sd:maps/small_coop_inside/small_coop_inside.map",
+        "sd:maps/medium_coop_inside/medium_coop_inside.map",
+        "sd:maps/large_coop_inside/large_coop_inside.map"
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "art_shop_props",
+      "kind": "art",
+      "title": "Shop furniture still uses the first stand-in art",
+      "what": "These still match the pictures in assets/placeholder_art/ from when the auction house was built. Open each one and load your own art.",
+      "added": "2026-10-17",
+      "files": [
+        "items/display_shelf.c",
+        "items/market_table.c",
+        "items/shop_rug.c",
+        "items/wooden_crate.c"
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "art_town_buildings",
+      "kind": "art",
+      "title": "Auction house and general store still use the stand-in art",
+      "what": "Same pictures as assets/placeholder_art/auction_house.png and general_store.png. Buildings Editor: load your picture and Save building — the door and footprint stay if the size is the same.",
+      "added": "2026-10-17",
+      "files": [
+        "buildings/auction_house.c",
+        "buildings/general_store.c"
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "art_fishing",
+      "kind": "art",
+      "title": "The fishing rod and four fish still use the stand-in art",
+      "what": "These still match assets/placeholder_art/ (carp, rainbow trout and sunfish already have yours). Open each one and load your own 16x16 art.",
+      "added": "2026-10-17",
+      "files": [
+        "items/fishing_rod.c",
+        "items/catfish.c",
+        "items/eel.c",
+        "items/golden_koi.c",
+        "items/largemouth_bass.c"
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "sound_crow",
+      "kind": "sound",
+      "title": "Crow sound for the crows that eat crops",
+      "what": "The game plays \"crow\" when a crow lands on a crop. Put a crow.wav on the SD card: 16-bit, mono, 44.1 kHz (the mixer doesn't convert). Without it the crow is silent.",
+      "added": "2026-10-17",
+      "files": [
+        "sd:sounds/sound effects/crow.wav"
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "sound_animals",
+      "kind": "sound",
+      "title": "Animal sounds",
+      "what": "Each animal plays its sound now and then. None of these WAVs exist yet. Put them on the SD card: 16-bit, mono, 44.1 kHz.",
+      "added": "2026-10-17",
+      "files": [
+        "sd:sounds/sound effects/cow.wav",
+        "sd:sounds/sound effects/goat.wav",
+        "sd:sounds/sound effects/pig.wav",
+        "sd:sounds/sound effects/sheep.wav",
+        {
+          "path": "sd:sounds/sound effects/rabbit.wav",
+          "note": "for the wooly rabbit"
+        }
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "data_sprinkler_prices",
+      "kind": "data",
+      "title": "Sprinklers can't be bought yet — what should they cost?",
+      "what": "Right now you only get them with the Debug Panel / dev link. Type a price for each (or \"crafting only\", or \"leave them dev-only\") and Claude will set it up. You can also open each one, tick Buyable, type a price and Export yourself.",
+      "added": "2026-10-17",
+      "files": [
+        "items/bronze_sprinkler.c",
+        "items/silver_sprinkler.c",
+        "items/gold_sprinkler.c",
+        "items/emerald_sprinkler.c"
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "decision_scarecrow_price",
+      "kind": "decision",
+      "title": "The scarecrow costs 50 in the Build shop — Claude's guess",
+      "what": "You didn't say a price, so Claude picked 50. Keep it, or type another price.",
+      "added": "2026-10-17",
+      "files": [
+        "items/scarecrow.c"
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "test_on_board",
+      "kind": "test",
+      "title": "Built and compiled, but never tried on the board",
+      "what": "Claude couldn't run these on the real board. When you play, check each and write what went wrong (or \"works\") below:\n• Animals: buy one at the seed shop, it wanders, eats grass, makes its product, babies grow up\n• Barns, coops, silos: place one, animals go in and out of the door, hay goes in the troughs, pipes from the silo\n• Fences and gates: they join up, gates open and shut, animals stay inside\n• Sprinklers + scarecrow: crops get watered at 6:00, crows come for unguarded crops\n• Fishing and the aquarium\n• The market: shoppers, offers, the auction house",
+      "added": "2026-10-17",
+      "files": [],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "decision_scarecrow_recipe",
+      "kind": "decision",
+      "title": "Scarecrow recipe: 50 wood + 20 hay — Claude's stand-in",
+      "what": "In Stardew a scarecrow takes 50 wood, 1 coal and 20 fiber. This game has no coal or fiber yet, so Claude used 50 wood + 20 hay. Change it in the Item Editor (open scarecrow.c → Crafting card) or type what you want below.\nIt's also still sold in the Build shop for 50 — say if it should be craft-only, like in Stardew.",
+      "added": "2026-10-18",
+      "files": [
+        "items/scarecrow.c"
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "data_more_recipes",
+      "kind": "data",
+      "title": "What else should be craftable?",
+      "what": "Only the scarecrow has a recipe for now. Any item can get one: open it in the Item Editor, tick \"Can be crafted\" on the Crafting card, add the ingredients (item ids) and Export. Or list them below (\"bronze sprinkler: 1 copper bar + 1 iron bar\"…) and Claude will add them — making any missing ingredient items too.",
+      "added": "2026-10-18",
+      "files": [
+        "items/bronze_sprinkler.c",
+        "items/silver_sprinkler.c",
+        "items/gold_sprinkler.c",
+        "items/emerald_sprinkler.c"
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "sound_craft",
+      "kind": "sound",
+      "title": "Crafting sound",
+      "what": "Crafting something plays \"craft\". Put a craft.wav on the SD card (16-bit, mono, 44.1 kHz). Without it crafting is silent.",
+      "added": "2026-10-18",
+      "files": [
+        "sd:sounds/sound effects/craft.wav"
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "test_crafting_characters",
+      "kind": "test",
+      "title": "Try the crafting tab and the saved characters on the board",
+      "what": "Built and compiled, not tried on the board yet:\n• Crafting: open the inventory, tap the hammer tab above it. The scarecrow shows faded until the bag has 50 wood + 20 hay (Debug Panel: give wood 50, give hay 20). Tap it to see the recipe, tap again to craft. The backpack tab goes back.\n• Characters: title screen → Customize → Save (top left) puts the look you're making in one of 6 slots on the SD card (characters\\char1.txt …). Load (top right) puts one back on; tap Done to wear it.\nTested on the board by Claude on 2026-10-18 (save 4): crafting the scarecrow, the tabs, \"Need 50 more Wood\"; saving a character to slot 2, loading it back, saving over it. Worth a go yourself, by touch.",
+      "added": "2026-10-18",
+      "files": [],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "test_screen_glitch",
+      "kind": "test",
+      "title": "Does the screen still glitch on some restarts?",
+      "what": "You saw a glitchy screen on about 1 in 5 restarts. The panel was never reset when the ESP32 restarted (it has no reset wire and stays powered), so it took the start-up commands on top of its old state. Since 2026-10-18 the game sends the panel's software reset first and clocks the start-up commands more slowly.\nRestart the board 10 or so times (reset button, and unplug/replug too) and say below whether it still happens — and if it does, what it looks like (wavy/shifted lines, wrong colours, snow, flicker, a stripe…) and whether a screenshot from the Debug Panel shows it too.",
+      "added": "2026-10-18",
+      "files": [],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "decision_farm_door_looks",
+      "kind": "decision",
+      "title": "Animal doors: is the dark piece really the shut look?",
+      "what": "You said the closed look is the dark part, so every barn and coop shows the dark piece while its animal door is shut and the wooden planks piece while it's open. (In Stardew it's the other way round: shut = the wooden door, open = the dark doorway.) If you want it the Stardew way, say so below — or do it yourself: Farm tab › Barns, coops & silos › Open building .c… › Swap shut ↔ open › Save, for each one.",
+      "added": "2026-10-18",
+      "files": [
+        "buildings/small_barn.c",
+        "buildings/medium_barn.c",
+        "buildings/large_barn.c",
+        "buildings/small_coop.c",
+        "buildings/medium_coop.c",
+        "buildings/large_coop.c"
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "data_farm_building_numbers",
+      "kind": "data",
+      "title": "Barn, coop, silo and well prices and sizes are guesses",
+      "what": "Capacities are yours (small 2, medium 4, large 8 animals, for barns and coops). The rest Claude picked: Build shop prices are Stardew's (barns 6000 / 12000 / 25000, coops 4000 / 10000 / 20000, silo 100, well 1000), the solid footprint is the bottom 4 tile rows for a barn and 3 for a coop, the silo and the well (the rows above are roof you walk behind), the silo holds 240 hay, and the player's door is the 2nd tile from the left. Change any of them in Farm tab › Barns, coops & silos (Open building .c…, change, Save), or write the numbers you want below.",
+      "added": "2026-10-18",
+      "files": [
+        "buildings/small_barn.c",
+        "buildings/medium_barn.c",
+        "buildings/large_barn.c",
+        "buildings/small_coop.c",
+        "buildings/medium_coop.c",
+        "buildings/large_coop.c",
+        "buildings/silo.c",
+        "buildings/well.c"
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "data_watering_can_size",
+      "kind": "data",
+      "title": "How much water should the watering can hold?",
+      "what": "With the well, the watering can now runs dry: it holds 40 water (Stardew's basic can), one tile of farmland each, and a blue bar under it on the hotbar shows how full it is. Fill it by tapping the well (or water) while holding it. Change the number in the Item Editor (watering_can › Farming tools › holds N water; 0 = never runs dry), or say below.",
+      "added": "2026-10-18",
+      "files": [
+        "items/watering_can.c"
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "test_farm_buildings_board",
+      "kind": "test",
+      "title": "Try the barns, coops, silo and well on the board",
+      "what": "Claude tried these on the board over the dev link (2026-10-18, test save 3, map farmtest): the small barn, small coop and well build; the barn's animal door shows the dark piece shut and the planks open; hay pipes from the silo run right up to the barn's and the silo's walls; a small barn takes 2 cows and refuses a 3rd; the cows and the rabbit walk home and in through their doors at 5 pm (and inside, 2 troughs with hay); watering farmland takes 1 from the can (the blue bar shows it) and tapping the well fills it to 40. What's left for you: build them in your own farm and say below if anything looks or feels wrong — especially the medium and large sizes, which Claude didn't build on the board.",
+      "added": "2026-10-18",
+      "files": [],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "data_bed_prices",
+      "kind": "data",
+      "title": "Bed names and Build shop prices (guessed)",
+      "what": "Your bed sheet became 9 beds (the pirate bed was on it twice, so it's in once). I named them and guessed prices:\nBed 150, Tropical Bed 1200, Double Bed 2000, Tropical Double Bed 3000, Starry Double Bed 3500, Checkered Double Bed 3500, Pirate Double Bed 4000, Deluxe Red Double Bed 5000, Modern Double Bed 5000.\nChange any name or price in the Item Editor (Sold in shops) and Export, or write the ones you want below. The faint drop shadow under each bed was left out (the game's art can't be see-through).",
+      "added": "2026-10-18",
+      "files": [
+        "items/bed.c",
+        "items/tropical_bed.c",
+        "items/double_bed.c",
+        "items/tropical_double_bed.c",
+        "items/starry_double_bed.c",
+        "items/checkered_double_bed.c",
+        "items/pirate_double_bed.c",
+        "items/deluxe_red_double_bed.c",
+        "items/modern_double_bed.c"
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "test_walk_in_beds",
+      "kind": "test",
+      "title": "Try the walk-in beds on the board",
+      "what": "Buy a bed in the Build shop and put it down in the house. Check: walking into it from the left or right side works; the top (headboard) and bottom (footboard) stop you; lying in it, the sheet covers you up to the shoulders and it asks \"Go to bed?\"; NOT YET leaves you lying there; walking out and standing just below the bed shows you IN FRONT of it, not under the sheet. Tapping the bed walks you into it. (A bed placed with its side against a wall can only be got into from the other side.)",
+      "added": "2026-10-18",
+      "files": [],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "decision_wardrobe_genders",
+      "kind": "decision",
+      "title": "Set who wears each piece of clothing (Wardrobe tab)",
+      "what": "Shoppers are now each a man or a woman and only wear their own clothes plus neutral ones. Until a piece is tagged it counts as neutral, so right now anyone can wear anything. Open the Wardrobe tab in Game Tools and press M, N or F for each piece (it moves to the next by itself). Then rebuild and flash: Customize's lists will go male first, neutral in the middle, female last.",
+      "added": "2026-10-19",
+      "files": [
+        "wardrobe/genders.json"
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "test_npc_gender",
+      "kind": "test",
+      "title": "Check shoppers dress as their gender",
+      "what": "After tagging and flashing: in a shop or the auction hall, men should be on the male body in male or neutral clothes with a man's name, women likewise. Tell Claude about any piece that looks wrong on someone.",
+      "added": "2026-10-19",
+      "files": [],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "decision_fish_art_soft",
+      "kind": "decision",
+      "title": "The fish look blurry because their source art is (not a game bug)",
+      "what": "The 38 fish come from the FishIcons library (Documents/Arduino/libraries/FishIcons). Those 16x16 icons are shrunk-down pictures with 35-138 colours each (pixel art usually has 6-15), so they look soft. The game shows them exactly as they are (same colours; only near-black fringe pixels were made see-through). Options: redraw them as pixel art (or find a pixel-art fish set), or ask Claude to run an automatic clean-up over all of them (fewer colours + an outline) - it helps a little, not a lot. Write which you want.",
+      "added": "2026-10-19",
+      "files": [],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "art_stardew_fish",
+      "kind": "art",
+      "title": "The 40 Stardew fish have placeholder icons",
+      "what": "Claude drew stand-in fish so the new fishing could be built. Open Game Tools → Fishing, pick each one (the list marks them \"placeholder\"), drop your 16x16 icon on the box and Save. Everything else stays.",
+      "added": "2026-10-19",
+      "files": [
+        {
+          "path": "items/anchovy.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/sardine.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/herring.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/tuna.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/red_mullet.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/red_snapper.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/pufferfish.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/octopus.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/sea_cucumber.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/super_cucumber.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/albacore.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/halibut.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/flounder.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/blobfish.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/shad.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/tiger_trout.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/smallmouth_bass.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/walleye.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/bream.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/chub.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/dorado.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/perch.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/woodskip.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/bullhead.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/sturgeon.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/midnight_carp.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/lingcod.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/ghostfish.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/stonefish.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/ice_pip.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/lava_eel.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/sandfish.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/scorpion_carp.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/slimejack.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/void_salmon.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/crimsonfish.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/angler.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/legend.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/glacierfish.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/mutant_carp.c",
+          "marker": "Placeholder art"
+        }
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "art_fishing_gear",
+      "kind": "art",
+      "title": "Junk, crab pot catches, bait, tackle, rods and the crab pot have placeholder icons",
+      "what": "Same as the fish: Fishing tab → pick it → load your icon → Save. The crab pot is a 16x16 prop that sits on a water tile.",
+      "added": "2026-10-19",
+      "files": [
+        {
+          "path": "items/lobster.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/cockle.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/mussel.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/shrimp.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/oyster.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/clam.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/crayfish.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/snail.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/periwinkle.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/trash.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/driftwood.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/broken_glasses.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/broken_cd.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/soggy_newspaper.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/joja_cola.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/seaweed.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/green_algae.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/worms.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/bait.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/deluxe_bait.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/wild_bait.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/magnet.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/magic_bait.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/challenge_bait.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/spinner.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/dressed_spinner.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/trap_bobber.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/cork_bobber.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/lead_bobber.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/treasure_hunter.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/barbed_hook.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/curiosity_lure.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/quality_bobber.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/sonar_bobber.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/iridium_rod.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/advanced_iridium_rod.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/crab_pot.c",
+          "marker": "Placeholder art"
+        }
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "decision_item_limit",
+      "kind": "decision",
+      "title": "Item ids widened to 16 bits",
+      "what": "Done 2026-10-20 at your request: item ids are item_id_t (16 bits) now, so there is room for thousands of items. Saves and maps name items by id, so nothing old breaks.",
+      "added": "2026-10-19",
+      "files": [
+        {
+          "path": "../main/items.h"
+        }
+      ],
+      "done": true,
+      "reply": "widen it"
+    },
+    {
+      "id": "data_fishing_numbers",
+      "kind": "data",
+      "title": "Check the fishing numbers",
+      "what": "Prices, difficulty, rarity and seasons follow Stardew; the bait / tackle shop prices, the treasure weights, the game-wide settings (junk 12%, treasure 8%, daily luck ±10, bar +4 px a level) and the tricks each fish plays are Claude's guesses. Change any of them in the Fishing tab (its \"Who bites?\" box shows the odds as you go).",
+      "added": "2026-10-19",
+      "files": [
+        {
+          "path": "fishing/settings.c"
+        }
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "data_water_kinds",
+      "kind": "data",
+      "title": "Mark your water as River or Ocean",
+      "what": "Fish now bite by water kind (Stardew: ocean fish in the ocean...). All Fishable water is a pond until its asset says otherwise: Map Editor → select a Fishable water asset → the \"Water:\" button (Pond / lake → River → Ocean), then export the map again. The mines / desert / sewer fish (Ghostfish, Sandfish, Mutant Carp...) only bite on maps named mines, desert, sewer, bug_lair, witch_swamp and secret_woods (change that per fish in the Fishing tab).",
+      "added": "2026-10-19",
+      "files": [
+        {
+          "path": "gametools_assets.json"
+        }
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "sound_fishing",
+      "kind": "sound",
+      "title": "Fishing sounds (optional)",
+      "what": "The game plays these if they are on the card (16-bit mono 44.1 kHz WAV in sounds/sound effects/): fish_cast, fish_plop, fish_bite, fish_catch, fish_escape, fish_junk, fish_chest (chest won), fish_treasure (chest opened), crab_pot (catch collected). Missing ones are just silent.",
+      "added": "2026-10-19",
+      "files": [
+        {
+          "path": "sd:sounds/sound effects/fish_bite.wav"
+        }
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "test_stardew_fishing",
+      "kind": "test",
+      "title": "Try the new fishing on the board",
+      "what": "Built and compiled but not run on the device yet. Things to try: fish in each water kind and season; drop bait / a bobber on a rod in the bag and check its card; a treasure chest (dev: fish chest); each trick (dev: fish trait 0x2 sticky, 0x4 dasher, 0x8 jumper, 0x10 ghost, 0x20 decoy, 0x40 current...); junk (dev: fish junk); a crab pot in water baited, then the next morning (dev: fish pots done); the fish shop (put the \"fish_shop\" action on a map object); the fish book page (seasons, where, tricks) and the level line; save + load keeps bait, tackle and fishing xp.",
+      "added": "2026-10-19",
+      "files": [
+        {
+          "path": "../main/main.c"
+        }
+      ],
+      "done": false,
+      "reply": ""
+    }
+  ]
+}

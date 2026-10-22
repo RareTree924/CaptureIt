@@ -35,6 +35,7 @@ static const uint16_t k_watering_can_passive_pixels[256] = {
 static const item_attr_t k_watering_can_attrs[] = {
     { "buyable", 50 },
     { "waters", 1 },
+    { "water_max", 40 },
 };
 
 const item_asset_t k_item_watering_can = {
@@ -44,5 +45,5 @@ const item_asset_t k_item_watering_can = {
     .passive = { .w=16, .h=16, .frame_count=1, .interval_ms=150, .loop_count=-1, .pixels=k_watering_can_passive_pixels },
     .use = { .frame_count = 0 },
     .attrs = k_watering_can_attrs,
-    .attr_count = 2,
+    .attr_count = 3,
 };

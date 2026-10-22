@@ -36,6 +36,8 @@ static const item_attr_t k_sea_sponge_attrs[] = {
     { "fish_rarity", 20 },
     { "fish_min", 4 },
     { "fish_max", 20 },
+    { "pot", 6 },
+    { "pot_water", 4 },
 };
 
 const item_asset_t k_item_sea_sponge = {
@@ -45,5 +47,5 @@ const item_asset_t k_item_sea_sponge = {
     .passive = { .w=16, .h=16, .frame_count=1, .interval_ms=150, .loop_count=-1, .pixels=k_sea_sponge_passive_pixels },
     .use = { .frame_count = 0 },
     .attrs = k_sea_sponge_attrs,
-    .attr_count = 7,
+    .attr_count = 9,
 };

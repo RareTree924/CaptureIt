@@ -244,6 +244,7 @@ static void night_before_map_swap(void);      // DAY / NIGHT section — load_ma
 static void night_map_loaded(const char *path, uint32_t total_px, uint32_t day_hash); // then puts the new map in the current night stage
 static uint32_t night_fnv(uint32_t h, const uint16_t *px, uint32_t n);                 // DAY / NIGHT section
 static void night_release_hold(void);         // ...and ui_begin(): the loader lets go of the shared hold buffer
+static const char *season_map_path(const char *path, char *out, size_t n); // SEASONS: load_map()'s <map>.<season>.map when there is one
 #if DEV_LINK_ENABLED
 static bool dev_touch(bool *touched, int *x, int *y);   // DEV LINK section — a tap sent over USB
 static void dev_main_poll(void);                         // ...its commands that touch the game, run between frames
@@ -4035,8 +4036,10 @@ static void brk_reach_box(int px, int py, direction_t facing, int *rx0, int *ry0
 // go through tp_travel(). current_map_name() follows the new map.
 static uint32_t s_load_read_ms = 0, s_load_ms = 0;   // the last load_map(): reading + setting up, and in all (dev link "state")
 
-bool load_map(const char *path)
+bool load_map(const char *map_file)
 {
+    static char season_file[MAP_PATH_MAX];
+    const char *path = season_map_path(map_file, season_file, sizeof(season_file));   // SEASONS: this season's art, if the map has it
     int64_t t_load = esp_timer_get_time();
     mapsave_flush();              // the loaded map's last changes, before it can go away (MAP SAVES)
     farm_map_leaving();           // ...and what its farm buildings' animals can reach from their doors (FARM)
@@ -8041,6 +8044,21 @@ static int32_t crop_seasons(int c)
 static bool crop_grows_in(int c, int season)
 {
     return s_map_inst || season_fits(crop_seasons(c), season);
+}
+
+// The file load_map() should open for map file `path` in this season:
+// "<dir>/meadows.winter.map" when it's there (the Map Editor's seasonal art,
+// with its own night files), else `path` itself. The map's name — and so its
+// save — stays "meadows" (everything after the first '.' is dropped).
+static const char *season_map_path(const char *path, char *out, size_t n)
+{
+    static const char *const k_file[4] = { "spring", "summer", "fall", "winter" };
+    const char *dot = strrchr(path, '.'), *slash = strrchr(path, '/');
+    if (!dot || (slash && dot < slash)) return path;
+    int w = snprintf(out, n, "%.*s.%s%s", (int)(dot - path), path, k_file[clock_season()], dot);
+    struct stat st;
+    if (w <= 0 || (size_t)w >= n || stat(out, &st) != 0) return path;
+    return out;
 }
 
 // How many one harvest of crop c gives: 1, or extra_min..extra_max with extra_chance% odds.
@@ -23104,6 +23122,34 @@ static uint8_t   s_clock_row_inset[CLOCK_H];          // rounded corners: pixels
 int clock_weekday(void)       { return (int)(s_clock_day % 7); }
 int clock_minute_of_day(void) { return (int)s_clock_min; }
 static uint32_t clock_day(void) { return s_clock_day; }
+
+// SEASONS: once per game frame (after tp_travel()). A new season says so, and
+// the map the player is on loads again when it has art for the new season
+// (or had art for the old one) — the player stays where they are.
+static int s_season_seen = -1;   // the season season_tick() last saw (-1: a game just started or loaded)
+static void season_tick(void)
+{
+    if (!s_map_loaded) return;
+    int season = clock_season();
+    if (s_season_seen < 0) { s_season_seen = season; return; }   // a game just started or loaded: no fanfare
+    if (season == s_season_seen || s_ui_screen != UI_NONE) return;
+    s_season_seen = season;
+    message(4000, "%s has begun! (Year %d)", k_season_name[season], clock_year());
+    static char base[MAP_PATH_MAX], want_buf[MAP_PATH_MAX];
+    if (!map_path_for(current_map_name(), base, sizeof(base))) return;
+    const char *want = season_map_path(base, want_buf, sizeof(want_buf));
+    if (strcmp(want, s_map_path) == 0) return;   // the same file: nothing to swap
+    int x = s_player_x, y = s_player_y;
+    direction_t face = s_player_facing;
+    ESP_LOGI(TAG, "season: %s -> %s", s_map_path, want);
+    nav_cancel();
+    s_load_inst_next = s_map_inst;        // inside a building: the same inside
+    if (!load_map(base)) return;
+    s_player_x = x; s_player_y = y; s_player_facing = face;
+    player_draw_fresh();
+    draw_touch_menu_button();
+    hud_draw_overlay();
+}
 static int clock_minute_part(int n) { int p = (int)(s_clock_us * n / 1000000); return p < 0 ? 0 : p >= n ? n - 1 : p; }   // which nth of this game minute
 
 // ============================================================
@@ -23815,6 +23861,7 @@ static bool world_read(int slot, bool apply, world_info_t *info)
         s_load_inst_next = 0;            // unless it says the player is inside a building ("inst")
         memset(s_inv, 0, sizeof(s_inv));
         item_custom_reset();             // the save's own photo items come back from photos.bin, below
+        s_season_seen = -1;              // the save's season starts quietly (SEASONS)
         s_photo_kinds_n = 0;
         s_inv_held = 0;
         s_money    = 0;
@@ -23906,6 +23953,7 @@ static void world_new(void)
     fish_rig_reset();                   // no bait or tackle on the line, fishing level 0 (FISHING)
     memset(s_inv, 0, sizeof(s_inv));
     item_custom_reset();                // no photo items from another game
+    s_season_seen   = -1;               // Spring 1, Year 1 (SEASONS)
     s_inv_held      = 0;
     s_money         = MONEY_START;
     s_weather_seed  = esp_random() & 0x7FFFFFFF;   // this world's own rainy days (31 bits: the save reads it as an int)
@@ -26886,6 +26934,17 @@ static void dev_main_poll(void)
             s_clock_day = (uint32_t)a;
             s_clock_us  = 0;
             dev_out("@@OK day %d", a);
+        } else if (strcmp(w[0], "season") == 0 && nw == 2) {   // "season fall" (or 0..3): day 1 of it, this year (SEASONS)
+            static const char *const k_sn[4] = { "spring", "summer", "fall", "winter" };
+            int k = -1;
+            for (int i = 0; i < 4; i++) if (strcasecmp(w[1], k_sn[i]) == 0) k = i;
+            if (k < 0 && w[1][0] >= '0' && w[1][0] <= '3' && !w[1][1]) k = w[1][0] - '0';
+            if (k < 0) dev_out("@@ERR season spring|summer|fall|winter");
+            else {
+                s_clock_day = (uint32_t)((clock_year() - 1) * SEASON_DAYS * 4 + k * SEASON_DAYS);
+                s_clock_us  = 0;
+                dev_out("@@OK %s, day %lu", k_season_name[k], (unsigned long)s_clock_day);
+            }
         } else if (strcmp(line, "sleep") == 0) {   // the bed's SLEEP: to 6:00 tomorrow, the night played, saved
             if (!s_map_loaded) dev_out("@@ERR not in a game");
             else { if (s_ui_screen != UI_NONE) ui_close(); sleep_now(); dev_out("@@OK day %lu", (unsigned long)s_clock_day); }
@@ -27066,6 +27125,7 @@ static void game_task(void *arg)
         for (;;) {
             update_input();
             tp_travel();              // a teleporter was stepped on: load its map here, at the boot load's stack depth
+            season_tick();            // a new season: its map art loads here too (SEASONS)
 #if DEV_LINK_ENABLED
             dev_travel();             // ...or a goto sent over USB (DEV LINK)
 #endif

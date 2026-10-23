@@ -82,8 +82,8 @@ def raised_arms(d, top):
     if d in ('down', 'up'):
         arm(1, 2)
         arm(12, 0)
-    else:   # from the side: the near arm, up in front of the face
-        arm(11, 0) if d == 'right' else arm(2, 2)
+    else:   # from the side: the near arm, up past the ear (in front of the face it looked wrong)
+        arm(6, 0) if d == 'right' else arm(7, 2)
     return im
 
 

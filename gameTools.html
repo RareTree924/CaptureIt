@@ -334,6 +334,7 @@ button.tool-brk.active { background: linear-gradient(#d9a53f, #a8781f); border-c
 .actRow code { color: #9ad; font-size: 11px; }
 .actRow.missing b { color: #ffb15c; }
 .actBadge { flex: 0 0 100%; font-size: 11px; color: #ffd84a; }
+button.tool-tree.active { background: linear-gradient(#4caf50, #2e7d32); border-color: #9be89f; box-shadow: 0 0 0 2px rgba(125,255,138,.3), 0 1px 2px rgba(0,0,0,.4); }
 button.tool-tp.active { background: linear-gradient(#e05cc0, #a02c86); border-color: #ff9ce6; box-shadow: 0 0 0 2px rgba(255,92,214,.3), 0 1px 2px rgba(0,0,0,.4); }
 .fxpBox { border: 1px solid #6b5520; background: #2a2414; border-radius: 6px; padding: 8px 10px; margin-bottom: 10px; display: flex; flex-direction: column; gap: 6px; }
 .fxpBox .animFields input[type=number] { width: 60px; }
@@ -526,6 +527,39 @@ button.tool-tp.active { background: linear-gradient(#e05cc0, #a02c86); border-co
 .mchRecipe .mchDays { width: 56px !important; }
 .mchRecipe .mchArrow { color: #40c8ff; font-weight: bold; padding: 0 2px; }
 .mchRecipe .aniX { min-height: 24px !important; padding: 0 8px !important; color: #ff9a9a; margin-left: auto; }
+/* ---- Trees Editor (the Game Tools "Trees" tab) + the Map Editor's Tree tool picker ---- */
+#treEdOverlay { display: none; position: fixed; left: 0; right: 0; bottom: 0; top: 31px; background: #1a1a1a; z-index: 1000; align-items: flex-start; justify-content: center; overflow: auto; padding: 16px 0; box-sizing: border-box; }
+#treEdOverlay.show { display: flex; }
+#treEdPanel { background: #222; padding: 16px 18px; border-radius: 8px; border: 1px solid #444; display: flex; flex-direction: column; gap: 12px; width: min(1320px, 97vw); box-sizing: border-box; }
+#treEdPanel button { min-height: 28px; padding: 4px 10px; }
+#treEdPanel .aniMain { grid-template-columns: minmax(0, 1.25fr) minmax(330px, 0.75fr); }
+.treGrid { border-collapse: collapse; font-size: 12px; color: #aaa; }
+.treGrid th { font-weight: normal; color: #ccc; padding: 2px 6px; }
+.treGrid td { padding: 3px 5px; text-align: center; vertical-align: bottom; }
+.treGrid td.lab { text-align: right; color: #bbb; white-space: nowrap; vertical-align: middle; }
+.treGrid td.lab small { display: block; color: #777; }
+.treCell { display: inline-flex; flex-direction: column; align-items: center; gap: 2px; cursor: pointer; }
+.treCell canvas { border: 1px dashed #555; border-radius: 3px; image-rendering: pixelated; background: #141414; }
+.treCell.on canvas { border: 2px solid #40c8ff; }
+.treCell.over canvas, .treCell:hover canvas { border-color: #40c8ff; }
+.treCell small { color: #777; font-size: 10px; }
+.treCell.off { opacity: .25; cursor: default; }
+.treNums { display: grid; grid-template-columns: auto auto; gap: 6px 10px; font-size: 13px; color: #ccc; align-items: center; }
+.treNums > span { color: #999; text-align: right; }
+.treNums input[type=number] { width: 54px; }
+.treNums input[type=text] { width: 110px; }
+#treSheetWrap { max-height: 420px; overflow: auto; border: 1px solid #444; border-radius: 4px; background: #111; }
+#treSheetCanvas { image-rendering: pixelated; cursor: crosshair; display: block; }
+#treSheetBox[hidden] { display: none !important; }
+#treePreview { image-rendering: pixelated; border: 1px solid #444; border-radius: 4px; background: #2d4a26; }
+#mtOverlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 1100; align-items: center; justify-content: center; }
+#mtOverlay.show { display: flex; }
+#mtPanel { background: #222; padding: 14px 16px; border-radius: 8px; border: 1px solid #444; display: flex; flex-direction: column; gap: 10px; width: min(760px, 94vw); color: #ccc; font-size: 13px; }
+#mtList { display: flex; flex-wrap: wrap; gap: 6px; max-height: 360px; overflow: auto; }
+.mtTree { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 3px; width: 86px; min-height: 120px; padding: 4px; background: #2a2a2a; border: 1px solid #444; border-radius: 5px; color: #ccc; font-size: 11px; }
+.mtTree.on { border-color: #7dff8a; background: #2f3a2f; }
+.mtTree canvas { image-rendering: pixelated; max-width: 72px; max-height: 96px; }
+.mtRow { display: flex; gap: 16px; align-items: center; }
 #cropSheetTabs button { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* ---- Browse folder (Crops / Item Editor): every .c in the folder as a card ---- */
 #cfOverlay { display: none; position: fixed; left: 0; right: 0; bottom: 0; top: 31px; background: rgba(0,0,0,.7); z-index: 1100; align-items: flex-start; justify-content: center; overflow: auto; padding: 24px 0; box-sizing: border-box; }
@@ -830,6 +864,7 @@ body.farmOn #aniEdOverlay, body.farmOn #fbdEdOverlay, body.farmOn #fncEdOverlay 
   <button type="button" class="gtTab on" data-tool="map">Map Editor</button>
   <button type="button" class="gtTab" data-tool="item">Item Editor</button>
   <button type="button" class="gtTab" data-tool="crop">Crops Editor</button>
+  <button type="button" class="gtTab" data-tool="tree" title="Wild trees and fruit trees: their art for every growing stage and season, mossy looks, logs, stumps, falling leaves, and what chopping and shaking them gives">Trees</button>
   <button type="button" class="gtTab" data-tool="building">Buildings Editor</button>
   <button type="button" class="gtTab" data-tool="farm" title="Farm animals, barns, coops, silos, fences, gates and pipes">Farm</button>
   <button type="button" class="gtTab" data-tool="machine">Machines Editor</button>
@@ -1330,6 +1365,107 @@ body.farmOn #aniEdOverlay, body.farmOn #fbdEdOverlay, body.farmOn #fncEdOverlay 
     <div class="row itemFoot">
       <div id="aniExportStatus" class="animCap"></div>
       <button type="button" id="aniExportBtn">Save animal (.c)</button>
+    </div>
+  </div>
+</div>
+
+<div id="treEdOverlay">
+  <div id="treEdPanel">
+    <div class="itemHead">
+      <div class="itemTitle">Trees Editor</div>
+      <button type="button" onclick="document.getElementById('treOpenFile').click()" title="Load a saved tree .c back in to change it">Open tree .c…</button>
+      <button type="button" id="treNewBtn">Make new tree</button>
+      <button type="button" id="treSheetBtn" title="Cut the art out of a sprite sheet: click a sprite on it and it goes in the picked box">Cut from a sprite sheet…</button>
+      <button type="button" id="treFolderBtn" title="Where Save tree writes (assets/trees)">Choose folder…</button>
+    </div>
+    <input type="file" id="treOpenFile" accept=".c" style="display:none">
+    <input type="file" id="treArtFile" accept="image/png" style="display:none">
+    <input type="file" id="treSheetFile" accept="image/png" style="display:none">
+    <datalist id="treItemList"></datalist>
+
+    <div class="itemCard aniTop">
+      <label>Name <input type="text" id="treName" maxlength="40" placeholder="Oak Tree" style="width:150px;"></label>
+      <label>Its seed <input type="text" id="treSeedName" maxlength="40" placeholder="Acorn" style="width:130px;"></label>
+      <label title="A fruit tree: never mossy, its growing stages look the same all year, and it fruits in one season"><input type="checkbox" id="treFruit"> Fruit tree</label>
+      <div id="treIdPreview" class="animCap"></div>
+    </div>
+
+    <div class="itemCard" id="treSheetBox" hidden>
+      <div class="aniStep"><b>✂</b>Sprite sheet
+        <div class="aniStepRight">
+          <button type="button" id="treSheetLoad">Load sheet PNG…</button>
+          <label>Zoom <select id="treSheetZoom"><option>1</option><option selected>2</option><option>3</option><option>4</option></select></label>
+          <label title="Widen what's picked to the sheet's 16px columns, so it stays centred the way the sheet lines it up"><input type="checkbox" id="treSheetSnap" checked> Snap to 16px columns</label>
+        </div>
+      </div>
+      <div id="treSheetWrap"><canvas id="treSheetCanvas" width="16" height="16"></canvas></div>
+      <div id="treSheetMsg" class="animCap">Pick a box in the grid below, then click a sprite on the sheet (or drag a box round it): it goes in that box and the next box is picked. Shift-click adds another leaf to the falling leaves.</div>
+    </div>
+
+    <div class="aniMain">
+      <div class="aniCol">
+        <div class="itemCard">
+          <div class="aniStep"><b>1</b>Look — every stage, every season
+            <div class="aniStepRight"><button type="button" id="treLoadBtn" title="A PNG into the picked box (or drop one on any box)">Load PNG…</button><button type="button" id="treClearBtn">Clear box</button><button type="button" id="treCopyBtn" title="Copy the picked box's art into the same box of the seasons after it that are empty">Fill later seasons</button></div>
+          </div>
+          <div style="overflow:auto"><table class="treGrid" id="treGrid"></table></div>
+          <div class="animCap">Each piece stands on the tree's tile, bottom-centred. A grown tree is its log (on the tile) with the canopy on top; no log = the canopy reaches the ground. Only the tile is solid (bush, grown, stump) — above it the tree is in front of the player. An empty season uses the one before it. Leaves: 16×16 frames side by side (up to 4). Most 48 wide; a grown tree with its log at most 112 tall.</div>
+        </div>
+      </div>
+
+      <div class="aniCol">
+        <div class="itemCard">
+          <div class="aniStep"><b>2</b>Preview</div>
+          <div style="display:flex;gap:12px;align-items:flex-end;">
+            <canvas id="treePreview" width="72" height="128" style="width:144px;height:256px;"></canvas>
+            <div style="display:flex;flex-direction:column;gap:6px;font-size:13px;color:#ccc;">
+              <label>Season <select id="trePrevSeason"><option value="0">Spring</option><option value="1">Summer</option><option value="2">Fall</option><option value="3">Winter</option></select></label>
+              <label>Stage <select id="trePrevStage"><option value="0">Seed</option><option value="1">Sprout</option><option value="2">Sapling</option><option value="3">Bush</option><option value="4" selected>Grown</option><option value="5">Stump</option></select></label>
+              <label><input type="checkbox" id="trePrevMoss"> Mossy</label>
+              <label>Fruit on it <input type="number" id="trePrevFruit" min="0" max="3" value="0" style="width:42px;"></label>
+            </div>
+          </div>
+        </div>
+        <div class="itemCard">
+          <div class="aniStep"><b>3</b>Growing, chopping, shaking</div>
+          <div class="treNums">
+            <span>Grown after</span><div><input type="number" id="treGrowDays" min="1" max="255"> game days <span class="animCap">(the 4 stages share them)</span></div>
+            <span>Chopped with</span><div><input type="text" id="treChopTool" list="treItemList" maxlength="31" placeholder="axe"> <span class="animCap">(or a tool that counts as it)</span></div>
+            <span>Wood item</span><div><input type="text" id="treWood" list="treItemList" maxlength="31" placeholder="wood"></div>
+            <span>Grown: hits</span><div><input type="number" id="treHits" min="1" max="99"> → <input type="number" id="treWoodMin" min="0" max="99">–<input type="number" id="treWoodMax" min="0" max="99"> wood<span class="treWildOnly">, 0–<input type="number" id="treSeedMax" min="0" max="9"> seeds</span></div>
+            <span>Bush: hits</span><div><input type="number" id="treBushHits" min="1" max="99"> → <input type="number" id="treBushWood" min="0" max="99"> wood</div>
+            <span>Stump: hits</span><div><input type="number" id="treStumpHits" min="1" max="99"> → <input type="number" id="treStumpWoodMin" min="0" max="99">–<input type="number" id="treStumpWoodMax" min="0" max="99"> wood</div>
+            <span class="treWildOnly">Shaken</span><div class="treWildOnly">0–<input type="number" id="treShakeSeedMax" min="0" max="9"> seeds a day <span class="animCap">(nothing in winter)</span></div>
+            <span class="treWildOnly">Moss</span><div class="treWildOnly"><input type="number" id="treMossPct" min="0" max="100"> % a day a grown one turns mossy</div>
+            <span>Sounds</span><div>hit <input type="text" id="treSfxHit" maxlength="31" placeholder="(none)" style="width:80px"> fall <input type="text" id="treSfxFall" maxlength="31" placeholder="(none)" style="width:80px"></div>
+          </div>
+          <div class="animCap">The seed breaks with anything (it comes back); the sprout and sapling with any tool (nothing comes of them). Sounds are WAVs in the SD card's sounds/sound effects (name without .wav).</div>
+        </div>
+        <div class="itemCard" id="treFruitCard">
+          <div class="aniStep"><b>4</b>Fruit</div>
+          <div class="treNums">
+            <span>Fruit item</span><div><input type="text" id="treFruitItem" list="treItemList" maxlength="31" placeholder="cherry"></div>
+            <span>In</span><div><select id="treFruitSeason"><option value="1">Spring</option><option value="2">Summer</option><option value="4">Fall</option><option value="8">Winter</option></select> only</div>
+            <span>One every</span><div><input type="number" id="treFruitDays" min="1" max="28"> days, at most <input type="number" id="treFruitMax" min="1" max="3"> on the tree</div>
+          </div>
+          <div class="animCap">The fruit shows on the canopy (its item's icon); shaking the tree knocks it off — it lands in front of the tree, and the player walks over it to pick it up. Out of season it falls off. A fruit tree never drops its sapling, and gives hardwood (the wood item above).</div>
+        </div>
+        <div class="itemCard">
+          <div class="aniStep"><b>5</b>The seed item</div>
+          <div class="aniShop">
+            <canvas id="treSeedIcon" width="16" height="16" style="width:48px;height:48px;image-rendering:pixelated;border:1px dashed #666;border-radius:4px;background:#141414;cursor:pointer;" title="Click (or drop a PNG): the seed's icon. Blank = the Seed stage's spring art"></canvas>
+            <div class="aniShopRight">
+              <label>Sells for <input type="number" id="treSeedPrice" min="0" max="999999" style="width:70px;"> coins</label>
+              <label>Seed shop price <input type="number" id="treBuyPrice" min="0" max="999999" style="width:70px;"> <span class="animCap">(0 = not sold)</span></label>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="row itemFoot">
+      <div id="treExportStatus" class="animCap"></div>
+      <button type="button" id="treExportBtn">Save tree (.c)</button>
     </div>
   </div>
 </div>
@@ -1952,6 +2088,30 @@ body.farmOn #aniEdOverlay, body.farmOn #fbdEdOverlay, body.farmOn #fncEdOverlay 
         </div>
 
         <div class="itemCard">
+          <div class="itemCardTitle">Tool use</div>
+          <div class="animFields">
+            <label title="tool 1: it swings whenever it's used on something — its Swing art on the player, the swipe, the sound"><input type="checkbox" id="itemTool"> Swings like a tool</label>
+            <label title="tool_swipe 0 turns it off (a watering can)"><input type="checkbox" id="itemToolSwipe" checked disabled> Swipe</label>
+          </div>
+          <div class="animFields">
+            <label title="tool_sfx:&lt;name&gt; — a WAV in the SD card's sounds/sound effects folder, without .wav. Several (comma-separated) = one at random each swing.">Swing sound <input type="text" id="itemToolSfx" placeholder="hoeHit" style="width:130px;" disabled></label>
+          </div>
+          <div class="animFields">
+            <label title="tool_power N: hits one swing lands on a breakable (none = 1). Stardew's copper / steel / gold / iridium tools hit harder.">Power <input type="number" id="itemToolPower" min="1" max="16" value="1" style="width:48px;" disabled> hit(s) a swing</label>
+            <label title="counts_as:&lt;id&gt; — a breakable that needs that item takes this one too (comma-separated ids)">Counts as <input type="text" id="itemToolAs" placeholder="axe" style="width:110px;" disabled></label>
+          </div>
+          <canvas id="itemToolPreview" class="itemPreviewCanvas" width="384" height="140"></canvas>
+          <div class="animCap" id="itemToolInfo"></div>
+          <div class="animCap">In game, using it on what the player walked up to (a tree, a rock, farmland, grass…) plays a swing: the <b>Swing</b> art (the tab beside Held — 16×32, drawn right on top of the player; facing up it goes behind them), a swipe through the tile in front, and the sound. The hit lands mid-swing. Swing art frames: 1 = every way (mirrored facing left), 3 = facing down, up, right (mirrored for left), 4 = down, up, left, right. Its Time/frame is how long the swing shows. No Swing art: the item stays over their head and only the swipe plays. "Counts as axe" lets a copper axe chop what needs the axe; Power lands that many hits a swing.</div>
+        </div>
+
+        <div class="itemCard">
+          <div class="itemCardTitle">Market types</div>
+          <div class="mutChips" id="itemTypeChips"></div>
+          <div class="animCap">What kind of thing it is: its colour, shape, material and what it's for. Every type's demand changes each morning (x0.1 to x10, the Market board shows it), and the item sells for the average of its types'. Photo items get theirs from the AI; tick them here for anything else. None = always x1.</div>
+        </div>
+
+        <div class="itemCard">
           <div class="itemCardTitle">Placing (furniture)</div>
           <div class="animFields">
             <label><input type="checkbox" id="itemProp"> Can be placed on the map</label>
@@ -2003,6 +2163,10 @@ body.farmOn #aniEdOverlay, body.farmOn #fbdEdOverlay, body.farmOn #fncEdOverlay 
             <span id="itemScarecrowInfo" class="animCap" style="margin:0;">15×15</span>
           </div>
           <div class="animCap">Every morning each crop has a 4% chance of being eaten by a crow (it waits where the crop was, then caws and flies off when you come near) — unless it's inside a placed scarecrow's square: 7 = 15×15.</div>
+          <div class="animFields">
+            <label title="market_board 1"><input type="checkbox" id="itemMarketBoard" disabled> Market board</label>
+          </div>
+          <div class="animCap">Tapping a placed market board opens it: today's demand for every market type (x0.1 to x10), the day's photo requests and the capture book. Its PICK UP button takes it back. (A board drawn into a map gets the "Market board" action in the Map Editor's Actions… instead.)</div>
           <div class="animFields">
             <label><input type="checkbox" id="itemBuyable"> Sold in shops</label>
             <label>Price <input type="number" id="itemBuyPrice" min="1" max="999999" value="10" disabled> coins</label>
@@ -2388,7 +2552,7 @@ let colorData = new Uint8ClampedArray(MAP_W * MAP_H * 3).fill(40); // RGB per pi
 let hitboxData = new Uint8Array(MAP_W * MAP_H); // 1 = blocked, 0 = walkable
 let layerData = new Uint8Array(MAP_W * MAP_H); // 1 = layer 1 (foreground, player goes under), 0 = layer -1 (ground, default)
 
-const SHAPES = ['point', 'line', 'rect', 'circle', 'fill', 'select', 'move', 'stamp', 'spread', 'teleport'];
+const SHAPES = ['point', 'line', 'rect', 'circle', 'fill', 'select', 'move', 'stamp', 'spread', 'teleport', 'tree'];
 const DRAW_SHAPES = ['point', 'line', 'rect', 'circle', 'fill']; // the tools that paint (as opposed to select/move/stamp)
 let shapeMode = 'point';
 let layerMode = 'draw'; // 'draw', 'collision', or 'layer'
@@ -2629,6 +2793,8 @@ const TP_NAME_RE = /^[A-Za-z0-9_\-./]*$/;  // what main.c's tp_name_ok() accepts
 const TP_RETURN = '@return';               // main.c TP_RETURN: the "Building exit" — back out to the building's door
 let teleporters = [];
 let showTeleporters = true;
+// The map's own trees (the Tree tool — TREES ON THE MAP): {id, tx, ty, stage, moss}, the base tile in 16px tiles.
+let mapTrees = [];
 // Tile types (see TILE TYPES): mirror main.c's Tile types notes.
 const TILE_TYPE_MAX = 127, TILE_NAME_MAX = 31;
 const TILE_FLAG_TILLABLE = 0x01, TILE_FLAG_BUILDABLE = 0x02, TILE_FLAG_FISHABLE = 0x04, TILE_FLAG_GRASSY = 0x08, TILE_CELL_COVERED = 0x80;   // main.c TILE_FLAG_*
@@ -2708,7 +2874,7 @@ function toggleAssetEditSameColour() {
 }
 
 function pushUndo() {
-  undoStack.push({ at: Date.now(), color: colorData.slice(), hitbox: hitboxData.slice(), layer: layerData.slice(), placed: placedAssets.slice(), imported: importedAnims, importedBrk: importedBreakables, tp: teleporters.map(t => ({ ...t })), tiles: importedTiles, trigs: importedTriggers });
+  undoStack.push({ at: Date.now(), color: colorData.slice(), hitbox: hitboxData.slice(), layer: layerData.slice(), placed: placedAssets.slice(), imported: importedAnims, importedBrk: importedBreakables, tp: teleporters.map(t => ({ ...t })), trees: mapTrees.map(t => ({ ...t })), tiles: importedTiles, trigs: importedTriggers });
   if (undoStack.length > MAX_HISTORY) undoStack.shift();
   redoStack = [];
 }
@@ -2716,12 +2882,13 @@ function doUndo() {
   if (!undoStack.length) return;
   stopAnimPreview(); // the preview is built from the map data that is about to change
   stopBrkPreview();
-  redoStack.push({ color: colorData.slice(), hitbox: hitboxData.slice(), layer: layerData.slice(), placed: placedAssets.slice(), imported: importedAnims, importedBrk: importedBreakables, tp: teleporters.map(t => ({ ...t })), tiles: importedTiles, trigs: importedTriggers });
+  redoStack.push({ color: colorData.slice(), hitbox: hitboxData.slice(), layer: layerData.slice(), placed: placedAssets.slice(), imported: importedAnims, importedBrk: importedBreakables, tp: teleporters.map(t => ({ ...t })), trees: mapTrees.map(t => ({ ...t })), tiles: importedTiles, trigs: importedTriggers });
   const s = undoStack.pop();
   colorData = s.color; hitboxData = s.hitbox; layerData = s.layer; placedAssets = s.placed;
   if (s.imported) importedAnims = s.imported;
   if (s.importedBrk) importedBreakables = s.importedBrk;
   if (s.tp) teleporters = s.tp;
+  if (s.trees) mapTrees = s.trees;
   if (s.tiles !== undefined) importedTiles = s.tiles;
   if (s.trigs !== undefined) importedTriggers = s.trigs;
   redrawAll();
@@ -2730,12 +2897,13 @@ function doRedo() {
   if (!redoStack.length) return;
   stopAnimPreview();
   stopBrkPreview();
-  undoStack.push({ color: colorData.slice(), hitbox: hitboxData.slice(), layer: layerData.slice(), placed: placedAssets.slice(), imported: importedAnims, importedBrk: importedBreakables, tp: teleporters.map(t => ({ ...t })), tiles: importedTiles, trigs: importedTriggers });
+  undoStack.push({ color: colorData.slice(), hitbox: hitboxData.slice(), layer: layerData.slice(), placed: placedAssets.slice(), imported: importedAnims, importedBrk: importedBreakables, tp: teleporters.map(t => ({ ...t })), trees: mapTrees.map(t => ({ ...t })), tiles: importedTiles, trigs: importedTriggers });
   const s = redoStack.pop();
   colorData = s.color; hitboxData = s.hitbox; layerData = s.layer; placedAssets = s.placed;
   if (s.imported) importedAnims = s.imported;
   if (s.importedBrk) importedBreakables = s.importedBrk;
   if (s.tp) teleporters = s.tp;
+  if (s.trees) mapTrees = s.trees;
   if (s.tiles !== undefined) importedTiles = s.tiles;
   if (s.trigs !== undefined) importedTriggers = s.trigs;
   redrawAll();
@@ -4654,11 +4822,12 @@ function redrawAll() {
   drawTileOverlay();
   drawActionTriggers();
   drawTeleporters();
+  drawMapTrees();
   drawCoordOverlay();
-  if (hoverPos && !assetEditState && !animPreviewOn && !brkPreviewOn && !shapeStart && (tpPicking || shapeMode === 'teleport')) {
+  if (hoverPos && !assetEditState && !animPreviewOn && !brkPreviewOn && !shapeStart && (tpPicking || shapeMode === 'teleport' || shapeMode === 'tree')) {
     // the tile a click would start a teleporter on (or pick as the arrival tile)
     ctx.save();
-    ctx.strokeStyle = tpPicking ? '#ffe066' : '#ff5cd6';
+    ctx.strokeStyle = tpPicking ? '#ffe066' : shapeMode === 'tree' ? '#7dff8a' : '#ff5cd6';
     ctx.setLineDash([3, 2]);
     ctx.lineWidth = 1;
     ctx.strokeRect(Math.floor(hoverPos.x / GRID_SIZE) * GRID_SIZE + 0.5, Math.floor(hoverPos.y / GRID_SIZE) * GRID_SIZE + 0.5, GRID_SIZE - 1, GRID_SIZE - 1);
@@ -4790,6 +4959,10 @@ canvas.addEventListener('mousedown', e => {
     redrawAll();
     return;
   }
+  if (shapeMode === 'tree') {
+    if (!assetEditState) mtClick(p);   // the map's own trees (TREES ON THE MAP)
+    return;
+  }
   if (pastePreviewActive) {
     const sp = snapAssetCenter(clipboard, p.x, p.y);
     commitPaste(sp.x, sp.y);
@@ -4891,7 +5064,7 @@ canvas.addEventListener('mousemove', e => {
     const sp = snapAssetCenter(clipboard, p.x, p.y);
     ctx.drawImage(tmp, sp.x - Math.floor(clipboard.w / 2), sp.y - Math.floor(clipboard.h / 2));
     ctx.globalAlpha = 1;
-  } else if (shapeMode === 'point' || shapeMode === 'line' || (shapeMode === 'stamp' && stampAssetIndex !== null) || shapeMode === 'spread' || shapeMode === 'teleport' || tpPicking) {
+  } else if (shapeMode === 'point' || shapeMode === 'line' || (shapeMode === 'stamp' && stampAssetIndex !== null) || shapeMode === 'spread' || shapeMode === 'teleport' || shapeMode === 'tree' || tpPicking) {
     redrawAll(); // keep the brush-size hover square / stamp hologram / teleport tile following the cursor
   }
 });
@@ -5504,7 +5677,7 @@ mapResizeHandleEl.addEventListener('mousedown', e => {
 });
 
 makeButton(rowFile, 'Load…  (Ctrl+L)', () => openLoadMenu());
-const btnClear = makeButton(rowFile, 'Clear map', () => { stopAnimPreview(); stopBrkPreview(); pushUndo(); colorData.fill(40); hitboxData.fill(0); layerData.fill(0); placedAssets = []; importedAnims = []; importedBreakables = []; teleporters = []; importedTiles = null; importedTriggers = null; redrawAll(); });
+const btnClear = makeButton(rowFile, 'Clear map', () => { stopAnimPreview(); stopBrkPreview(); pushUndo(); colorData.fill(40); hitboxData.fill(0); layerData.fill(0); placedAssets = []; importedAnims = []; importedBreakables = []; teleporters = []; mapTrees = []; importedTiles = null; importedTriggers = null; redrawAll(); });
 const btnRemoveHidden = makeButton(rowFile, 'Remove hidden', removeHiddenPlacements);
 btnRemoveHidden.title = 'Remove placements that are completely covered by plain (not animated, not breakable) assets above them — they can never be seen, so the device shouldn\'t spend time on them';
 const btnExportMap = makeButton(rowFile, 'Export', exportMap);
@@ -5561,6 +5734,9 @@ shapeButtons.spread.classList.add('tool-spread');
 shapeButtons.spread.title = 'Mix a palette of 16x16 tiles over an area: add tiles by clicking them in the asset list, set how much of each, then click a tile or drag an area';
 shapeButtons.spread.addEventListener('click', () => openSpreadModal());   // set up the mix, Accept, then spread on the map
 shapeButtons.teleport.title = 'Drag over tiles to add an invisible teleporter (walking onto it loads another map). Click one to change or delete it.';
+shapeButtons.tree.classList.add('tool-tree');
+shapeButtons.tree.title = 'The map\'s own trees (made in the Trees tab): pick a tree, its stage and whether it\'s mossy, then click tiles to put one there (its trunk on that tile). Click a tree to take it away. Export writes them next to the map.';
+shapeButtons.tree.addEventListener('click', () => mtOpenPicker());
 
 // Shows which asset is armed for the Stamp tool and lets go of it in one click.
 const btnDeselect = makeButton(row2, 'No asset selected', () => deselectAsset());
@@ -8962,6 +9138,7 @@ function buildBackupData() {
     })),
     importedBundleTable, importedInstances, importedBrk: importedBrkOut,
     teleporters: teleporters.map(t => ({ ...t })),
+    trees: mapTrees.map(t => ({ ...t })),
     importedTiles: importedTiles ? { types: importedTiles.types.map(t => ({ ...t })), cells: u8ToBase64(importedTiles.cells), hashes: Array.from(importedTiles.hashes) } : null,
     importedTriggers: importedTriggers ? importedTriggers.map(t => ({ ...t, ids: t.ids.slice() })) : null
   };
@@ -9262,6 +9439,7 @@ function loadBackupData(data) {
   movingAsset = null;
   placedAssets = [];
   teleporters = (data.teleporters || []).map(tpNormalize);
+  mapTrees = (data.trees || []).map(mtNormalize).filter(Boolean);
   importedTiles = (data.importedTiles && data.importedTiles.cells) ? {
     types: (data.importedTiles.types || []).map(t => ({ name: String(t.name), flags: t.flags | 0 })),
     cells: base64ToU8(data.importedTiles.cells, Uint8Array),
@@ -10043,6 +10221,7 @@ const BUILTIN_ACTIONS = [
   { id: 'auction_house', label: 'Auction house', help: 'Opens the auction house: put things up for auction, see the bids' },
   { id: 'ledger', label: 'Ledger', help: 'Opens the ledger: everything bought and sold in the last 20 days (also ledger.csv in the save)' },
   { id: 'bed', label: 'Bed', help: 'Asks to go to bed: sleeps until 6:00 am the next morning, and crops in watered soil grow overnight' },
+  { id: 'market_board', label: 'Market board', help: "Opens the market board: today's demand for every type of thing (x0.1 to x10), the day's photo requests and the capture book" },
   { id: 'trough', label: 'Trough', help: 'Inside a barn or coop: every tile of it is one trough. Hold hay and tap it to fill them; the animals eat from them at night' },
 ];
 // The file's actions as last read, then any built-in one it doesn't have.
@@ -10733,6 +10912,10 @@ async function exportMap() {
   for (let s = 1; s <= NIGHT_STAGES; s++) files.push({ name: `${base}.n${s}`, buf: buildNightFileBuffer(blocks, s, dayHash) });
   const seasons = mapSeasonsUsed();   // SEASONS: <base>.winter.map etc., each with its night files
   for (const k of seasons) files.push(...seasonExportFiles(k, `${base}.${SEASON_FILES[k]}`, tiles, trigs));
+  const treesText = mtExportText(base);   // TREES ON THE MAP: <base>.trees, the map's own trees
+  if (treesText) files.push({ name: `${base}.trees`, buf: new TextEncoder().encode(treesText) });
+  const treeInfo = mapTrees.length ? `
+Trees: ${mapTrees.length} (${base}.trees) — put on the map the first time a save goes there.` : '';
   const seasonInfo = seasons.length ? `\nSeasonal art: ${seasons.map(k => SEASONS[k]).join(', ')} (${seasons.length * (NIGHT_STAGES + 1)} more files: ${base}.${SEASON_FILES[seasons[0]]}.map …).` : '';
 
   const dir = await getMapExportDir(false);
@@ -10753,13 +10936,14 @@ async function exportMap() {
         for (const ext of ['map', ...Array.from({ length: NIGHT_STAGES }, (_, s) => `n${s + 1}`)])
           try { await out.removeEntry(`${base}.${SEASON_FILES[k]}.${ext}`); } catch (e) { /* wasn't there */ }
       }
+      if (!treesText) try { await out.removeEntry(`${base}.trees`); } catch (e) { /* wasn't there */ }   // no trees any more
     } catch (e) {
       alert(`Couldn't write into "${out.name}": ${e.message}`);
       return;
     }
     alert(intoMaps
-      ? `Saved ${fileName} and its night files ${base}.n1 – ${base}.n${NIGHT_STAGES} into "maps/${base}/" — ready for the device.${seasonInfo}${tileInfo}`
-      : `Saved ${fileName} and its night files ${base}.n1 – ${base}.n${NIGHT_STAGES} into "${dir.name}".\nCopy all ${files.length} to CaptureIt/maps/${base}/ on the SD card.${seasonInfo}${tileInfo}`);
+      ? `Saved ${fileName} and its night files ${base}.n1 – ${base}.n${NIGHT_STAGES} into "maps/${base}/" — ready for the device.${seasonInfo}${treeInfo}${tileInfo}`
+      : `Saved ${fileName} and its night files ${base}.n1 – ${base}.n${NIGHT_STAGES} into "${dir.name}".\nCopy all ${files.length} to CaptureIt/maps/${base}/ on the SD card.${seasonInfo}${treeInfo}${tileInfo}`);
     return;
   }
   // No folder access: download them all (the browser may ask to allow multiple downloads).
@@ -12150,7 +12334,7 @@ function updateAnimThumbs() {
 //  (the game's tile size — a dropped item lies on one tile, see
 //  itemGroundSprite()).
 // ============================================================
-const ITEM_SLOT_DEFAULT_INTERVAL = { passive: 150, use: 80 };
+const ITEM_SLOT_DEFAULT_INTERVAL = { passive: 150, use: 500 };   // use = a tool's Swing art: how long the swing shows
 const ITEM_HELD_MAX = 32, ITEM_SLOT_PX = 26;   // mirror main.c: HELD_ITEM_MAX, HOTBAR_SLOT_PX
 const ITEM_SELL_ATTR = 'sellable';             // items.h ITEM_ATTR_SELLABLE: value = price of one, none = can't be sold
 const ITEM_DROP_ATTR = 'droppable';            // items.h ITEM_ATTR_DROPPABLE: 0 = can't be dropped, none = can
@@ -12166,6 +12350,22 @@ const ITEM_SPRINKLER_ATTR = 'sprinkler', ITEM_SCARECROW_ATTR = 'scarecrow';     
 const ITEM_SPRINKLER_MAX = 6, ITEM_SCARECROW_MAX = 15;                                                  // main.c SPRINKLER_RANGE_MAX / SCARECROW_RANGE_MAX
 const ITEM_CRAFT_PREFIX = 'craft:', ITEM_CRAFT_MAKES_ATTR = 'craft_makes', ITEM_CRAFT_IN_MAX = 6;        // items.h ITEM_ATTR_CRAFT_PREFIX / _MAKES, ITEM_CRAFT_IN_MAX: a recipe
 const ITEM_TILLS_ATTR = 'tills', ITEM_WATERS_ATTR = 'waters', ITEM_WATER_MAX_ATTR = 'water_max';   // items.h ITEM_ATTR_WATER_MAX: what the can holds                                           // items.h ITEM_ATTR_TILLS / _WATERS: a hoe, a watering can
+const ITEM_TOOL_ATTR = 'tool', ITEM_TOOL_SWIPE_ATTR = 'tool_swipe', ITEM_TOOL_POWER_ATTR = 'tool_power',   // main.c TOOL SWING: swings when used, the swipe (0 = off), hits a swing
+      ITEM_TOOL_SFX_PREFIX = 'tool_sfx:', ITEM_COUNTS_AS_PREFIX = 'counts_as:';                              // ...its sound(s), what breakables count it as
+const ITEM_MARKET_BOARD_ATTR = 'market_board';                                                          // items.h ITEM_ATTR_MARKET_BOARD: a prop that opens the market board
+const ITEM_TYPES_ATTR = 'types', ITEM_TYPES2_ATTR = 'types2';                                           // items.h ITEM_ATTR_TYPES / _TYPES2: market types, bits 0-30 / 31-61
+// pipeline_msgs.h CAM_TYPES, in the same order (bit k = type k). APPEND ONLY, like there.
+const ITEM_TYPES = [['red', 'Red'], ['orange', 'Orange'], ['yellow', 'Yellow'], ['green', 'Green'], ['blue', 'Blue'],
+  ['purple', 'Purple'], ['pink', 'Pink'], ['brown', 'Brown'], ['black', 'Black'], ['white', 'White'], ['gray', 'Gray'],
+  ['round', 'Round'], ['square', 'Square'], ['long', 'Long'], ['flat', 'Flat'], ['soft', 'Soft'], ['shiny', 'Shiny'],
+  ['see_through', 'See-through'], ['colorful', 'Colorful'],
+  ['wood', 'Wooden'], ['metal', 'Metal'], ['plastic', 'Plastic'], ['glass', 'Glass'], ['paper', 'Paper'],
+  ['fabric', 'Fabric'], ['leather', 'Leather'], ['rubber', 'Rubber'], ['ceramic', 'Ceramic'],
+  ['electronic', 'Electronics'], ['toy', 'Toys'], ['tool', 'Tools'], ['kitchen', 'Kitchen'], ['food', 'Food'],
+  ['drink', 'Drinks'], ['clothing', 'Clothes'], ['footwear', 'Shoes'], ['jewelry', 'Jewelry'], ['book', 'Books'],
+  ['art', 'Art'], ['sports', 'Sports'], ['music', 'Music'], ['office', 'Office'], ['furniture', 'Furniture'],
+  ['decor', 'Decor'], ['plant', 'Plants'], ['beauty', 'Beauty'], ['cleaning', 'Cleaning'], ['game', 'Games'],
+  ['collectible', 'Collectibles'], ['vintage', 'Vintage']];
 const ITEM_RANCH_ATTRS = [['itemFeeds', 'feed', 'hay'], ['itemCuts', 'cuts', 'scythe'], ['itemGrass', 'grass', 'grass starter'],   // items.h ITEM_ATTR_FEED / _CUTS / _GRASS,
                           ['itemShears', 'shears', 'shears'], ['itemMilks', 'milks', 'milk pail']];                                // and the animal tools (animals.h .tool)
 const ITEM_ROD_ATTR = 'rod', ITEM_ROD_BAR_ATTR = 'rod_bar';                                             // items.h ITEM_ATTR_ROD*: a fishing rod
@@ -12281,9 +12481,13 @@ function makeItemArt(name, w, h, color, alpha, slot) {
     img.data[i * 4 + 3] = alpha[i];
   }
   sctx.putImageData(img, 0, 0);
-  // A sheet that's a whole number of squares is probably that many frames.
+  // A sheet that's a whole number of squares is probably that many frames
+  // (Swing art: of 16x32 player-sized cells — one 16x32 PNG is one frame).
   let frames = 1, layout = 'h';
-  if (w > h && w % h === 0 && w / h <= 64) frames = w / h;
+  if (slot === 'use') {
+    if (h === 32 && w % 16 === 0 && w / 16 <= 4) frames = w / 16;
+    else if (w === 16 && h % 32 === 0 && h / 32 <= 4) { frames = h / 32; layout = 'v'; }
+  } else if (w > h && w % h === 0 && w / h <= 64) frames = w / h;
   else if (h > w && h % w === 0 && h / w <= 64) { frames = h / w; layout = 'v'; }
   const art = { name, sheet, w, h, color, alpha, frames, layout, interval: ITEM_SLOT_DEFAULT_INTERVAL[slot],
                 loop: 1, align: 'keep', crops: [], cropFw: 0, cropFh: 0, sel: 0, out: null };
@@ -12312,6 +12516,7 @@ function loadItemSheetFile(file, slot) {
     URL.revokeObjectURL(img.src);
     itemArt[slot] = makeItemArt(file.name, img.width, img.height, color, alpha, slot);
     itemTab = slot;
+    if (slot === 'use') setItemTool(true);   // swing art = it's a tool
     itemRefresh();
   };
   img.onerror = () => { URL.revokeObjectURL(img.src); alert(`Couldn't read ${file.name} as an image.`); };
@@ -12564,12 +12769,12 @@ function itemRefresh() {
   document.querySelectorAll('#itemSlotTabs button').forEach(b => {
     const slot = b.dataset.slot;
     b.classList.toggle('active', slot === itemTab);
-    b.textContent = (slot === 'passive' ? 'Held' : 'Use') + (itemArt[slot] ? ' ✓' : slot === 'use' ? ' (optional)' : '');
+    b.textContent = (slot === 'passive' ? 'Held' : 'Swing') + (itemArt[slot] ? ' ✓' : slot === 'use' ? ' (tools)' : '');
   });
   itemEl('itemSlotHelp').textContent = itemTab === 'passive'
     ? 'Held art: floats over the player\'s head while it\'s in their hands, loops the whole time, and its first frame is the inventory icon. Required.'
-    : 'Use art: plays when the item is used. Optional.';
-  itemEl('itemLoopLabel').style.display = itemTab === 'use' ? '' : 'none';
+    : 'Swing art (a tool — see the Tool use box): drawn right on top of the player while they swing it, 16×32 to fit them; facing up it goes behind them. 1 frame = every way (mirrored facing left); 3 frames = facing down, up, right; 4 = down, up, left, right. Time/frame = how long the swing shows. Optional.';
+  itemEl('itemLoopLabel').style.display = 'none';   // (held art always loops; a swing plays once)
   itemEl('itemDropZone').textContent = art
     ? `${art.name} — ${art.w}×${art.h} px. Drop another PNG here (or click) to replace it.`
     : 'Drop a PNG sprite sheet here, or click to choose one. Pure black pixels are see-through in game.';
@@ -12621,7 +12826,7 @@ function itemRefreshOutput() {
   drawItemBedPreview();
   if (!out) {
     info.className = 'itemMsg';
-    info.textContent = art ? '' : (itemTab === 'passive' ? 'Every item needs held art — load a PNG above.' : 'No use animation.');
+    info.textContent = art ? '' : (itemTab === 'passive' ? 'Every item needs held art — load a PNG above.' : 'No swing art.');
     play.getContext('2d').clearRect(0, 0, play.width, play.height);
     return;
   }
@@ -12651,6 +12856,7 @@ function itemModalLoop(now) {
     ctx.clearRect(0, 0, play.width, play.height);
   }
   drawMutStrip(now - itemModalT0);
+  drawItemToolPreview(now - itemModalT0);
   itemModalRaf = requestAnimationFrame(itemModalLoop);
 }
 
@@ -12757,7 +12963,7 @@ itemEl('itemAlign').addEventListener('change', () => itemFieldChanged(art => { a
 
 document.querySelectorAll('#itemSlotTabs button').forEach(b => b.addEventListener('click', () => { itemTab = b.dataset.slot; itemRefresh(); }));
 itemEl('itemClearSlotBtn').onclick = () => {
-  if (!itemArt[itemTab] || !confirm(`Remove the ${itemTab === 'passive' ? 'held' : 'use'} art?`)) return;
+  if (!itemArt[itemTab] || !confirm(`Remove the ${itemTab === 'passive' ? 'held' : 'swing'} art?`)) return;
   itemArt[itemTab] = null;
   itemRefresh();
 };
@@ -12790,7 +12996,7 @@ function setItemQuality(on) { itemEl('itemQuality').checked = on; }
 function setItemProp(on, rows, solid) {
   itemEl('itemProp').checked = on;
   itemEl('itemPropRows').disabled = itemEl('itemPropSolid').disabled = itemEl('itemShelf').disabled = itemEl('itemBed').disabled = itemEl('itemAquarium').disabled = !on;
-  itemEl('itemSprinkler').disabled = itemEl('itemScarecrow').disabled = !on;
+  itemEl('itemSprinkler').disabled = itemEl('itemScarecrow').disabled = itemEl('itemMarketBoard').disabled = !on;
   if (rows !== undefined) itemEl('itemPropRows').value = rows;
   if (solid !== undefined) itemEl('itemPropSolid').checked = solid;
   setItemShelf(itemEl('itemShelf').checked);
@@ -12827,6 +13033,164 @@ function setItemAquarium(on, fish) {
   if (fish !== undefined) itemEl('itemAquaFish').value = fish;
 }
 itemEl('itemAquarium').addEventListener('change', e => setItemAquarium(e.target.checked));
+// Market types: chips, one per ITEM_TYPES entry; the ticked ones are a Set of indices.
+let itemTypeSet = new Set();
+function setItemTypes(set) {
+  itemTypeSet = new Set(set);
+  const box = itemEl('itemTypeChips');
+  if (!box.children.length) {
+    ITEM_TYPES.forEach(([id, label], k) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.title = `types bit ${k} ("${id}")`;
+      b.addEventListener('click', () => { if (itemTypeSet.has(k)) itemTypeSet.delete(k); else itemTypeSet.add(k); setItemTypes(itemTypeSet); });
+      box.appendChild(b);
+    });
+  }
+  [...box.children].forEach((b, k) => b.classList.toggle('on', itemTypeSet.has(k)));
+}
+function itemTypesFromAttrs(lo, hi) {
+  const set = new Set();
+  ITEM_TYPES.forEach((t, k) => { if (k < 31 ? (lo >>> k) & 1 : (hi >>> (k - 31)) & 1) set.add(k); });
+  return set;
+}
+function itemTypeAttrs() {
+  let lo = 0, hi = 0;
+  for (const k of itemTypeSet) { if (k < 31) lo |= 1 << k; else hi |= 1 << (k - 31); }
+  const out = [];
+  if (lo) out.push({ name: ITEM_TYPES_ATTR, value: lo >>> 0 });
+  if (hi) out.push({ name: ITEM_TYPES2_ATTR, value: hi >>> 0 });
+  return out;
+}
+setItemTypes(new Set());
+
+// Tool use (main.c TOOL SWING): "tool 1", "tool_swipe 0" (none = swipe on), "tool_power N" (none = 1),
+// "tool_sfx:<sound>" and "counts_as:<item id>" — one attribute per sound / id, value 1.
+function setItemTool(on, vals) {
+  itemEl('itemTool').checked = on;
+  ['itemToolSwipe', 'itemToolSfx', 'itemToolPower', 'itemToolAs'].forEach(id => { itemEl(id).disabled = !on; });
+  if (vals) {
+    itemEl('itemToolSwipe').checked = vals.swipe;
+    itemEl('itemToolSfx').value = vals.sfx;
+    itemEl('itemToolPower').value = vals.power;
+    itemEl('itemToolAs').value = vals.as;
+  }
+}
+itemEl('itemTool').addEventListener('change', e => setItemTool(e.target.checked));
+const itemToolList = s => [...new Set(String(s).split(',').map(x => x.trim()).filter(Boolean))];
+function itemToolFromAttrs(attrs) {
+  const v = (n, d) => { const a = attrs.find(x => x.name === n); return a ? a.value : d; };
+  const named = pre => attrs.filter(a => a.name.startsWith(pre) && a.value > 0).map(a => a.name.slice(pre.length)).join(', ');
+  return { swipe: v(ITEM_TOOL_SWIPE_ATTR, 1) > 0, power: itemClamp(v(ITEM_TOOL_POWER_ATTR, 1), 1, 16), sfx: named(ITEM_TOOL_SFX_PREFIX), as: named(ITEM_COUNTS_AS_PREFIX) };
+}
+// The attributes the box writes, or a string saying what's wrong.
+function itemToolAttrs() {
+  const out = [{ name: ITEM_TOOL_ATTR, value: 1 }];
+  if (!itemEl('itemToolSwipe').checked) out.push({ name: ITEM_TOOL_SWIPE_ATTR, value: 0 });
+  const power = itemClamp(parseInt(itemEl('itemToolPower').value) || 1, 1, 16);   // main.c caps it at BRK_MAX_HITS (16)
+  if (power > 1) out.push({ name: ITEM_TOOL_POWER_ATTR, value: power });
+  for (const n of itemToolList(itemEl('itemToolSfx').value)) {
+    const name = n.replace(/\.wav$/i, '');
+    if (name.length > 40) return `The swing sound "${name}" is longer than 40 letters — the game can't play it (main.c SFX_NAME_MAX).`;
+    out.push({ name: ITEM_TOOL_SFX_PREFIX + name, value: 1 });
+  }
+  for (const id of itemToolList(itemEl('itemToolAs').value)) {
+    if (!ITEM_ID_RE.test(id)) return `"Counts as ${id}": that isn't an item id (lowercase letters, digits and _).`;
+    out.push({ name: ITEM_COUNTS_AS_PREFIX + id, value: 1 });
+  }
+  return out;
+}
+
+// ---- Tool use preview: the player facing down, up, left and right, swinging it the way main.c's TOOL SWING draws it ----
+const TOOL_SWIPE_PX = 32, TOOL_SWIPE_FRAMES = 4, TOOL_SWIPE_FRAME_MS = 60;        // main.c SWIPE_PX / SWIPE_FRAMES / SWIPE_FRAME_MS
+const TOOL_SWIPE_AT = [[-8, 16], [-8, -4], [-16, 0], [0, 0]];                      // main.c k_swipe_at[]: down, up, left, right
+const TOOL_ART_PICK = [[0, 0, 0, 0], [0, 0, 1, 1], [0, 1, 2, 2], [0, 1, 2, 3]];    // main.c tool_paint(): [frames - 1][direction]
+const TOOL_ART_MAX_W = 32, TOOL_ART_MAX_H = 48, TOOL_ART_RAISE = 16;                // main.c TOOL_ART_MAX_W / _H / _RAISE
+const TOOL_ROT_MS = 180, TOOL_ROT_FROM = -40, TOOL_ROT_TO = 100, TOOL_CHOP_PX = 14, TOOL_ROT_MAX_W = 16, TOOL_ROT_MAX_H = 32;   // main.c TOOL_ROT_* / TOOL_CHOP_PX
+// assets/fx/tool_swipe.png (4 frames of 32x32, the swing facing right) — the game's own copy is compiled in from there.
+const itemSwipeImg = new Image();
+itemSwipeImg.src = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAIAAAAAgCAYAAADaInAlAAAA7UlEQVR42u2ZQQrEIAwAzT7QV/isviIfzJ4EC9JaWDfWzFyktBAxo6aaEgAAwNqYWa6tmWnTan0Hz5GLwS6nD0XyomJo83iIiM4QT0TUzFREchPz5/FcBegl/iUSnPr9j352xuqVMgyvACsL4CXBTiLsUifUmkA9BPSK3duyEMFZAhKBBKwEbEV+SRiN/SFdUzjcq/vBQhQB5lJW7yACOM6+FbYBBAhejCFA8G0AATaX724FQoDgIMCmv4LNzC8IEPxMAAFiJr8gAPLdSogAwVcgBAhwDnD1K4gAafqxMCeBwN1E4g4AAAAAAGARvm1OtsLlDaOwAAAAAElFTkSuQmCC';
+// A stand-in for the player (16x32, main.c PLAYER_W x PLAYER_H) facing dir (0 down, 1 up, 2 left, 3 right), S px a pixel.
+function drawToolStandIn(ctx, x, y, S, dir) {
+  const px = (c, r, w, h, col) => { ctx.fillStyle = col; ctx.fillRect(x + c * S, y + r * S, w * S, h * S); };
+  px(4, 26, 3, 6, '#2c3e66'); px(9, 26, 3, 6, '#2c3e66');            // legs
+  px(3, 14, 10, 12, '#3f9a8c');                                      // shirt
+  px(2, 15, 1, 8, '#e8b48a'); px(13, 15, 1, 8, '#e8b48a');           // arms
+  px(3, 3, 10, 11, '#e8b48a');                                       // head
+  px(3, 1, 10, dir === 1 ? 12 : 4, '#7a4a26');                       // hair (all of the back of the head facing up)
+  if (dir === 0) { px(5, 8, 1, 2, '#222'); px(10, 8, 1, 2, '#222'); }
+  else if (dir === 2) px(4, 8, 1, 2, '#222');
+  else if (dir === 3) px(11, 8, 1, 2, '#222');
+}
+function drawItemToolPreview(ms) {
+  const cv = itemEl('itemToolPreview'), ctx = cv.getContext('2d'), info = itemEl('itemToolInfo');
+  const S = 2, PW = 48, PH = 70, OX = 16, OY = 18;   // a panel, in game px; the player's 16x32 box sits at (OX,OY) in it
+  const on = itemEl('itemTool').checked, uArt = itemArt.use, out = uArt ? itemOutput(uArt) : null;
+  const art = out && out.w <= TOOL_ART_MAX_W && out.h <= TOOL_ART_MAX_H ? out : null;
+  const swipe = on && itemEl('itemToolSwipe').checked;
+  const artMs = art ? (uArt.interval || 250) : 0, lead = art ? TOOL_ROT_MS : 0;   // with art the tool comes down first, then the swipe
+  const len = Math.max(artMs, swipe ? lead + TOOL_SWIPE_FRAMES * TOOL_SWIPE_FRAME_MS : 0);
+  const t = ms % Math.max(len + 700, 1000);
+  const p = Math.min(t / TOOL_ROT_MS, 1), eased = p * p;   // main.c tool_turn_eased()
+  const held = itemOutput(itemArt.passive);
+  ctx.imageSmoothingEnabled = false;
+  ctx.fillStyle = '#5d8a4a';
+  ctx.fillRect(0, 0, cv.width, cv.height);
+  ['Down', 'Up', 'Left', 'Right'].forEach((label, d) => {
+    const bx = d * PW * S, x0 = bx + OX * S, y0 = OY * S;
+    const swinging = on && t < len;
+    const drawArt = () => {
+      if (!swinging || !art) return;
+      const n = Math.min(out.frames.length, 4), f = out.frames[TOOL_ART_PICK[n - 1][d]].canvas, flip = d === 2 && n < 4;
+      const hx = x0 + 8 * S, hy = y0 + (32 - TOOL_ART_RAISE) * S;   // the hands: the art's bottom middle (main.c tool_hands())
+      ctx.save();
+      ctx.translate(hx, hy);
+      if ((d === 2 || d === 3) && art.w <= TOOL_ROT_MAX_W && art.h <= TOOL_ROT_MAX_H) {   // sideways: it turns down around the hands
+        const deg = TOOL_ROT_FROM + (TOOL_ROT_TO - TOOL_ROT_FROM) * eased;
+        ctx.rotate((d === 2 ? -deg : deg) * Math.PI / 180);
+      } else {
+        ctx.translate(0, -Math.round(TOOL_CHOP_PX * (1 - eased)) * S);   // facing up / down: it drops into place
+      }
+      if (flip) ctx.scale(-1, 1);
+      ctx.drawImage(f, -Math.floor(art.w / 2) * S, -art.h * S, art.w * S, art.h * S);
+      ctx.restore();
+    };
+    const drawSwipe = () => {
+      if (!swinging || !swipe || t < lead || t - lead >= TOOL_SWIPE_FRAMES * TOOL_SWIPE_FRAME_MS || !itemSwipeImg.complete) return;
+      const k = Math.floor((t - lead) / TOOL_SWIPE_FRAME_MS), half = TOOL_SWIPE_PX * S / 2;
+      ctx.save();
+      ctx.translate(x0 + TOOL_SWIPE_AT[d][0] * S + half, y0 + TOOL_SWIPE_AT[d][1] * S + half);
+      if (d === 2) ctx.scale(-1, 1);                   // left: mirrored
+      else if (d === 0) ctx.rotate(Math.PI / 2);       // down: a quarter turn clockwise
+      else if (d === 1) ctx.rotate(-Math.PI / 2);      // up: anticlockwise
+      ctx.drawImage(itemSwipeImg, k * TOOL_SWIPE_PX, 0, TOOL_SWIPE_PX, TOOL_SWIPE_PX, -half, -half, half * 2, half * 2);
+      ctx.restore();
+    };
+    ctx.save();
+    ctx.beginPath(); ctx.rect(bx, 0, PW * S, PH * S); ctx.clip();
+    if (d === 1) { drawArt(); drawSwipe(); }           // facing up: behind them
+    drawToolStandIn(ctx, x0, y0, S, d);
+    if (d !== 1) { drawArt(); drawSwipe(); }
+    if (held && !(swinging && art)) {                  // over the head (main.c held_item_xy()), unless the swing art has it
+      const f = held.frames[0], w = Math.min(held.w, 32), h = Math.min(held.h, 32);
+      ctx.drawImage(f.canvas, x0 + Math.floor((16 - w) / 2) * S, y0 + (-1 - h + 4) * S, w * S, h * S);
+    }
+    ctx.fillStyle = 'rgba(0,0,0,.55)';
+    ctx.fillRect(bx, 0, 34, 12);
+    ctx.fillStyle = '#fff';
+    ctx.font = '10px sans-serif';
+    ctx.fillText(label, bx + 3, 10);
+    ctx.restore();
+  });
+  const n = out ? out.frames.length : 0;
+  info.textContent = !on ? 'Not a tool: tick "Swings like a tool" (loading Swing art ticks it).'
+    : out && !art ? `The Swing art is ${out.w}×${out.h} — the game only draws swing art up to ${TOOL_ART_MAX_W}×${TOOL_ART_MAX_H}; crop it smaller.`
+    : !art ? `No Swing art: the item stays over the head, ${swipe ? 'the swipe plays' : 'no swipe'}. Load 16×32 art in the Swing tab.`
+    : n === 2 ? `Swing: ${artMs} ms. 2 frames = down/up, then sideways.`
+    : n > 4 ? `Swing: ${artMs} ms. ${n} frames — only the first 4 are used (down, up, left, right).`
+    : `Swing: ${artMs} ms, ${n === 1 ? '1 frame for every way' : n === 3 ? '3 frames: down, up, sideways' : '4 frames: down, up, left, right'}.`;
+}
 itemEl('itemProp').addEventListener('change', e => setItemProp(e.target.checked));
 // Shelf (a prop that holds things for sale): "shelf N" (1..4), "shelf_y Y" (none = half way down) — items.h ITEM_ATTR_SHELF*.
 function setItemShelf(on, slots, y) {
@@ -13283,9 +13647,13 @@ itemEl('fishTagOk').addEventListener('click', () => closeFishTag(true));
 itemEl('fishTagOverlay').addEventListener('mousedown', e => { if (e.target.id === 'fishTagOverlay') closeFishTag(false); });
 itemMutRefresh();
 const ITEM_OWNED_ATTRS = () => [ITEM_SELL_ATTR, ITEM_DROP_ATTR, ITEM_QUALITY_ATTR, ITEM_BUY_ATTR, ITEM_PROP_ATTR, ITEM_PROP_ROWS_ATTR, ITEM_PROP_SOLID_ATTR, ITEM_SHELF_ATTR, ITEM_SHELF_Y_ATTR,
-                                ITEM_BED_ATTR, ITEM_BED_HEAD_ATTR, ITEM_BED_FOOT_ATTR, ITEM_AQUA_ATTR, ITEM_SPRINKLER_ATTR, ITEM_SCARECROW_ATTR, ITEM_TILLS_ATTR, ITEM_WATERS_ATTR, ITEM_WATER_MAX_ATTR, ...ITEM_RANCH_ATTRS.map(r => r[1]), ITEM_ROD_ATTR, ...ROD_STATS.map(s => s.attr), ...ITEM_FISH_ATTRS, ITEM_MUT_ATTR];
-// What the cards own (a hand-added row with one of these names is ignored): the list above, and a recipe's craft:<id> / craft_makes.
-function itemOwnsAttr(name) { return ITEM_OWNED_ATTRS().includes(name) || name === ITEM_SHOP_ATTR || name.startsWith(ITEM_CRAFT_PREFIX) || name === ITEM_CRAFT_MAKES_ATTR; }
+                                ITEM_BED_ATTR, ITEM_BED_HEAD_ATTR, ITEM_BED_FOOT_ATTR, ITEM_AQUA_ATTR, ITEM_SPRINKLER_ATTR, ITEM_SCARECROW_ATTR, ITEM_TILLS_ATTR, ITEM_WATERS_ATTR, ITEM_WATER_MAX_ATTR, ...ITEM_RANCH_ATTRS.map(r => r[1]), ITEM_ROD_ATTR, ...ROD_STATS.map(s => s.attr), ...ITEM_FISH_ATTRS, ITEM_MUT_ATTR,
+                                ITEM_TOOL_ATTR, ITEM_TOOL_SWIPE_ATTR, ITEM_TOOL_POWER_ATTR, ITEM_MARKET_BOARD_ATTR, ITEM_TYPES_ATTR, ITEM_TYPES2_ATTR];
+// What the cards own (a hand-added row with one of these names is ignored): the list above, a recipe's craft:<id> / craft_makes, a tool's tool_sfx:<name> / counts_as:<id>.
+function itemOwnsAttr(name) {
+  return ITEM_OWNED_ATTRS().includes(name) || name === ITEM_SHOP_ATTR || name.startsWith(ITEM_CRAFT_PREFIX) || name === ITEM_CRAFT_MAKES_ATTR ||
+         name.startsWith(ITEM_TOOL_SFX_PREFIX) || name.startsWith(ITEM_COUNTS_AS_PREFIX);
+}
 function readItemSellPrice() {
   if (!itemEl('itemSellable').checked) return 0;
   return itemClamp(parseInt(itemEl('itemSellPrice').value) || 1, 1, 999999);
@@ -13518,10 +13886,13 @@ function importItemC(text, id) {
   setItemAquarium(av(ITEM_AQUA_ATTR, 0) > 0, itemClamp(av(ITEM_AQUA_ATTR, 3) || 3, 1, 3));
   setItemSprinkler(av(ITEM_SPRINKLER_ATTR, 0) > 0, itemClamp(av(ITEM_SPRINKLER_ATTR, 1) || 1, 1, ITEM_SPRINKLER_MAX));
   setItemScarecrow(av(ITEM_SCARECROW_ATTR, 0) > 0, itemClamp(av(ITEM_SCARECROW_ATTR, 7) || 7, 1, ITEM_SCARECROW_MAX));
+  itemEl('itemMarketBoard').checked = av(ITEM_MARKET_BOARD_ATTR, 0) > 0;
+  setItemTypes(itemTypesFromAttrs(av(ITEM_TYPES_ATTR, 0), av(ITEM_TYPES2_ATTR, 0)));
   itemEl('itemTills').checked = av(ITEM_TILLS_ATTR, 0) > 0;
   itemEl('itemWaters').checked = av(ITEM_WATERS_ATTR, 0) > 0;
   itemEl('itemWaterMax').value = av(ITEM_WATER_MAX_ATTR, 0);   // (an older can: 0, it never runs dry)
   ITEM_RANCH_ATTRS.forEach(([el, at]) => { itemEl(el).checked = av(at, 0) > 0; });
+  setItemTool(av(ITEM_TOOL_ATTR, 0) > 0, itemToolFromAttrs(p.attrs));
   const recipe = itemCraftFromAttrs(p.attrs);
   itemCraft = [];
   setItemCraft(recipe.list.length > 0, recipe.makes, recipe.list);
@@ -13575,10 +13946,13 @@ function resetItemEditor(ask) {
   setItemAquarium(false, 3);
   setItemSprinkler(false, 1);
   setItemScarecrow(false, 7);
+  itemEl('itemMarketBoard').checked = false;
+  setItemTypes(new Set());
   itemEl('itemTills').checked = itemEl('itemWaters').checked = false;
   setItemBed(false, null, 0, 0);
   itemEl('itemWaterMax').value = 40;   // (a new can holds Stardew's basic can's 40)
   ITEM_RANCH_ATTRS.forEach(([el]) => { itemEl(el).checked = false; });
+  setItemTool(false, { swipe: true, power: 1, sfx: '', as: '' });
   setItemProp(false, 0, true);
   setItemBuyable(false, 10, 0);
   setItemRod(false, {});
@@ -13652,7 +14026,7 @@ async function exportItemAsset(asNew) {
     const art = itemArt[slot];
     if (!art) return slot === 'passive' ? 'Load held art first — every item needs it.' : null;
     const g = itemArtGeom(art);
-    return g.ok ? null : `${slot === 'passive' ? 'Held' : 'Use'} art: ${g.problem}`;
+    return g.ok ? null : `${slot === 'passive' ? 'Held' : 'Swing'} art: ${g.problem}`;
   };
   for (const slot of ['passive', 'use']) {
     const problem = slotProblem(slot);
@@ -13671,7 +14045,10 @@ async function exportItemAsset(asNew) {
         !confirm(`The held art is ${out.w}×${out.h} px — a prop can be at most ${PROP_ART_MAX}×${PROP_ART_MAX}, so the game won't let it be placed. Export anyway?`)) return;
   }
   const passiveBlock = buildItemAnimBlock(`${id}_passive`, itemPackOutput(itemOutput(pArt)), pArt.interval, -1);
-  const useBlock = uArt ? buildItemAnimBlock(`${id}_use`, itemPackOutput(itemOutput(uArt)), uArt.interval, uArt.loop)
+  const toolAttrs = itemEl('itemTool').checked ? itemToolAttrs() : [];   // Tool use (main.c TOOL SWING)
+  if (typeof toolAttrs === 'string') { alert(toolAttrs); return; }
+  if (uArt && !itemEl('itemTool').checked && !confirm('It has Swing art, but "Swings like a tool" (Tool use box) is off — the game won\'t swing it. Export anyway?')) return;
+  const useBlock = uArt ? buildItemAnimBlock(`${id}_use`, itemPackOutput(itemOutput(uArt)), uArt.interval, 0)   // a swing plays once
                         : { decl: '', initExpr: '{ .frame_count = 0 }' };
   // A walk-in bed's sheet layer (item_asset_t.front): only exported with "Bed" ticked.
   const bedSheet = itemEl('itemProp').checked && itemEl('itemBed').checked ? itemBedSheet : null;
@@ -13707,6 +14084,7 @@ async function exportItemAsset(asNew) {
     }
     if (itemEl('itemAquarium').checked) validAttrs.push({ name: ITEM_AQUA_ATTR, value: itemClamp(parseInt(itemEl('itemAquaFish').value) || 3, 1, 3) });
     if (itemEl('itemSprinkler').checked) validAttrs.push({ name: ITEM_SPRINKLER_ATTR, value: itemClamp(parseInt(itemEl('itemSprinklerRange').value) || 1, 1, ITEM_SPRINKLER_MAX) });
+    if (itemEl('itemMarketBoard').checked) validAttrs.push({ name: ITEM_MARKET_BOARD_ATTR, value: 1 });
     if (itemEl('itemScarecrow').checked) validAttrs.push({ name: ITEM_SCARECROW_ATTR, value: itemClamp(parseInt(itemEl('itemScarecrowRange').value) || 7, 1, ITEM_SCARECROW_MAX) });
   }
   if (itemEl('itemTills').checked) validAttrs.push({ name: ITEM_TILLS_ATTR, value: 1 });
@@ -13714,6 +14092,8 @@ async function exportItemAsset(asNew) {
   const waterMax = itemClamp(parseInt(itemEl('itemWaterMax').value) || 0, 0, 999);
   if (itemEl('itemWaters').checked && waterMax > 0) validAttrs.push({ name: ITEM_WATER_MAX_ATTR, value: waterMax });   // none = never runs dry
   ITEM_RANCH_ATTRS.forEach(([el, at]) => { if (itemEl(el).checked) validAttrs.push({ name: at, value: 1 }); });
+  validAttrs.push(...toolAttrs);
+  validAttrs.push(...itemTypeAttrs());   // market types (none = x1)
   if (itemEl('itemBuyable').checked) {
     validAttrs.push({ name: ITEM_BUY_ATTR, value: itemClamp(parseInt(itemEl('itemBuyPrice').value) || 1, 1, 999999) });
     const counter = itemClamp(parseInt(itemEl('itemShopKind').value) || 0, 0, SHOP_COUNTERS.length - 1);
@@ -13806,19 +14186,19 @@ function blankTabState() {
   return {
     colorData: new Uint8ClampedArray(REAL_MAP_W * REAL_MAP_H * 3).fill(DEFAULT_BG[0]),
     hitboxData: new Uint8Array(REAL_MAP_W * REAL_MAP_H), layerData: new Uint8Array(REAL_MAP_W * REAL_MAP_H),
-    placedAssets: [], importedAnims: [], importedBreakables: [], teleporters: [], importedTiles: null, importedTriggers: null,
+    placedAssets: [], importedAnims: [], importedBreakables: [], teleporters: [], mapTrees: [], importedTiles: null, importedTriggers: null,
     undoStack: [], redoStack: [], activeFileHandle: null, activeFileIsCloud: false, selectionRect: null,
     mapZoom, scrollLeft: 0, scrollTop: 0
   };
 }
 function captureTabState() {
   const wrap = document.getElementById('canvasWrap');
-  return { colorData, hitboxData, layerData, placedAssets, importedAnims, importedBreakables, teleporters, importedTiles, importedTriggers,
+  return { colorData, hitboxData, layerData, placedAssets, importedAnims, importedBreakables, teleporters, mapTrees, importedTiles, importedTriggers,
            undoStack, redoStack, activeFileHandle, activeFileIsCloud, selectionRect,
            mapZoom, scrollLeft: wrap.scrollLeft, scrollTop: wrap.scrollTop };
 }
 function applyTabState(st) {
-  ({ colorData, hitboxData, layerData, placedAssets, importedAnims, importedBreakables, teleporters, importedTiles, importedTriggers,
+  ({ colorData, hitboxData, layerData, placedAssets, importedAnims, importedBreakables, teleporters, mapTrees = [], importedTiles, importedTriggers,
      undoStack, redoStack, activeFileHandle, activeFileIsCloud, selectionRect } = st);
 }
 function tabState(i) { return i === activeTabIdx ? captureTabState() : mapTabs[i].state; }
@@ -13832,7 +14212,7 @@ function withTab(i, fn) {
 // An untouched blank map: no file, nothing drawn or placed.
 function tabPristine(i) {
   const st = tabState(i);
-  return !st.activeFileHandle && !st.undoStack.length && !st.placedAssets.length && !st.teleporters.length && !st.importedAnims.length;
+  return !st.activeFileHandle && !st.undoStack.length && !st.placedAssets.length && !st.teleporters.length && !(st.mapTrees || []).length && !st.importedAnims.length;
 }
 // The tab's name as a map file name ("Cave.backup.json" -> "cave", "Untitled 2" -> "untitled_2").
 function tabBaseName(i = activeTabIdx) {
@@ -14199,6 +14579,141 @@ document.getElementById('tpCancelBtn').onclick = closeTpModal;
 document.getElementById('tpDeleteBtn').onclick = () => { if (confirm('Delete this teleporter?')) deleteTpModal(); };
 document.getElementById('tpPickBtn').onclick = tpStartPick;
 document.getElementById('tpPanel').addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.tagName === 'INPUT') saveTpModal(); });
+
+// ================================================================
+//  TREES ON THE MAP — the Tree tool: the map's own trees (main.c TREES).
+//  Pick a tree (assets/trees, made in the Trees tab), its stage and whether
+//  it's mossy, then click tiles: each click puts one there, its trunk (base)
+//  on that tile; clicking a tree's base takes it away. Never baked into the
+//  map's pixels — drawn here over the map, and Export writes them to
+//  <map>.trees next to the .map:  tree <id> at tile <x> <y> stage <s> moss <0/1>
+//  The game puts them on the map the first time a save goes there; after
+//  that they're the save's (they grow, fruit and get chopped down like
+//  planted ones), so changing them here only shows in a save that hasn't been to the map.
+// ================================================================
+const MT_MAX = 64;                       // main.c TREE_MAX
+const MT_STAGES = ['Seed', 'Sprout', 'Sapling', 'Bush', 'Grown', 'Stump'];   // main.c: 0-3 growing, TREE_GROWN 4, TREE_STUMP 5
+let mtLib = null;                        // { id: tree (treParseC) } — assets/trees, read when the tool is first used
+let mtLibLoading = null;
+let mtPick = { id: '', stage: 4, moss: false };
+const mtLookCache = new Map();           // "id/stage/moss" -> canvas
+
+function mtNormalize(t) {
+  if (!t || !ITEM_ID_RE.test(String(t.id || ''))) return null;
+  const n = (v, hi) => Math.max(0, Math.min(hi, v | 0));
+  return { id: String(t.id), tx: n(t.tx, TP_TILES - 1), ty: n(t.ty, TP_TILES - 1), stage: n(t.stage, 5), moss: !!t.moss };
+}
+// Reads every assets/trees/*.c (the linked assets folder, or the Trees tab's folder).
+async function mtLoadLib(force) {
+  if (mtLib && !force) return mtLib;
+  if (mtLibLoading) return mtLibLoading;
+  mtLibLoading = (async () => {
+    const lib = {};
+    let dir = null;
+    try { dir = await getTreesDir(false); } catch (e) { dir = null; }
+    if (dir) {
+      for await (const [name, h] of dir.entries()) {
+        if (h.kind !== 'file' || !/\.c$/i.test(name)) continue;
+        try { const r = treParseC(await (await h.getFile()).text()); lib[r.id] = r.t; } catch (e) { /* not a Trees Editor file */ }
+      }
+    }
+    mtLib = lib;
+    mtLookCache.clear();
+    mtLibLoading = null;
+    return lib;
+  })();
+  return mtLibLoading;
+}
+function mtLook(t) {
+  const tree = mtLib && mtLib[t.id];
+  if (!tree) return null;
+  const key = `${t.id}/${t.stage}/${t.moss ? 1 : 0}`;
+  if (!mtLookCache.has(key)) mtLookCache.set(key, treLookCanvas(tree, 0, t.stage, t.moss, 0));
+  return mtLookCache.get(key);
+}
+// Each tree as the game shows it in spring (lower ones in front), its base tile outlined while the tool is on.
+function drawMapTrees() {
+  if (assetEditState || !mapTrees.length) return;
+  ctx.save();
+  const sorted = mapTrees.slice().sort((a, b) => a.ty - b.ty);
+  for (const t of sorted) {
+    const cv = mtLook(t), bx = t.tx * GRID_SIZE, by = t.ty * GRID_SIZE;
+    if (cv) ctx.drawImage(cv, bx + GRID_SIZE / 2 - Math.floor(cv.width / 2), by + GRID_SIZE - cv.height);
+    else {   // not read yet (or not in assets/trees): a marker
+      ctx.fillStyle = 'rgba(60,200,90,.6)';
+      ctx.beginPath(); ctx.moveTo(bx + 8, by + 1); ctx.lineTo(bx + 15, by + 15); ctx.lineTo(bx + 1, by + 15); ctx.fill();
+    }
+    if (shapeMode === 'tree') {
+      ctx.strokeStyle = '#7dff8a'; ctx.lineWidth = 1; ctx.setLineDash([2, 2]);
+      ctx.strokeRect(bx + 0.5, by + 0.5, GRID_SIZE - 1, GRID_SIZE - 1);
+      ctx.setLineDash([]);
+    }
+  }
+  ctx.restore();
+  if (!mtLib) mtLoadLib(false).then(() => redrawAll());
+}
+function mtClick(p) {
+  const tx = Math.floor(p.x / GRID_SIZE), ty = Math.floor(p.y / GRID_SIZE);
+  const hit = mapTrees.findIndex(t => t.tx === tx && t.ty === ty);
+  if (hit >= 0) { pushUndo(); mapTrees.splice(hit, 1); redrawAll(); return; }
+  if (!mtPick.id) { mtOpenPicker(); return; }
+  if (tx < 0 || ty < 1 || tx >= TP_TILES || ty >= TP_TILES) return;   // (the top row: a tree's trunk would stick out of the map)
+  if (mapTrees.length >= MT_MAX) { alert(`A map can have up to ${MT_MAX} trees.`); return; }
+  pushUndo();
+  mapTrees.push({ id: mtPick.id, tx, ty, stage: mtPick.stage, moss: mtPick.moss && mtPick.stage >= 4 });
+  redrawAll();
+}
+function mtExportText(base) {
+  if (!mapTrees.length) return null;
+  const lines = [`# CaptureIt: the trees of ${base} (Game Tools Map Editor, Tree tool). The game puts them on the map`,
+                 '# the first time a save goes there (main.c TREES). Stage: 0 seed, 1 sprout, 2 sapling, 3 bush, 4 grown, 5 stump.'];
+  mapTrees.slice(0, MT_MAX).forEach(t => lines.push(`tree ${t.id} at tile ${t.tx} ${t.ty} stage ${t.stage} moss ${t.moss ? 1 : 0}`));
+  return lines.join('\n') + '\n';
+}
+
+// The picker: which tree the next clicks put down.
+async function mtOpenPicker() {
+  let ov = document.getElementById('mtOverlay');
+  if (!ov) {
+    ov = document.createElement('div');
+    ov.id = 'mtOverlay';
+    ov.innerHTML = `<div id="mtPanel">
+      <div class="itemHead"><div class="itemTitle">Trees on this map</div>
+        <button type="button" id="mtReload" title="Read assets/trees again (after saving a tree in the Trees tab)">Reload trees</button></div>
+      <div id="mtList"></div>
+      <div class="mtRow"><label>Stage <select id="mtStage">${MT_STAGES.map((s, i) => `<option value="${i}">${s}</option>`).join('')}</select></label>
+        <label><input type="checkbox" id="mtMoss"> Mossy</label></div>
+      <div class="animCap">Click a tile to put the tree there (its trunk on that tile); click a tree's trunk tile to take it away. Export saves them as &lt;map&gt;.trees next to the map. A save that has already been to this map keeps its own trees.</div>
+      <div class="row itemFoot"><div id="mtMsg" class="animCap"></div><button type="button" id="mtDone">Done</button></div>
+    </div>`;
+    document.body.appendChild(ov);
+    ov.addEventListener('mousedown', e => { if (e.target === ov) ov.classList.remove('show'); });
+    document.getElementById('mtDone').onclick = () => ov.classList.remove('show');
+    document.getElementById('mtReload').onclick = async () => { await mtLoadLib(true); mtFillPicker(); redrawAll(); };
+    document.getElementById('mtStage').onchange = e => { mtPick.stage = +e.target.value; mtFillPicker(); };
+    document.getElementById('mtMoss').onchange = e => { mtPick.moss = e.target.checked; mtFillPicker(); };
+  }
+  ov.classList.add('show');
+  await mtLoadLib(false);
+  mtFillPicker();
+}
+function mtFillPicker() {
+  const list = document.getElementById('mtList'), ids = Object.keys(mtLib || {}).sort();
+  list.innerHTML = '';
+  document.getElementById('mtStage').value = String(mtPick.stage);
+  document.getElementById('mtMoss').checked = mtPick.moss;
+  document.getElementById('mtMsg').textContent = ids.length ? '' : 'No trees found — link the assets folder (Asset Explorer) or save one in the Trees tab first.';
+  if (!mtPick.id && ids.length) mtPick.id = ids[0];
+  for (const id of ids) {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'mtTree' + (id === mtPick.id ? ' on' : '');
+    const cv = mtLook({ id, stage: mtPick.stage, moss: mtPick.moss });
+    if (cv) { const img = document.createElement('canvas'); img.width = cv.width; img.height = cv.height; img.getContext('2d').drawImage(cv, 0, 0); b.appendChild(img); }
+    const span = document.createElement('span'); span.textContent = mtLib[id].name || id; b.appendChild(span);
+    b.onclick = () => { mtPick.id = id; shapeMode = 'tree'; refreshButtonStates(); mtFillPicker(); redrawAll(); };
+    list.appendChild(b);
+  }
+}
 
 refreshButtonStates();
 redrawAll();
@@ -15446,6 +15961,7 @@ function layoutReset(panelId) {
 // ================================================================
 const ITEM_FOLD_USE = {   // a box: the ticks that mean this item uses it
   'Farming tools': ['itemTills', 'itemWaters', 'itemFeeds', 'itemCuts', 'itemGrass', 'itemShears', 'itemMilks'],
+  'Tool use': ['itemTool'],
   'Placing (furniture)': ['itemProp'],
   'Crafting': ['itemCraft'],
   'Fishing': ['itemRod', 'itemFish'],
@@ -18798,6 +19314,576 @@ function closeMachineEditor() { mchEl('mchEdOverlay').classList.remove('show'); 
 
 <script>
 // ================================================================
+//  TREES EDITOR — the Game Tools "Trees" tab. One tree (Stardew's oak,
+//  maple, pine... or a fruit tree) = its art for each growing stage (seed,
+//  sprout, sapling, bush) and the grown tree, per season, a mossy canopy and
+//  stump (wild trees), the log under the grown tree, the stump left when it's
+//  chopped down, falling leaves — and its numbers: days to grow, axe hits,
+//  what chopping and shaking give, its fruit. Save writes ONE
+//  assets/trees/<id>.c (main/trees.h) with k_tree_<id> and the seed item
+//  k_item_<id>_seed. The file's TREES-EDITOR comment holds the settings; the
+//  art is read back from its arrays (k_tree_<id>_<key>, sizes in meta.art).
+//  Keys: stage_<season>_<stage>, grown_<s>, moss_<s>, log_<s>, stump_<s>,
+//  stumpmoss_<s>, leaf_<s> — season 0 spring .. 3 winter; an empty season
+//  uses the one before (main.c TREES). tools/slice_trees.py writes the same
+//  format (the Stardew sheets were cut with it) — change both together.
+//  "Cut from a sprite sheet…": click a sprite on a loaded sheet and it goes in
+//  the picked box (its opaque blob, optionally widened to the 16px columns).
+// ================================================================
+const TRE_W = 48, TRE_H = 112, TRE_LEAF = 16, TRE_LEAF_FRAMES = 4, TREES_DIR_KEY = 'treesDirHandle';   // main/trees.h TREE_W / TREE_H / TREE_LEAF_PX
+const TRE_SEASONS = ['Spring', 'Summer', 'Fall', 'Winter'];
+// The look grid's rows: key for season s, label, size hint, box height in the grid, wild trees only, growing stage (a fruit tree's aren't seasonal)
+const TRE_ROWS = [
+  { key: s => `stage_${s}_0`, label: '1 · Seed', hint: '16×16, walked over', h: 48, stage: true },
+  { key: s => `stage_${s}_1`, label: '2 · Sprout', hint: 'walked over', h: 48, stage: true },
+  { key: s => `stage_${s}_2`, label: '3 · Sapling', hint: 'walked over', h: 64, stage: true },
+  { key: s => `stage_${s}_3`, label: '4 · Bush', hint: 'solid tile', h: 64, stage: true },
+  { key: s => `grown_${s}`, label: 'Grown', hint: 'the canopy', h: 96 },
+  { key: s => `moss_${s}`, label: 'Mossy', hint: 'canopy (optional)', h: 96, wild: true },
+  { key: s => `log_${s}`, label: 'Log', hint: 'under the grown tree', h: 32 },
+  { key: s => `stump_${s}`, label: 'Stump', hint: 'once chopped', h: 40 },
+  { key: s => `stumpmoss_${s}`, label: 'Mossy stump', hint: '(optional)', h: 40, wild: true },
+  { key: s => `leaf_${s}`, label: 'Leaves', hint: '16×16 frames', h: 20, leaf: true },
+];
+const treEl = id => document.getElementById(id);
+let tre = null, treEditingId = null, treesDirHandle = null, treTarget = 'stage_0_0', treSheet = null, treSheetDrag = null;
+
+function treBlank() {
+  return { name: '', seedName: '', fruit: false, growDays: 10, hits: 10, bushHits: 2, stumpHits: 5, woodMin: 25, woodMax: 35, seedMax: 3, bushWood: 5,
+           stumpWoodMin: 3, stumpWoodMax: 5, shakeSeedMax: 2, mossPct: 5, wood: 'wood', chopTool: 'axe', fruitItem: '', fruitSeasons: 1, fruitDays: 3, fruitMax: 3,
+           sfxHit: '', sfxFall: '', seedPrice: 5, buyPrice: 0, art: {}, seedIcon: null };
+}
+function treId(t) { return sanitizeItemId(t.name || 'tree').slice(0, BRK_ITEM_ID_MAX - 5); }   // + "_seed" still fits
+function treStatus(t, bad) { const e = treEl('treExportStatus'); e.textContent = t || ''; e.className = 'animCap' + (bad ? ' itemMsg bad' : ''); }
+function treRowUsed(row, t) { return !(row.wild && t.fruit); }
+function treCellUsed(row, s, t) { return treRowUsed(row, t) && !(row.stage && t.fruit && s > 0); }
+function treKeyRow(key) { return TRE_ROWS.find(r => [0, 1, 2, 3].some(s => r.key(s) === key)); }
+function treKeySeason(key) { return +key.match(/_(\d)(?:_\d)?$/)[1]; }
+
+// ---- the look a tree shows (main.c tree_look_at()) ----
+function treArtIn(t, group, s) { for (let k = s; k >= 0; k--) if (t.art[`${group}_${k}`]) return t.art[`${group}_${k}`]; return null; }
+function treMossyArt(t, moss, plain, s) {
+  for (let k = s; k >= 0; k--) { if (t.art[`${moss}_${k}`]) return t.art[`${moss}_${k}`]; if (t.art[`${plain}_${k}`]) return t.art[`${plain}_${k}`]; }
+  return null;
+}
+function treLook(t, s, stage, moss) {
+  if (stage < 4) {
+    for (let k = t.fruit ? 0 : s; k >= 0; k--) if (t.art[`stage_${k}_${stage}`]) return { main: t.art[`stage_${k}_${stage}`], log: null };
+    return { main: null, log: null };
+  }
+  if (stage === 4) return { main: moss && !t.fruit ? treMossyArt(t, 'moss', 'grown', s) : treArtIn(t, 'grown', s), log: treArtIn(t, 'log', s) };
+  return { main: moss && !t.fruit ? treMossyArt(t, 'stumpmoss', 'stump', s) : treArtIn(t, 'stump', s), log: null };
+}
+// The tree as the game draws it, on a canvas exactly its size (bottom = its tile's bottom). fruitImg + fruit: fruit on the canopy.
+function treLookCanvas(t, s, stage, moss, fruit, fruitImg) {
+  const l = treLook(t, s, stage, moss), lh = l.log ? l.log.h : 0;
+  const w = Math.max(16, l.main ? l.main.w : 16, l.log ? l.log.w : 0), h = Math.max(16, (l.main ? l.main.h : 16) + lh);
+  const cv = document.createElement('canvas');
+  cv.width = w; cv.height = h;
+  const g = cv.getContext('2d');
+  const put = (img, x, y) => { const c = document.createElement('canvas'); c.width = img.w; c.height = img.h; c.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(img.rgba), img.w, img.h), 0, 0); g.drawImage(c, x, y); };
+  const cx = Math.floor(w / 2);
+  if (l.log) put(l.log, cx - Math.floor(l.log.w / 2), h - lh);
+  if (l.main) put(l.main, cx - Math.floor(l.main.w / 2), h - lh - l.main.h);
+  if (stage === 4 && fruit && fruitImg && l.main) {
+    const mw = l.main.w, mh = l.main.h, x0 = cx - Math.floor(mw / 2), y0 = h - lh - mh;
+    const spots = [[mw / 2 - 20, mh / 4], [mw / 2 + 4, mh / 6], [mw / 2 - 8, mh * 2 / 5]].map(p => p.map(Math.floor));   // main.c tree_compose()
+    for (let k = 0; k < Math.min(fruit, 3); k++) put(fruitImg, x0 + spots[k][0], y0 + spots[k][1]);
+  }
+  return cv;
+}
+
+// ---- the grid of boxes ----
+function treRenderGrid() {
+  const tbl = treEl('treGrid');
+  tbl.innerHTML = `<tr><th></th>${TRE_SEASONS.map(s => `<th>${s}</th>`).join('')}</tr>`;
+  for (const row of TRE_ROWS) {
+    if (!treRowUsed(row, tre)) continue;
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td class="lab">${row.label}<small>${row.stage && tre.fruit ? 'all year' : row.hint}</small></td>`;
+    for (let s = 0; s < 4; s++) {
+      const td = document.createElement('td'), key = row.key(s), used = treCellUsed(row, s, tre);
+      const cell = document.createElement('div');
+      cell.className = 'treCell' + (key === treTarget ? ' on' : '') + (used ? '' : ' off');
+      const img = tre.art[key];
+      const cv = document.createElement('canvas');
+      cv.width = row.leaf ? TRE_LEAF * TRE_LEAF_FRAMES : TRE_W;
+      cv.height = Math.max(row.h, img ? img.h : 0);
+      cv.style.width = cv.width * 1.5 + 'px'; cv.style.height = cv.height * 1.5 + 'px';
+      if (used) {
+        cropDrawImg(cv, img, 1, false);
+        let before = false;   // empty: an earlier season's art shows instead (a moss box: the plain art, when this season has its own)
+        const plain = !img && row.wild && tre.art[row.key(s).replace('moss', '').replace(/^_/, 'grown_')];   // moss_3 -> grown_3, stumpmoss_3 -> stump_3
+        for (let k = s - 1; k >= 0 && !img && !before && !plain; k--) before = !!tre.art[row.key(k)];
+        const note = document.createElement('small');
+        note.textContent = img ? `${img.w}×${img.h}` : plain ? 'no moss' : before ? 'as before' : '—';
+        cell.append(cv, note);
+        cell.onclick = () => { treTarget = key; treRenderGrid(); treSheetMsg(); };
+        cell.addEventListener('dragover', e => { e.preventDefault(); cell.classList.add('over'); });
+        cell.addEventListener('dragleave', () => cell.classList.remove('over'));
+        cell.addEventListener('drop', e => { e.preventDefault(); cell.classList.remove('over'); treTarget = key; treTakeFile(e.dataTransfer.files[0], key); });
+      } else cell.append(cv);
+      td.appendChild(cell);
+      tr.appendChild(td);
+    }
+    tbl.appendChild(tr);
+  }
+}
+function treRenderPreview() {
+  const cv = treEl('treePreview'), g = cv.getContext('2d');
+  const s = +treEl('trePrevSeason').value, stage = +treEl('trePrevStage').value, moss = treEl('trePrevMoss').checked;
+  g.imageSmoothingEnabled = false;
+  g.fillStyle = '#3d6b33'; g.fillRect(0, 0, cv.width, cv.height);
+  g.strokeStyle = 'rgba(255,255,255,.08)';
+  for (let x = 0; x <= cv.width; x += 16) { g.beginPath(); g.moveTo(x + 4.5, 0); g.lineTo(x + 4.5, cv.height); g.stroke(); }
+  for (let y = 0; y <= cv.height; y += 16) { g.beginPath(); g.moveTo(0, y + 0.5); g.lineTo(cv.width, y + 0.5); g.stroke(); }
+  const tileX = 28, tileY = cv.height - 16;
+  g.strokeStyle = 'rgba(255,230,80,.6)'; g.strokeRect(tileX + 0.5, tileY + 0.5, 15, 15);
+  const fruitItem = treFruitIcon();
+  const look = treLookCanvas(tre, s, stage, moss, +treEl('trePrevFruit').value || 0, fruitItem);
+  g.drawImage(look, tileX + 8 - Math.floor(look.width / 2), cv.height - look.height);
+}
+let treFruitCache = { id: '', img: null };
+function treFruitIcon() {   // the fruit item's icon, when its .c is in the items folder (read once per id)
+  const id = tre.fruit ? tre.fruitItem : '';
+  if (!id) return null;
+  if (treFruitCache.id === id) return treFruitCache.img;
+  treFruitCache = { id, img: null };
+  (async () => {
+    try {
+      const dir = await getItemsDir(false);
+      if (!dir) return;
+      const text = await (await (await dir.getFileHandle(`${id}.c`)).getFile()).text();
+      const m = text.match(new RegExp(`static const uint16_t k_${id}_passive_pixels\\[\\d+\\] = \\{([^}]*)\\}`)), d = text.match(/\.passive = \{ \.w=(\d+), \.h=(\d+)/);
+      if (!m || !d) return;
+      const px = Uint16Array.from(m[1].match(/0x[0-9a-fA-F]+/g) || [], v => parseInt(v, 16)), w = +d[1], h = +d[2];
+      if (px.length >= w * h && treFruitCache.id === id) { treFruitCache.img = cropUnpack(px.slice(0, w * h), w, h); treRenderPreview(); }
+    } catch (e) { /* no such item file: no fruit in the preview */ }
+  })();
+  return null;
+}
+const TRE_NUMS = [['treGrowDays', 'growDays', 1, 255], ['treHits', 'hits', 1, 99], ['treBushHits', 'bushHits', 1, 99], ['treStumpHits', 'stumpHits', 1, 99],
+                  ['treWoodMin', 'woodMin', 0, 99], ['treWoodMax', 'woodMax', 0, 99], ['treSeedMax', 'seedMax', 0, 9], ['treBushWood', 'bushWood', 0, 99],
+                  ['treStumpWoodMin', 'stumpWoodMin', 0, 99], ['treStumpWoodMax', 'stumpWoodMax', 0, 99], ['treShakeSeedMax', 'shakeSeedMax', 0, 9],
+                  ['treMossPct', 'mossPct', 0, 100], ['treFruitDays', 'fruitDays', 1, 28], ['treFruitMax', 'fruitMax', 1, 3],
+                  ['treSeedPrice', 'seedPrice', 0, 999999], ['treBuyPrice', 'buyPrice', 0, 999999]];
+const TRE_TEXTS = [['treWood', 'wood'], ['treChopTool', 'chopTool'], ['treFruitItem', 'fruitItem'], ['treSfxHit', 'sfxHit'], ['treSfxFall', 'sfxFall']];
+function treRenderInfo() {
+  const id = treId(tre);
+  treEl('treIdPreview').textContent = treEditingId
+    ? `Editing ${id}.c — the tree "${id}", planted from the item "${id}_seed".`
+    : `Saves as ${id}.c — the tree "${id}", planted from the item "${id}_seed".`;
+}
+function treRender() {
+  treEl('treName').value = tre.name;
+  treEl('treSeedName').value = tre.seedName;
+  treEl('treFruit').checked = tre.fruit;
+  TRE_NUMS.forEach(([el, k]) => { treEl(el).value = tre[k]; });
+  TRE_TEXTS.forEach(([el, k]) => { treEl(el).value = tre[k]; });
+  treEl('treFruitSeason').value = String([1, 2, 4, 8].includes(tre.fruitSeasons) ? tre.fruitSeasons : 1);
+  treEl('treFruitCard').style.display = tre.fruit ? '' : 'none';
+  document.querySelectorAll('.treWildOnly').forEach(e => { e.style.display = tre.fruit ? 'none' : ''; });
+  treEl('trePrevMoss').disabled = tre.fruit;
+  const seed = tre.seedIcon || tre.art.stage_0_0 || null, sc = treEl('treSeedIcon');
+  sc.width = seed ? seed.w : 16; sc.height = seed ? seed.h : 16;
+  cropDrawImg(sc, seed, 1, false);
+  treRenderGrid();
+  treRenderPreview();
+  treRenderInfo();
+}
+function treReadForm() {
+  tre.name = treEl('treName').value.trim();
+  tre.seedName = treEl('treSeedName').value.trim();
+  TRE_NUMS.forEach(([el, k, lo, hi]) => { tre[k] = aniClampInt(treEl(el).value, lo, hi, tre[k]); });
+  TRE_TEXTS.forEach(([el, k]) => { tre[k] = treEl(el).value.trim(); });
+  tre.fruitSeasons = +treEl('treFruitSeason').value || 1;
+}
+
+// ---- putting art in a box ----
+function treFits(key, img) {
+  const row = treKeyRow(key);
+  if (row && row.leaf) return img.h === TRE_LEAF && img.w % TRE_LEAF === 0 && img.w <= TRE_LEAF * TRE_LEAF_FRAMES ? '' : `Leaves are 16×16 frames side by side (up to ${TRE_LEAF_FRAMES}) — this is ${img.w}×${img.h}.`;
+  if (img.w > TRE_W || img.h > TRE_H) return `At most ${TRE_W}×${TRE_H} — this is ${img.w}×${img.h}.`;
+  return '';
+}
+// Trims see-through rows off the top and bottom (a piece stands on its art's bottom) and columns evenly off both sides.
+function treTrim(img) {
+  const op = (x, y) => img.rgba[(y * img.w + x) * 4 + 3] >= 128;
+  let y0 = 0, y1 = img.h - 1, x0 = 0, x1 = img.w - 1;
+  const rowEmpty = y => { for (let x = 0; x < img.w; x++) if (op(x, y)) return false; return true; };
+  const colEmpty = x => { for (let y = 0; y < img.h; y++) if (op(x, y)) return false; return true; };
+  while (y0 < y1 && rowEmpty(y0)) y0++;
+  while (y1 > y0 && rowEmpty(y1)) y1--;
+  while (x0 < x1 && colEmpty(x0) && colEmpty(x1)) { x0++; x1--; }
+  return cropSub(img, x0, y0, x1 - x0 + 1, y1 - y0 + 1);
+}
+function treSetArt(key, img, append) {
+  const row = treKeyRow(key);
+  if (row && row.leaf) {
+    if (img.w > TRE_LEAF || img.h > TRE_LEAF) img = treTrim(img);
+    img = img.w === TRE_LEAF && img.h === TRE_LEAF ? img : cropPadBottom(img, TRE_LEAF, TRE_LEAF);
+    const old = tre.art[key];
+    if (append && old && old.w < TRE_LEAF * TRE_LEAF_FRAMES) {   // one more frame on the strip
+      const strip = { w: old.w + TRE_LEAF, h: TRE_LEAF, rgba: new Uint8ClampedArray((old.w + TRE_LEAF) * TRE_LEAF * 4) };
+      for (let y = 0; y < TRE_LEAF; y++) {
+        strip.rgba.set(old.rgba.subarray(y * old.w * 4, (y + 1) * old.w * 4), y * strip.w * 4);
+        strip.rgba.set(img.rgba.subarray(y * TRE_LEAF * 4, (y + 1) * TRE_LEAF * 4), (y * strip.w + old.w) * 4);
+      }
+      img = strip;
+    }
+  } else img = treTrim(img);
+  const bad = treFits(key, img);
+  if (bad) { treStatus(bad, true); return false; }
+  tre.art[key] = img;
+  treStatus('');
+  return true;
+}
+// The box after `key` the sheet picker moves on to: down the same season's column.
+function treNextTarget(key) {
+  const s = treKeySeason(key), rows = TRE_ROWS.filter(r => treCellUsed(r, s, tre));
+  const i = rows.findIndex(r => r.key(s) === key);
+  return i >= 0 && i + 1 < rows.length ? rows[i + 1].key(s) : key;
+}
+async function treTakeFile(file, key) {
+  if (!file) return;
+  let img;
+  try { img = await cropReadPng(file); } catch (e) { treStatus(`Couldn't read ${file.name}: ${e.message}`, true); return; }
+  if (key === 'seedIcon') {
+    if (img.w > 32 || img.h > 32) { treStatus(`A seed icon is at most 32×32 — ${file.name} is ${img.w}×${img.h}.`, true); return; }
+    tre.seedIcon = img;
+  } else if (!treSetArt(key, img, false)) return;
+  treRender();
+}
+
+// ---- the sprite sheet ----
+function treSheetMsg(text) {
+  const row = treKeyRow(treTarget), s = treKeySeason(treTarget);
+  treEl('treSheetMsg').textContent = text || `Click a sprite (or drag a box round it): it goes in ${TRE_SEASONS[s]} · ${row ? row.label.replace(/^\d · /, '') : treTarget}.${row && row.leaf ? ' Shift-click adds another leaf frame.' : ''}`;
+}
+function treSheetDraw() {
+  const cv = treEl('treSheetCanvas');
+  if (!treSheet) { cv.width = 16; cv.height = 16; return; }
+  const z = +treEl('treSheetZoom').value || 2;
+  cv.width = treSheet.w * z; cv.height = treSheet.h * z;
+  const g = cv.getContext('2d');
+  g.imageSmoothingEnabled = false;
+  g.fillStyle = '#2a2a2a'; g.fillRect(0, 0, cv.width, cv.height);
+  g.drawImage(treSheet.canvas, 0, 0, cv.width, cv.height);
+  if (treSheetDrag && treSheetDrag.b) {
+    const r = treSheetDragRect();
+    g.strokeStyle = '#40c8ff'; g.lineWidth = 1;
+    g.strokeRect(r.x * z + 0.5, r.y * z + 0.5, r.w * z - 1, r.h * z - 1);
+  }
+}
+function treSheetPos(e) {
+  const cv = treEl('treSheetCanvas'), r = cv.getBoundingClientRect(), z = +treEl('treSheetZoom').value || 2;
+  return { x: Math.floor((e.clientX - r.left) * cv.width / r.width / z), y: Math.floor((e.clientY - r.top) * cv.height / r.height / z) };
+}
+function treSheetDragRect() {
+  const a = treSheetDrag.a, b = treSheetDrag.b;
+  return { x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), w: Math.abs(b.x - a.x) + 1, h: Math.abs(b.y - a.y) + 1 };
+}
+// The opaque blob under (x,y) (8-connected), as a rect — or null.
+function treSheetBlob(x, y) {
+  const S = treSheet, op = (px, py) => px >= 0 && py >= 0 && px < S.w && py < S.h && S.rgba[(py * S.w + px) * 4 + 3] >= 128;
+  if (!op(x, y)) {   // a click just off the art: the nearest opaque pixel within 3
+    let best = null;
+    for (let d = 1; d <= 3 && !best; d++) for (let dy = -d; dy <= d && !best; dy++) for (let dx = -d; dx <= d; dx++) if (op(x + dx, y + dy)) { best = [x + dx, y + dy]; break; }
+    if (!best) return null;
+    [x, y] = best;
+  }
+  const seen = new Uint8Array(S.w * S.h), stack = [[x, y]];
+  let x0 = x, y0 = y, x1 = x, y1 = y, n = 0;
+  seen[y * S.w + x] = 1;
+  while (stack.length && n < 40000) {
+    const [cx, cy] = stack.pop(); n++;
+    if (cx < x0) x0 = cx; if (cx > x1) x1 = cx; if (cy < y0) y0 = cy; if (cy > y1) y1 = cy;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+      const nx = cx + dx, ny = cy + dy;
+      if (op(nx, ny) && !seen[ny * S.w + nx]) { seen[ny * S.w + nx] = 1; stack.push([nx, ny]); }
+    }
+  }
+  return { x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 };
+}
+function treSheetPick(r, shift) {
+  const row = treKeyRow(treTarget);
+  if (treEl('treSheetSnap').checked) {   // out to the 16px columns it touches (the sheet's own centring)
+    const x0 = Math.floor(r.x / 16) * 16, x1 = Math.min(treSheet.w, Math.ceil((r.x + r.w) / 16) * 16);
+    r = { x: x0, y: r.y, w: x1 - x0, h: r.h };
+    if (row && row.leaf) { const y0 = Math.floor(r.y / 16) * 16; r = { x: x0, y: y0, w: 16, h: Math.min(16, treSheet.h - y0) }; }
+  }
+  const img = cropSub(treSheet, r.x, r.y, r.w, r.h);
+  if (!treSetArt(treTarget, img, shift)) return;
+  if (!(row && row.leaf && shift)) treTarget = treNextTarget(treTarget);
+  treRender();
+  treSheetMsg();
+}
+async function treSheetLoad(file) {
+  if (!file) return;
+  try {
+    const img = await cropReadPng(file), cv = document.createElement('canvas');
+    cv.width = img.w; cv.height = img.h;
+    cv.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(img.rgba), img.w, img.h), 0, 0);
+    treSheet = { ...img, canvas: cv, name: file.name };
+    treSheetDraw();
+    treSheetMsg();
+  } catch (e) { treSheetMsg(`Couldn't read ${file.name}: ${e.message}`); }
+}
+
+// ---- the folder: assets/trees ----
+async function getTreesDir(allowPrompt, pickNew) {
+  if (!pickNew && axRoot && await axHasPermission(false)) {
+    try { return await axRoot.getDirectoryHandle('trees', { create: true }); } catch (e) { /* fall through */ }
+  }
+  if (!pickNew) {
+    if (!treesDirHandle) { try { treesDirHandle = (await idbGet(TREES_DIR_KEY)) || null; } catch (e) { treesDirHandle = null; } }
+    if (treesDirHandle && await verifyWritePermission(treesDirHandle, allowPrompt)) return treesDirHandle;
+    if (!allowPrompt) return null;
+  }
+  if (!window.showDirectoryPicker) { alert('Your browser can\'t open folders (needs Chrome or Edge) — saved trees download instead; copy them into assets/trees/.'); return null; }
+  try { treesDirHandle = await window.showDirectoryPicker({ id: 'captureitTrees', mode: 'readwrite' }); } catch (e) { return null; }
+  try { await idbSet(TREES_DIR_KEY, treesDirHandle); } catch (e) { /* just won't be remembered */ }
+  return treesDirHandle;
+}
+async function treFolderStatus() {
+  const dir = await getTreesDir(false);
+  if (!treEl('treExportStatus').textContent)
+    treStatus(dir ? `Saves into "${dir.name}" (should be assets/trees).` : 'No trees folder chosen — Save downloads the .c; put it in assets/trees/ and build.');
+}
+
+// ---- save: one .c with the tree and its seed ----
+function treProblems(t) {
+  const p = [];
+  if (!t.name) p.push('Give the tree a name.');
+  if (treId(t) === 'none') p.push('"none" is reserved — pick another name.');
+  for (let k = 0; k < 4; k++) if (!t.art[`stage_0_${k}`]) p.push(`Load its spring ${['seed', 'sprout', 'sapling', 'bush'][k]} art.`);
+  if (!t.art.grown_0) p.push('Load its spring grown art (the canopy).');
+  for (let s = 0; s < 4; s++) {
+    const l = treLook(t, s, 4, false), ml = treLook(t, s, 4, true);
+    for (const x of [l, ml]) if (x.main && (x.main.h + (x.log ? x.log.h : 0) > TRE_H)) p.push(`${TRE_SEASONS[s]}: the canopy on its log is ${x.main.h + x.log.h} tall — at most ${TRE_H}.`);
+  }
+  for (const [k, img] of Object.entries(t.art)) { const bad = treFits(k, img); if (bad) p.push(`${k}: ${bad}`); }
+  for (const v of [t.wood, t.chopTool, t.fruit ? t.fruitItem : '']) if (v && !ITEM_ID_RE.test(v)) p.push(`"${v}" isn't an item id (lowercase letters, digits and _).`);
+  if (t.fruit && !t.fruitItem) p.push('A fruit tree needs its fruit item.');
+  if (t.woodMax < t.woodMin || t.stumpWoodMax < t.stumpWoodMin) p.push('A wood range goes from the smaller number to the bigger one.');
+  return [...new Set(p)];
+}
+function treBuildC(t) {
+  const id = treId(t), seedId = `${id}_seed`, name = t.name, seedName = t.seedName || `${name} Seed`;
+  const art = {};
+  for (const [k, img] of Object.entries(t.art)) if (treCellUsed(treKeyRow(k), treKeySeason(k), t)) art[k] = img;
+  const keys = Object.keys(art).sort(), seedIcon = t.seedIcon || art.stage_0_0;
+  const meta = { name, seedName, fruit: t.fruit, wood: t.wood, chopTool: t.chopTool, fruitItem: t.fruit ? t.fruitItem : '', fruitSeasons: t.fruit ? t.fruitSeasons : 0,
+                 fruitDays: t.fruitDays, fruitMax: t.fruitMax, sfxHit: t.sfxHit, sfxFall: t.sfxFall, seedPrice: t.seedPrice, buyPrice: t.buyPrice,
+                 growDays: t.growDays, hits: t.hits, bushHits: t.bushHits, stumpHits: t.stumpHits, woodMin: t.woodMin, woodMax: t.woodMax, seedMax: t.fruit ? 0 : t.seedMax,
+                 bushWood: t.bushWood, stumpWoodMin: t.stumpWoodMin, stumpWoodMax: t.stumpWoodMax, shakeSeedMax: t.fruit ? 0 : t.shakeSeedMax, mossPct: t.fruit ? 0 : t.mossPct,
+                 art: Object.fromEntries(keys.map(k => [k, [art[k].w, art[k].h]])), seedIcon: [seedIcon.w, seedIcon.h] };
+  const ref = k => `{ ${art[k].w}, ${art[k].h}, k_tree_${id}_${k} }`, str = v => v ? `"${cString(v)}"` : 'NULL';
+  const stageRows = [0, 1, 2, 3].map(s => {
+    const cells = [0, 1, 2, 3].filter(k => art[`stage_${s}_${k}`]).map(k => `[${k}] = ${ref(`stage_${s}_${k}`)}`);
+    return cells.length ? `        [${s}] = { ${cells.join(', ')} },` : null;
+  }).filter(Boolean);
+  const groups = [['grown', 'grown'], ['moss', 'moss'], ['log', 'log'], ['stump', 'stump'], ['stumpmoss', 'stump_moss'], ['leaf', 'leaf']].map(([g, f]) => {
+    const cells = [0, 1, 2, 3].filter(s => art[`${g}_${s}`]).map(s => `[${s}] = ${ref(`${g}_${s}`)}`);
+    return cells.length ? `    .${f} = { ${cells.join(', ')} },` : null;
+  }).filter(Boolean);
+  const seedAttrs = [];
+  if (t.seedPrice > 0) seedAttrs.push([ITEM_SELL_ATTR, t.seedPrice]);
+  if (t.buyPrice > 0) seedAttrs.push([ITEM_BUY_ATTR, t.buyPrice], ['shop', 1]);
+  const seedPx = cropPack(seedIcon), days = t.growDays;
+  let summary = `// Grown after ${days} game day${days === 1 ? '' : 's'}. Felled: ${t.woodMin}-${t.woodMax} ${t.wood}, 0-${meta.seedMax} seeds (${t.hits} ${t.chopTool} hits).`;
+  if (t.fruit) summary += ` Fruit: ${t.fruitItem} every ${t.fruitDays} days.`;
+  const lines = [
+    `// AUTO-GENERATED by gameTools.html (Trees Editor) — "${name.replace(/\r?\n/g, ' ')}"`,
+    `// Lives in assets/trees/ as ${id}.c — the file name is the tree id, keep it.`,
+    `// One tree = the tree below + its seed item "${seedId}" ("${seedName}", what's planted).`,
+    summary,
+    '// Everything here is const: it stays in flash (no RAM). RGB565, 0x0000 = see-through.',
+    `// TREES-EDITOR ${JSON.stringify(meta)}`,
+    '#include "items.h"',
+    '#include "trees.h"',
+    ''];
+  for (const k of keys) { const px = cropPack(art[k]); lines.push(`static const uint16_t k_tree_${id}_${k}[${px.length}] = {`, u16FrameToCArray(px), '};'); }
+  lines.push('',
+    `const tree_def_t k_tree_${id} = {`,
+    `    .id = "${id}",`,
+    `    .name = "${cString(name)}",`,
+    `    .fruit = ${t.fruit ? 'true' : 'false'},`,
+    `    .grow_days = ${days},`,
+    '    .stage = {', ...stageRows, '    },',
+    ...groups,
+    `    .hits = ${t.hits}, .bush_hits = ${t.bushHits}, .stump_hits = ${t.stumpHits},`,
+    `    .wood_min = ${t.woodMin}, .wood_max = ${t.woodMax}, .seed_max = ${meta.seedMax}, .bush_wood = ${t.bushWood},`,
+    `    .stump_wood_min = ${t.stumpWoodMin}, .stump_wood_max = ${t.stumpWoodMax}, .shake_seed_max = ${meta.shakeSeedMax}, .moss_pct = ${meta.mossPct},`,
+    `    .wood = ${str(t.wood)}, .chop_tool = ${str(t.chopTool)},`,
+    `    .fruit_item = ${str(meta.fruitItem)}, .fruit_seasons = ${meta.fruitSeasons}, .fruit_days = ${t.fruitDays}, .fruit_max = ${t.fruitMax},`,
+    `    .sfx_hit = ${str(t.sfxHit)}, .sfx_fall = ${str(t.sfxFall)},`,
+    '};',
+    '',
+    `// The ${t.fruit ? 'sapling' : 'seed'}: hold it and tap open ground to plant the tree.`,
+    `static const uint16_t k_${seedId}_icon_pixels[${seedPx.length}] = {`, u16FrameToCArray(seedPx), '};');
+  if (seedAttrs.length) lines.push(`static const item_attr_t k_${seedId}_attrs[] = {`, ...seedAttrs.map(a => `    { "${a[0]}", ${a[1]} },`), '};');
+  lines.push(`const item_asset_t k_item_${seedId} = {`,
+    `    .id = "${seedId}",`,
+    `    .display_name = "${cString(seedName)}",`,
+    '    .max_stack = 99,',
+    `    .passive = { .w=${seedIcon.w}, .h=${seedIcon.h}, .frame_count=1, .interval_ms=150, .loop_count=-1, .pixels=k_${seedId}_icon_pixels },`,
+    '    .use = { .frame_count = 0 },',
+    `    .attrs = ${seedAttrs.length ? `k_${seedId}_attrs` : 'NULL'},`,
+    `    .attr_count = ${seedAttrs.length},`,
+    '};');
+  return lines.join('\n') + '\n';
+}
+async function exportTree() {
+  treReadForm();
+  const t = tre, problems = treProblems(t);
+  if (problems.length) { alert(problems.join('\n')); return; }
+  const id = treId(t), seedId = `${id}_seed`;
+  if (itemList.find(it => it.id === seedId) && treEditingId !== id &&
+      !confirm(`The item list already has "${seedId}". If something else makes it too, the build will stop with a clash. Save anyway?`)) return;
+  const known = new Set(itemList.map(i => i.id));
+  const unknown = [t.wood, t.chopTool, t.fruit ? t.fruitItem : ''].filter(v => v && !known.has(v));
+  if (unknown.length && !confirm(`${unknown.join(', ')} ${unknown.length === 1 ? "isn't an item" : "aren't items"} the editor knows. The game ignores an id it doesn't have. Save anyway?`)) return;
+  const text = treBuildC(t);
+  const dir = await getTreesDir(false);
+  if (dir) {
+    let exists = false;
+    try { await dir.getFileHandle(`${id}.c`); exists = true; } catch (e) { /* new */ }
+    if (exists && treEditingId !== id && !confirm(`${id}.c already exists in "${dir.name}". Replace it?`)) return;
+    try {
+      const w = await (await dir.getFileHandle(`${id}.c`, { create: true })).createWritable();
+      await w.write(text);
+      await w.close();
+      treStatus(`Saved ${id}.c into "${dir.name}" — build and flash to put it in the game. The Map Editor's Tree tool can put it on maps.`);
+    } catch (e) { alert(`Couldn't write ${id}.c into "${dir.name}": ${e.message}`); return; }
+  } else {
+    const l = document.createElement('a');
+    l.href = URL.createObjectURL(new Blob([text], { type: 'text/x-c' }));
+    l.download = `${id}.c`;
+    l.click();
+    URL.revokeObjectURL(l.href);
+    treStatus(`Downloaded ${id}.c — put it in assets/trees/, then build and flash.`);
+  }
+  upsertItem(seedId, t.seedName || `${t.name} Seed`);
+  treEditingId = id;
+  if (typeof mtLib !== 'undefined') mtLib = null;   // the Map Editor's Tree tool reads them again
+  treRenderInfo();
+}
+
+// ---- reading a saved .c back in (the Map Editor's Tree tool reads them with this too) ----
+function treParseC(text) {
+  const mm = text.match(/^\/\/ TREES-EDITOR (\{.*\})$/m);
+  if (!mm) throw new Error('This .c has no Trees Editor information — was it saved from the Trees Editor?');
+  const meta = JSON.parse(mm[1]);
+  const idm = text.match(/const tree_def_t k_tree_(\w+) =/);
+  if (!idm) throw new Error('No tree in this file.');
+  const id = idm[1], arrays = {};
+  for (const x of text.matchAll(/static const uint16_t (\w+)\[\d+\] = \{([^}]*)\}/g))
+    arrays[x[1]] = Uint16Array.from(x[2].match(/0x[0-9a-fA-F]+/g) || [], v => parseInt(v, 16));
+  const t = { ...treBlank() };
+  for (const k of Object.keys(t)) if (k !== 'art' && k !== 'seedIcon' && meta[k] !== undefined) t[k] = meta[k];
+  t.art = {};
+  for (const [k, [w, h]] of Object.entries(meta.art || {})) {
+    const px = arrays[`k_tree_${id}_${k}`];
+    if (px && px.length === w * h) t.art[k] = cropUnpack(px, w, h);
+  }
+  const si = meta.seedIcon, sp = arrays[`k_${id}_seed_icon_pixels`];
+  if (si && sp && sp.length === si[0] * si[1]) {
+    const icon = cropUnpack(sp, si[0], si[1]), st = t.art.stage_0_0;
+    t.seedIcon = st && st.w === icon.w && st.h === icon.h && st.rgba.every((v, i) => v === icon.rgba[i]) ? null : icon;   // the seed stage's art: follows it
+  }
+  if (!t.fruitSeasons) t.fruitSeasons = 1;
+  return { id, t };
+}
+async function treOpenFile(file) {
+  if (!file) return;
+  try {
+    const r = treParseC(await file.text());
+    if (tre && (tre.name || Object.keys(tre.art).length) && treEditingId !== r.id && !confirm('Replace the tree you\'re working on? Anything not saved is lost.')) return;
+    tre = r.t; treEditingId = r.id; treTarget = 'stage_0_0';
+    treStatus(`Opened ${file.name} — Save tree writes ${r.id}.c.`);
+    treRender();
+  } catch (e) { alert(`${file.name}: ${e.message}`); }
+}
+function treFillItemList() {
+  const list = treEl('treItemList');
+  list.innerHTML = '';
+  itemList.map(i => i.id).sort().forEach(id => list.appendChild(new Option(itemLabel(id), id)));
+}
+
+// ---- tab open / close (the Game Tools tab bar calls these) ----
+function openTreeEditor() {
+  treEl('treEdOverlay').classList.add('show');
+  if (!tre) tre = treBlank();
+  treFillItemList();
+  treRender();
+  treFolderStatus();
+}
+function closeTreeEditor() { treEl('treEdOverlay').classList.remove('show'); }
+
+// ---- wiring ----
+(() => {
+  treEl('treName').addEventListener('input', () => { tre.name = treEl('treName').value.trim(); treRenderInfo(); });
+  treEl('treSeedName').addEventListener('input', () => { tre.seedName = treEl('treSeedName').value.trim(); });
+  treEl('treFruit').addEventListener('change', () => {
+    treReadForm();
+    tre.fruit = treEl('treFruit').checked;
+    if (tre.fruit && tre.growDays === 10) tre.growDays = 28;    // fruit trees take 28 days, wild ones 10...
+    else if (!tre.fruit && tre.growDays === 28) tre.growDays = 10;
+    if (tre.fruit && tre.wood === 'wood') tre.wood = 'hardwood';   // ...and fruit trees give hardwood
+    else if (!tre.fruit && tre.wood === 'hardwood') tre.wood = 'wood';
+    if (!treCellUsed(treKeyRow(treTarget), treKeySeason(treTarget), tre)) treTarget = 'stage_0_0';
+    treRender();
+  });
+  [...TRE_NUMS.map(n => n[0]), ...TRE_TEXTS.map(n => n[0]), 'treFruitSeason'].forEach(el => treEl(el).addEventListener('change', () => { treReadForm(); treRenderPreview(); }));
+  ['trePrevSeason', 'trePrevStage', 'trePrevMoss', 'trePrevFruit'].forEach(el => treEl(el).addEventListener('input', treRenderPreview));
+  treEl('treNewBtn').onclick = () => {
+    if (tre && (tre.name || Object.keys(tre.art).length) && !confirm('Start a new tree? Anything not saved is lost.')) return;
+    tre = treBlank(); treEditingId = null; treTarget = 'stage_0_0';
+    treStatus('');
+    treRender();
+    treEl('treName').focus();
+  };
+  treEl('treFolderBtn').onclick = async () => { treStatus(''); await getTreesDir(true, true); treFolderStatus(); };
+  treEl('treExportBtn').onclick = exportTree;
+  treEl('treOpenFile').addEventListener('change', e => { const f = e.target.files[0]; e.target.value = ''; treOpenFile(f); });
+  treEl('treArtFile').addEventListener('change', e => { const f = e.target.files[0]; e.target.value = ''; treTakeFile(f, treEl('treArtFile').dataset.key || treTarget); });
+  treEl('treLoadBtn').onclick = () => { treEl('treArtFile').dataset.key = treTarget; treEl('treArtFile').click(); };
+  treEl('treClearBtn').onclick = () => { delete tre.art[treTarget]; treRender(); };
+  treEl('treCopyBtn').onclick = () => {
+    const img = tre.art[treTarget];
+    if (!img) { treStatus('The picked box is empty.', true); return; }
+    const row = treKeyRow(treTarget);
+    for (let s = treKeySeason(treTarget) + 1; s < 4; s++) if (treCellUsed(row, s, tre) && !tre.art[row.key(s)]) tre.art[row.key(s)] = img;
+    treRender();
+  };
+  const seed = treEl('treSeedIcon');
+  seed.addEventListener('click', () => { treEl('treArtFile').dataset.key = 'seedIcon'; treEl('treArtFile').click(); });
+  seed.addEventListener('contextmenu', e => { e.preventDefault(); tre.seedIcon = null; treRender(); });
+  seed.addEventListener('dragover', e => e.preventDefault());
+  seed.addEventListener('drop', e => { e.preventDefault(); treTakeFile(e.dataTransfer.files[0], 'seedIcon'); });
+  treEl('treSheetBtn').onclick = () => { const box = treEl('treSheetBox'); box.hidden = !box.hidden; if (!box.hidden && !treSheet) treEl('treSheetFile').click(); treSheetMsg(); };
+  treEl('treSheetLoad').onclick = () => treEl('treSheetFile').click();
+  treEl('treSheetFile').addEventListener('change', e => { const f = e.target.files[0]; e.target.value = ''; treSheetLoad(f); });
+  treEl('treSheetZoom').addEventListener('change', treSheetDraw);
+  const sc = treEl('treSheetCanvas');
+  sc.addEventListener('mousedown', e => { if (!treSheet) return; e.preventDefault(); treSheetDrag = { a: treSheetPos(e), b: null }; });
+  sc.addEventListener('mousemove', e => { if (!treSheetDrag) return; treSheetDrag.b = treSheetPos(e); treSheetDraw(); });
+  window.addEventListener('mouseup', e => {
+    if (!treSheetDrag) return;
+    const d = treSheetDrag, b = d.b || d.a;
+    treSheetDrag = null;
+    const dragged = Math.abs(b.x - d.a.x) >= 2 || Math.abs(b.y - d.a.y) >= 2;
+    const r = dragged ? { x: Math.max(0, Math.min(d.a.x, b.x)), y: Math.max(0, Math.min(d.a.y, b.y)), w: Math.abs(b.x - d.a.x) + 1, h: Math.abs(b.y - d.a.y) + 1 } : treSheetBlob(d.a.x, d.a.y);
+    treSheetDraw();
+    if (!r) { treSheetMsg('Nothing there — click on a sprite (or drag a box round it).'); return; }
+    treSheetPick(r, e.shiftKey);
+  });
+})();
+</script>
+
+<script>
+// ================================================================
 //  FARM TAB — the Game Tools "Farm" tab: three pages under a second bar
 //  (#farmBar): the Animals Editor (above), and two makers here —
 //   BARNS, COOPS & SILOS — a building (the Buildings Editor's file and
@@ -21999,6 +23085,8 @@ function closeShopEditor() { shEl('shEdOverlay').classList.remove('show'); }
     else if (document.getElementById('itemOverlay').classList.contains('show')) closeItemModal();
     if (tool === 'crop') openCropEditor();
     else if (document.getElementById('cropEdOverlay').classList.contains('show')) closeCropEditor();
+    if (tool === 'tree') openTreeEditor();
+    else if (document.getElementById('treEdOverlay').classList.contains('show')) closeTreeEditor();
     if (tool === 'building') openBuildingEditor();
     else if (document.getElementById('bldEdOverlay').classList.contains('show')) closeBuildingEditor();
     if (tool === 'animal') tool = 'farm';   // (the Animals Editor is a page of the Farm tab now)
@@ -22013,14 +23101,14 @@ function closeShopEditor() { shEl('shEdOverlay').classList.remove('show'); }
     else if (document.getElementById('shEdOverlay').classList.contains('show')) closeShopEditor();
     if (tool === 'wardrobe') openWardrobe(); else closeWardrobe();
     tabs.forEach(t => t.classList.toggle('on', t.dataset.tool === tool));
-    if (tool !== 'farm') document.title = 'Game Tools · ' + { map: 'Map Editor', item: 'Item Editor', crop: 'Crops Editor', building: 'Buildings Editor', machine: 'Machines Editor', image: 'Image Editor', needs: 'Needs You', furniture: 'Furniture', wardrobe: 'Wardrobe', fishing: 'Fishing', shop: 'Shop Editor' }[tool];
+    if (tool !== 'farm') document.title = 'Game Tools · ' + { map: 'Map Editor', item: 'Item Editor', crop: 'Crops Editor', tree: 'Trees Editor', building: 'Buildings Editor', machine: 'Machines Editor', image: 'Image Editor', needs: 'Needs You', furniture: 'Furniture', wardrobe: 'Wardrobe', fishing: 'Fishing', shop: 'Shop Editor' }[tool];
     if (tool === 'image') frame.focus(); else if (document.activeElement === frame) frame.blur();
     try { localStorage.setItem('gameTools.tool', tool); } catch {}
   }
   window.gtShowTool = showTool;
   tabs.forEach(t => t.addEventListener('click', () => showTool(t.dataset.tool)));
   let tool = 'map';
-  try { const t = localStorage.getItem('gameTools.tool'); if (t === 'item' || t === 'crop' || t === 'building' || t === 'animal' || t === 'farm' || t === 'machine' || t === 'image' || t === 'needs' || t === 'furniture' || t === 'wardrobe' || t === 'fishing' || t === 'shop') tool = t; } catch {}
+  try { const t = localStorage.getItem('gameTools.tool'); if (t === 'item' || t === 'crop' || t === 'tree' || t === 'building' || t === 'animal' || t === 'farm' || t === 'machine' || t === 'image' || t === 'needs' || t === 'furniture' || t === 'wardrobe' || t === 'fishing' || t === 'shop') tool = t; } catch {}
   showTool(tool);
 })();
 </script>

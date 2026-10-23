@@ -457,8 +457,8 @@ def compose(o, wd, held=False):
                 own_left = d == 'left' and hair.h // hair.ch > 3
                 blit(layers['hair'], 0, 3 if own_left else {'down': 0, 'right': 1, 'left': 1, 'up': 2}[d],
                      BOX_X, BOX_Y + dy, d == 'left' and not own_left)
-            blit(layers['body'], f, (8 if held else 4) + r, BOX_X, BOX_Y)   # the arms, over the shirt
             blit(layers['hat'], 0, r, BOX_X + HAT_X, BOX_Y + HAT_Y + dy)
+            blit(layers['body'], f, (8 if held else 4) + r, BOX_X, BOX_Y)   # the arms, over the shirt and the hat
             out.append(cv)
     return out
 

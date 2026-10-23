@@ -35,6 +35,7 @@ static const uint16_t k_scythe_passive_pixels[256] = {
 static const item_attr_t k_scythe_attrs[] = {
     { "buyable", 250 },
     { "cuts", 1 },
+    { "tool", 1 },
 };
 
 const item_asset_t k_item_scythe = {
@@ -44,5 +45,5 @@ const item_asset_t k_item_scythe = {
     .passive = { .w=16, .h=16, .frame_count=1, .interval_ms=150, .loop_count=-1, .pixels=k_scythe_passive_pixels },
     .use = { .frame_count = 0 },
     .attrs = k_scythe_attrs,
-    .attr_count = 2,
+    .attr_count = 3,
 };

@@ -23,8 +23,8 @@ typedef uint16_t item_id_t;
 // frame_bundle.h — shared with map animations and breakable hit effects).
 // A 0x0000 pixel is transparent, same colorkey rule the map exporter uses.
 //  - passive: loop_count is always -1 (loops the whole time it's held).
-//  - use: frame_count == 0 means "no animation"; otherwise loop_count is
-//    how many times the swing plays before holding its last frame.
+//  - use: a tool's swing art (see "Tools" below), drawn on the player while
+//    it's swung; frame_count == 0 means none.
 
 // One name/value pair. Gameplay code reads these by name (item_attr() below)
 // instead of new C code being written per attribute — e.g. "sellable 25".
@@ -146,6 +146,23 @@ bool                item_droppable(item_id_t item);
 // can be planted in (FARMING in main.c). Add the attribute in the Item Editor.
 #define ITEM_ATTR_TILLS "tills"
 
+// Tools (TOOL SWING in main.c; the Item Editor's "Tool use" box): "tool 1"
+// makes the item swing whenever it's used on what the player walked up to —
+// its `use` art (16x32, drawn right on the player; behind them facing up;
+// 1 frame = every way, 3 = down, up, sideways, 4 = down, up, left, right;
+// interval_ms = how long the swing shows), a swipe through the tile in front
+// ("tool_swipe 0" = none), and a sound: "tool_sfx:<name>" 1 (a WAV in the
+// SD card's sounds/sound effects, without .wav; several = one at random).
+// The hit on a breakable / farmland lands mid-swing.
+// "tool_power N": hits one swing lands on a breakable (none = 1).
+// "counts_as:<item id>" 1: a breakable that needs that item takes this one
+// too (a copper axe "counts_as:axe").
+#define ITEM_ATTR_TOOL         "tool"
+#define ITEM_ATTR_TOOL_SWIPE   "tool_swipe"
+#define ITEM_ATTR_TOOL_POWER   "tool_power"
+#define ITEM_ATTR_TOOL_SFX     "tool_sfx:"
+#define ITEM_ATTR_COUNTS_AS    "counts_as:"
+
 // Watering: an item with "waters 1" (the Item Editor's "Watering can") is a
 // watering can — used on farmland (or a crop in it) it waters it for the
 // day. Crops only grow on days their farmland was watered (FARMING in main.c).
@@ -220,6 +237,20 @@ bool                item_droppable(item_id_t item);
 // N tiles of it (7 = the 15x15 square around it).
 #define ITEM_ATTR_SPRINKLER  "sprinkler"
 #define ITEM_ATTR_SCARECROW  "scarecrow"
+
+// Market board: a prop with "market_board 1" (the Item Editor's "Market board")
+// opens the MARKET BOARD when tapped — today's demand for every market type,
+// the day's photo requests and the capture book (main.c MARKET BOARD). Its
+// screen's PICK UP button takes it back. A map object can do the same with the
+// "market_board" action.
+#define ITEM_ATTR_MARKET_BOARD "market_board"
+// Market types (main.c "Market types + today's demand"; pipeline_msgs.h CAM_TYPES):
+// "types" = bits 0-30, "types2" = bits 31-61 of the item's types (bit k = type k).
+// Each type's demand moves every day (x0.1 .. x10) and the item sells for the
+// average of its types'. A photo item gets the ones the AI saw; the Item
+// Editor's "Market types" chips write them for any other item.
+#define ITEM_ATTR_TYPES        "types"
+#define ITEM_ATTR_TYPES2       "types2"
 
 // Crafting (CRAFTING in main.c; the Item Editor's "Crafting" card). A recipe
 // lives on the item it makes, one attribute per ingredient: "craft:" + the

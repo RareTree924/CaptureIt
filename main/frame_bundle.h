@@ -20,8 +20,9 @@
 //     is authoritative. -1 = loop forever (the old always-looping
 //     behavior). 0 or N = play that many passes, then hold the last
 //     frame — e.g. a one-shot splash effect placed on the map.
-//   - Item "use": same rule — loop_count is how many times the swing
-//     plays before holding.
+//   - Item "use" (a tool's swing art, TOOL SWING in main.c): not played as
+//     an animation — its frames are the swing facing each way, and
+//     interval_ms is how long the swing shows.
 //   - A breakable's hit flash: always exactly ONE pass, regardless of
 //     the bundle's own loop_count — repetition there comes from the
 //     hit count, not the bundle, so the same bundle can be shared with

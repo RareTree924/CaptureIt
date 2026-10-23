@@ -111,11 +111,13 @@
       "files": [
         {
           "path": "items/bed.c",
-          "marker": "Placeholder art"
+          "marker": "Placeholder art",
+          "done": true
         }
       ],
-      "done": false,
-      "reply": ""
+      "done": true,
+      "reply": "",
+      "doneOn": "2026-10-23"
     },
     {
       "id": "art_farm_buildings",
@@ -969,6 +971,217 @@
         "items/humpback_anglerfish.c",
         "items/atlantic_giant_squid.c",
         "items/bluefin_tuna.c"
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "art_tool_swings",
+      "kind": "art",
+      "title": "Tool swing art: Claude's picks from the Stardew tools sheet",
+      "what": "The axe and pickaxe are new items, and the hoe and watering can now use the Stardew icons too. Each one got Swing art cut from the Stardew tools sheet in your Downloads: 3 frames of 16x32 (facing down, facing up, sideways; facing left is the sideways frame mirrored). Claude guessed which sheet frames to use. They sit right on the player, and facing up they go behind them. To use your own, open the item in the Item Editor, go to the Swing tab and load your 16x32 PNG. 1 frame is used for every direction; 4 frames are down, up, left, right. Then Export. The Tool use box shows a preview of all 4 directions.",
+      "added": "2026-10-23",
+      "files": [
+        {
+          "path": "items/axe.c",
+          "marker": "Swap in your own swing frames"
+        },
+        {
+          "path": "items/pickaxe.c",
+          "marker": "Swap in your own swing frames"
+        },
+        {
+          "path": "items/hoe.c",
+          "marker": "Swap in your own swing frames"
+        },
+        {
+          "path": "items/watering_can.c",
+          "marker": "Swap in your own swing frames"
+        }
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "sound_tool_swings",
+      "kind": "sound",
+      "title": "Swing sounds for the tools",
+      "what": "Every swing plays the tool's Swing sound (Item Editor > Tool use box). Claude used WAVs that are already on your card: the hoe plays 'hoe', and the axe and pickaxe play 'hoeHit'. The watering can and the scythe have none. If you want Stardew's own sounds, put them in sd:sounds/sound effects as 16-bit mono 44.1 kHz WAVs and type each name (without .wav) into its tool's Swing sound box. Good ones: swordswipe for the scythe, wateringCan for the can, woodyHit for the axe. Trees and rocks still play their own hit and break sounds from the Map Editor on top of the swing sound.",
+      "added": "2026-10-23",
+      "files": [
+        "items/axe.c",
+        "items/pickaxe.c",
+        "items/hoe.c",
+        "items/watering_can.c",
+        "items/scythe.c"
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "test_tool_swings",
+      "kind": "test",
+      "title": "Try the tool swings, the splash and the new-item sparkle on the board",
+      "what": "These were built and compiled but not run on the board. Things to check: (1) tap a tree, a rock or tillable ground from all 4 sides holding the axe, pickaxe or hoe. The tool should show on the player, go behind them when facing up, and the swipe should sweep through the tile in front. Does the hit (and the tree's chop) land at the right moment, about 0.12 s in? (2) Cast a fishing rod: a splash ring should play where the bobber lands (orange in lava). (3) Pick something up, harvest, catch a fish or break something that drops an item: the sparkle should play over your head (after the catch card closes, for fish). The dev link has 'swing' (the held tool swings at whatever is in front) and 'sparkle'.",
+      "added": "2026-10-23",
+      "files": [
+        "../main/main.c"
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "test_flash_both_market",
+      "kind": "test",
+      "title": "Flash BOTH boards: the camera now sends market types and goes online faster",
+      "what": "pipeline_msgs.h changed (new CAM_MSG_TYPES), so flash the S3 (python tools/devlink.py flash --build) AND the ESP32-CAM (c:\\projects\\ESP32CamFirmware, idf.py -p COMx flash). Both are built. Then take two photos in a row. The CAM's summary line on the S3 should show (1) a shorter Wi-Fi time on the 2nd photo (it goes straight to the AP it used last time), and (2) masks and eBay overlapping (the total is less than Wi-Fi + upload + AI + masks + eBay added up). Hold the photo item in the bag: its card should list its types with today's demand (\"Round x3.2\"). If an older CAM is still flashed, photo items just get no types (x1).",
+      "added": "2026-10-23",
+      "files": [
+        "../main/pipeline_msgs.h",
+        "../main/main.c"
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "test_market_board",
+      "kind": "test",
+      "title": "Try the market board on the board",
+      "what": "Buy a Market Board in the Build shop and place it, or give a map object the 'Market board' action in the Map Editor and re-export the map. Tap it to open it. DEMAND lists all 50 types for today, best first, with arrows for yesterday's change. REQUESTS shows 3 photo requests; a photo item with that type pays the reward and stamps it DONE. CAPTURES is the capture book: every new kind of thing pays a bonus, and 5/10/25/50/100 kinds pay a prize. Without the camera you can use the dev link: 'board 0|1|2', 'demand', 'requests', and 'capture mug' (counts the held item as a capture of a mug). Check that the layout fits and nothing overlaps.",
+      "added": "2026-10-23",
+      "files": [
+        "../main/main.c"
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "art_market_board",
+      "kind": "art",
+      "title": "Market Board prop has placeholder art",
+      "what": "Claude drew a 32x32 notice board with pinned notes. To use your own art, open items/market_board.c in the Item Editor, load your art and Export. Keep 'Market board' ticked in the Placing box.",
+      "added": "2026-10-23",
+      "files": [
+        {
+          "path": "items/market_board.c",
+          "marker": "Placeholder art"
+        }
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "decision_market_numbers",
+      "kind": "decision",
+      "title": "Market board numbers Claude picked",
+      "what": "Claude chose these and you can change any of them. Photo request rewards are $150 (a look), $250 (a material or use) and $500 (a colour + a material or use), in k_req_reward in main.c. The first of each new kind in the capture book pays 25% of its price, at least $20 and at most $500. The capture book prizes are 5 kinds $250; 10 kinds $500 + 10 Deluxe Bait; 25 kinds $1500 + 10 Magic Bait; 50 kinds $5000 + Treasure Hunter; 100 kinds $20000 (k_capbook_prizes). Demand spread: about 10 types a day are at x3 or more, 10 at x0.33 or less, and 1-2 each hit x10 or x0.1 (DEMAND_FRESH / DEMAND_STRETCH). The Market Board costs $300. Reply with any changes.",
+      "added": "2026-10-23",
+      "files": [
+        "../main/main.c",
+        "items/market_board.c"
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "data_item_market_types",
+      "kind": "data",
+      "title": "Optional: give your own items market types",
+      "what": "Only photo items have market types so far: the AI picks them. Any other item (fish, crops, furniture...) sells at x1 until you tick its types in the Item Editor's new 'Market types' box. Then its price follows the daily demand too. For example, a fish could be Food, a chair Wooden + Furniture.",
+      "added": "2026-10-23",
+      "files": [],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "decision_tree_numbers",
+      "kind": "decision",
+      "title": "Trees: numbers Claude had to guess",
+      "what": "You set: wild trees grow in 10 days, fruit trees in 28. These Claude picked: 10 axe hits to fell a grown tree, 2 for the bush, 5 for the stump; a stump gives 3-5 wood; a grown wild tree turns mossy 5% of days (not in winter); one fruit every 3 days, at most 3 on the tree. Change any of them per tree in the Trees tab (Open tree .c..., Save tree) and tell me if a rule should change for every tree.",
+      "added": "2026-10-23",
+      "files": [
+        {
+          "path": "trees/oak_tree.c"
+        },
+        {
+          "path": "trees/cherry_tree.c"
+        }
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "decision_fruit_sapling_drops",
+      "kind": "decision",
+      "title": "Fruit trees drop saplings when felled or shaken?",
+      "what": "You said fruit trees are just like normal trees, so felling one gives 0-3 of its sapling and shaking 0-2 a day. Saplings cost 2000-6000 in the Seed shop, so to stop that printing money they can't be sold (sell price 0). If fruit trees should drop no saplings instead, say so (or set 'seeds' and 'Shaken' to 0 in the Trees tab). Banana and mango saplings aren't sold anywhere yet.",
+      "added": "2026-10-23",
+      "files": [
+        {
+          "path": "trees/apple_tree.c"
+        },
+        {
+          "path": "trees/banana_tree.c"
+        }
+      ],
+      "done": true,
+      "reply": "No - fruit trees don't drop saplings. (Answered in chat 2026-10-23; the firmware now never drops a fruit tree's sapling, and the Trees tab hides those boxes for fruit trees.)"
+    },
+    {
+      "id": "data_tree_names_prices",
+      "kind": "data",
+      "title": "Trees: names and prices",
+      "what": "The Stardew sheets' trees got these names: Oak, Maple, Pine, Mahogany, Vine, Weeping, Fiddlehead, Palm, Island Palm, Mushroom and Mystic Tree; seeds Acorn, Maple Seed, Pine Cone... (sell 5-100). The fruit items Cherry, Apricot, Orange, Peach, Pomegranate, Apple, Banana, Mango sell at Stardew's prices (50-150). Rename or reprice any in the Trees tab / Item Editor.",
+      "added": "2026-10-23",
+      "files": [
+        {
+          "path": "trees/vine_tree.c"
+        },
+        {
+          "path": "trees/weeping_tree.c"
+        },
+        {
+          "path": "items/cherry.c"
+        }
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "sound_tree_chop",
+      "kind": "sound",
+      "title": "Trees: a hit sound and a falling sound",
+      "what": "Trees play no sound of their own yet (the axe's swing sound still plays). Put WAVs (16-bit mono 44.1 kHz) in the card's sounds/sound effects, then type their names (without .wav) in the Trees tab's Sounds 'hit' and 'fall' boxes for each tree and Save.",
+      "added": "2026-10-23",
+      "files": [],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "test_trees",
+      "kind": "test",
+      "title": "Try the new trees on the board",
+      "what": "Built but not tried on the device. In a test save (not save1): give yourself seeds (dev link: give oak_tree_seed 5, give axe) and plant them on Tillable or Grassy ground; tree grow / tree fruit / tree moss speed things up (dev link 'tree' command). Check: the seed picks up by hand, saplings break with any tool, the bush gives 5 wood, a grown tree falls away from you with a burst of leaves and gives 25-35 wood, the stump stays and chops out, shaking once a day drops leaves and seeds (nothing in winter), fruit shows on fruit trees in their season and shaking knocks it off onto the ground in front of the tree (walk over it to pick it up), chopping a fruit tree gives Hardwood, and walking behind a tree hides you under its canopy. To put trees on a map, use the Map Editor's new Tree tool and Export (it writes <map>.trees next to the map) — the old breakable tree art on your maps is unchanged until you replace it.",
+      "added": "2026-10-23",
+      "files": [
+        {
+          "path": "../gameTools.html"
+        }
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "art_hardwood",
+      "kind": "art",
+      "title": "Hardwood needs its icon",
+      "what": "Fruit trees give Hardwood when they're chopped (bush, felled tree and stump). Its icon is a stand-in: the Wood icon recoloured darker. Open it in the Item Editor (Open item .c...), load your 16x16 art and Export — its price (sells for 15) stays.",
+      "added": "2026-10-23",
+      "files": [
+        {
+          "path": "items/hardwood.c",
+          "marker": "Placeholder art"
+        }
       ],
       "done": false,
       "reply": ""

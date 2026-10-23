@@ -85,6 +85,14 @@ static void action_trough(const action_ctx_t *ctx)
     trough_tapped(ctx->tx, ctx->ty);
 }
 
+// A notice board: today's demand for every market type (round things, metal
+// things... from x0.1 to x10), the day's photo requests and the capture book.
+static void action_market_board(const action_ctx_t *ctx)
+{
+    (void)ctx;
+    market_board_open();
+}
+
 const asset_action_t k_asset_actions[] = {
     ASSET_ACTION(seed_shop, "Seed shop", "Opens a shop that sells the seeds of every crop in the game"),
     ASSET_ACTION(build_shop, "Build shop", "Opens a shop that sells every prop and building that has a price"),
@@ -95,6 +103,7 @@ const asset_action_t k_asset_actions[] = {
     ASSET_ACTION(bench, "Bench", "Auction crowds gather here: bidders stand on it (if walkable) or beside it and shout their bids"),
     ASSET_ACTION(ledger, "Ledger", "Opens the ledger: everything bought and sold in the last 20 days (also ledger.csv in the save)"),
     ASSET_ACTION(bed, "Bed", "Asks to go to bed: sleeps until 6:00 am the next morning, and crops in watered soil grow overnight"),
+    ASSET_ACTION(market_board, "Market board", "Opens the market board: today's demand for every type of thing (x0.1 to x10), the day's photo requests and the capture book"),
     ASSET_ACTION(trough, "Trough", "Inside a barn or coop: every tile of it is one trough. Hold hay and tap it to fill them; the animals eat from them at night"),
 };
 const int asset_action_count = sizeof(k_asset_actions) / sizeof(k_asset_actions[0]);

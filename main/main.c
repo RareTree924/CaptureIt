@@ -1463,6 +1463,8 @@ static int              s_cam_traits_n;     // boxes covered by the parts so far
 static bool             s_cam_have_traits;
 static cam_kinds_msg_t  s_cam_kinds;        // each box's kind (the daily selling limit)
 static bool             s_cam_have_kinds;
+static cam_types_msg_t  s_cam_types;        // each box's market types (MARKET BOARD)
+static bool             s_cam_have_types;
 
 // Marks the result ready once both halves have arrived.
 // Caller must hold s_cam_mutex.
@@ -1531,7 +1533,7 @@ static bool cam_send_request(uint8_t type, bool fresh_frame, bool need_boxes, ui
     s_cam_ol_chunks_total = 0;
     s_cam_ol_chunks_got   = 0;
     if (need_boxes) {
-        s_cam_have_labels = s_cam_have_prices = s_cam_have_traits = s_cam_have_kinds = s_cam_status_new = false;
+        s_cam_have_labels = s_cam_have_prices = s_cam_have_traits = s_cam_have_kinds = s_cam_have_types = s_cam_status_new = false;
         s_cam_traits_n = 0;
     }
     msg.type              = type;
@@ -1751,6 +1753,16 @@ static int cam_take_kinds(char out[CAM_MAX_BOXES][CAM_KIND_LEN])
     xSemaphoreTake(s_cam_mutex, portMAX_DELAY);
     int n = s_cam_have_kinds ? s_cam_kinds.count : -1;
     if (n > 0) memcpy(out, s_cam_kinds.kind, (size_t)n * CAM_KIND_LEN);
+    xSemaphoreGive(s_cam_mutex);
+    return n;
+}
+
+// Each of the current request's boxes' market types (bit sets). Returns how many, or -1 if none came (an older CAM).
+static int cam_take_types(uint64_t out[CAM_MAX_BOXES])
+{
+    xSemaphoreTake(s_cam_mutex, portMAX_DELAY);
+    int n = s_cam_have_types ? s_cam_types.count : -1;
+    if (n > 0) memcpy(out, s_cam_types.mask, (size_t)n * sizeof(uint64_t));
     xSemaphoreGive(s_cam_mutex);
     return n;
 }
@@ -1990,7 +2002,7 @@ static void cam_handle_packet(const uint8_t *data, int len)
     if (cam_net_handle_packet(data, len)) { xSemaphoreGive(s_cam_mutex); return; }
 
     if ((type == CAM_MSG_STATUS || type == CAM_MSG_LABELS || type == CAM_MSG_PRICES || type == CAM_MSG_TRAITS ||
-         type == CAM_MSG_KINDS) && frame_id == s_cam_frame_id) {
+         type == CAM_MSG_KINDS || type == CAM_MSG_TYPES) && frame_id == s_cam_frame_id) {
         if (type == CAM_MSG_STATUS && len >= (int)CAM_STATUS_HEADER_SIZE && len <= (int)sizeof(cam_status_msg_t)) {
             const cam_status_msg_t *m = (const cam_status_msg_t *)data;
             int n = len - (int)CAM_STATUS_HEADER_SIZE;
@@ -2031,6 +2043,13 @@ static void cam_handle_packet(const uint8_t *data, int len)
                 memcpy(&s_cam_kinds, m, CAM_KINDS_HEADER_SIZE + (size_t)m->count * CAM_KIND_LEN);
                 for (int i = 0; i < m->count; i++) s_cam_kinds.kind[i][CAM_KIND_LEN - 1] = '\0';
                 s_cam_have_kinds = true;
+            }
+        } else if (type == CAM_MSG_TYPES && len >= (int)CAM_TYPES_HEADER_SIZE) {
+            const cam_types_msg_t *m = (const cam_types_msg_t *)data;
+            if (m->count <= CAM_MAX_BOXES && (size_t)len >= CAM_TYPES_HEADER_SIZE + (size_t)m->count * sizeof(uint64_t)) {
+                memcpy(&s_cam_types, m, CAM_TYPES_HEADER_SIZE + (size_t)m->count * sizeof(uint64_t));
+                for (int i = 0; i < m->count; i++) s_cam_types.mask[i] &= (1ULL << CAM_TYPE_COUNT) - 1;   // (a newer CAM's types this build doesn't know)
+                s_cam_have_types = true;
             }
         }
         xSemaphoreGive(s_cam_mutex);
@@ -3060,7 +3079,64 @@ static float legendary_demand(const legendary_t *l)
     return 1.0f;
 }
 
-// item_sell_price()'s multiplier (items.h): every legendary trait the item has, times its demand.
+// ---- Market types + today's demand (shown on the MARKET BOARD) -----------
+//  pipeline_msgs.h CAM_TYPES: 50 kinds of thing — colours, shapes, materials,
+//  what it's for. An item has some: a photo item the ones the AI saw in it
+//  (CAM_MSG_TYPES), any other item the ones ticked in the Item Editor's
+//  "Market types": attributes "types" (bits 0-30) and "types2" (bits 31-61),
+//  bit k = type k.
+//  Each type has a demand every day, x0.1 .. x10. Nothing is stored for it: it
+//  is worked out from the save's seed and the day (a hash), so it costs no RAM
+//  and no save line. It drifts rather than jumping about: today's is 60% a
+//  fresh roll and 40% yesterday's, stretched so a few types a day reach x10 or
+//  x0.1. An item's demand is the geometric mean of its types' (red AND round:
+//  halfway between the two on the log scale), so it stays within x0.1 .. x10.
+//  item_sell_price() applies it through item_price_bonus_pct() — to items made
+//  on other days too, and to everything selling it (shelves, offers, auctions).
+#define TYPE_LABEL_(id, label) label,
+#define TYPE_ID_(id, label)    #id,
+static const char *const k_type_label[CAM_TYPE_COUNT] = { CAM_TYPES(TYPE_LABEL_) };
+static const char *const k_type_id[CAM_TYPE_COUNT]    = { CAM_TYPES(TYPE_ID_) };
+#define DEMAND_FRESH      0.6f       // today's own roll; the rest is yesterday's
+#define DEMAND_STRETCH    1.3f       // how far out the mix is pushed (clamped to x0.1 .. x10)
+static uint32_t s_weather_seed;      // WEATHER section (world.txt "weather"): the demand's seed too
+static uint32_t clock_day(void);     // CLOCK section
+
+// A roll in -1..1 for type k on `day`.
+static float demand_roll(uint32_t day, int k)
+{
+    uint32_t h = (s_weather_seed ^ 0x6D2B79F5u) + day * 0x9E3779B1u + (uint32_t)k * 0x85EBCA77u;
+    h ^= h >> 15; h *= 0x2C1B3C6Du; h ^= h >> 12; h *= 0x297A2D39u; h ^= h >> 15;
+    return (float)(h >> 8) / 8388608.0f - 1.0f;
+}
+
+// Type k's demand on `day` as a power of ten: -1 (x0.1) .. 1 (x10).
+static float demand_exp(int k, uint32_t day)
+{
+    float e = DEMAND_STRETCH * (DEMAND_FRESH * demand_roll(day, k) + (1.0f - DEMAND_FRESH) * demand_roll(day - 1, k));   // (day 0's "yesterday" wraps to its own roll)
+    return e < -1.0f ? -1.0f : e > 1.0f ? 1.0f : e;
+}
+static float type_demand(int k) { return powf(10.0f, demand_exp(k, clock_day())); }
+
+static uint64_t item_types(item_id_t item)
+{
+    return (uint64_t)(item_attr(item, ITEM_ATTR_TYPES, 0) & 0x7FFFFFFF) | (uint64_t)(item_attr(item, ITEM_ATTR_TYPES2, 0) & 0x7FFFFFFF) << 31;
+}
+
+// What today's market does to an item's price: its types' demands, averaged on the log scale. 1 = no types.
+static float types_demand(uint64_t types)
+{
+    float sum = 0;
+    int   n   = 0;
+    uint32_t day = clock_day();
+    for (int k = 0; k < CAM_TYPE_COUNT; k++)
+        if ((types >> k) & 1) { sum += demand_exp(k, day); n++; }
+    return n ? powf(10.0f, sum / n) : 1.0f;
+}
+static float item_demand(item_id_t item) { return types_demand(item_types(item)); }
+
+// item_sell_price()'s multiplier (items.h): every legendary trait the item has, times its demand,
+// times today's demand for its market types.
 int64_t item_price_bonus_pct(item_id_t item)
 {
     const item_asset_t *a = item_get(item);
@@ -3069,7 +3145,7 @@ int64_t item_price_bonus_pct(item_id_t item)
         const legendary_t *l = legendary_find(a->attrs[i].name);
         if (l) m *= l->mult * legendary_demand(l);
     }
-    m *= 100.0;
+    m *= item_demand(item) * 100.0;
     return m > 1e12 ? (int64_t)1e12 : (int64_t)m;
 }
 
@@ -3155,6 +3231,17 @@ static int item_traits(item_id_t item, trait_t *out, int max)
         }
         if (n < max) out[n] = t;
         n++;
+    }
+    // Its market types, each with today's demand ("Round x3.2", MARKET BOARD): green wanted, red not.
+    uint64_t types = a ? item_types(item) : 0;
+    static char lbl[CAM_TYPES_PER_BOX + 1][20];   // (the chips are drawn before the next call; a hand-tagged item with more shows the first ones)
+    for (int k = 0, j = 0; types && k < CAM_TYPE_COUNT && j < CAM_TYPES_PER_BOX + 1; k++) {
+        if (!((types >> k) & 1)) continue;
+        long tenths = lroundf(type_demand(k) * 10.0f);   // as shown: x1.0 is neither green nor red
+        snprintf(lbl[j], sizeof(lbl[j]), "%s x%d.%d", k_type_label[k], (int)(tenths / 10 % 1000), (int)(tenths % 10));
+        if (n < max) out[n] = (trait_t){ k_type_label[k], lbl[j], (int16_t)(tenths * 10) };
+        n++;
+        j++;
     }
     // Fishing gear's effects (FISHING): a rod's, a bait's, a tackle's — each one that isn't normal: green better, red worse.
     for (int role = 0; a && role < 3; role++) {
@@ -3375,6 +3462,8 @@ static void farm_on_action(void);              // FARMING section: plant / harve
 static bool trig_on_action(int tx, int ty);    // ASSET ACTIONS section: run the faced object's actions (update_player())
 static bool farm_covers_tile(int tx, int ty);  // ...a crop grows in or over tile (tx,ty) (dropped stacks keep off it)
 static void farm_clear(void);                  // ...a new map: the old one's crops go
+static int  tree_at(int tx, int ty);           // TREES section: the tree whose base is tile (tx,ty), or -1
+static bool tree_covers_rect(int x, int y, int w, int h);   // ...a tree's art overlaps this pixel rect (nothing else is baked there)
 
 // Masks are in the map store, freed with it; the art is on the card.
 static void brk_inst_free(brk_inst_t *b)
@@ -3991,11 +4080,13 @@ static void fish_gear_text(item_id_t item, char *out, size_t n); // ...what a ro
 static item_id_t fish_rig_item(int k);                          // ...the line's bait (0) / tackle (1, 2), ITEM_NONE = none
 static int     fish_rig_count(int k);                         // ...how many baits / catches that tackle has left
 static void fish_reset(void);                                 // ...gone when another map loads
+static void tool_swing_reset(void);                           // TOOL SWING: a swing (and the hit it's about to land) belongs to the old map
 static bool rain_now(void);                                   // WEATHER section
 static void npc_clear(void);                                  // ...gone when another map loads
 static void market_map_loaded(void);                          // MARKET: a map just loaded (bodies for its visitors)
 static void market_list_dirty(void);                          // ...a shelf's stock changed
 static bool place_on_action(void);       // ...update_player(): put down / pick up on the action press
+static bool board_open(int place_i);     // MARKET BOARD: a board prop tapped
 static bool bed_fronts_update(void);     // ...BEDS, update_player(): each bed's sheet over the player or not
 static int  bed_player_in(int *settle_x);   // ...the walk-in bed the player lies in (-1 = none), and where they settle
 static void bed_after_move(bool walking);   // ...lying down in one asks "Go to bed?"
@@ -4209,6 +4300,7 @@ bool load_map(const char *map_file)
     nav_reset();                  // a walk (and its marker) belongs to the old map
     place_holo_reset();           // and so does a prop's hologram
     fish_reset();                 // and a fishing line that was out
+    tool_swing_reset();           // and a tool swing
     s_load_read_ms = (uint32_t)((esp_timer_get_time() - t_load) / 1000);
     screen_fade_to_black();
 
@@ -5017,7 +5109,7 @@ static const sprite_asset_t *sprite_asset_find(const char *name)
 //    pants  16x32, one per body frame      shirts       8x8, one a direction
 //    hair   16x32: down, right, up (+ left) accessories 16x16: down, side
 //    hats   20x20, one a direction
-//  stacked body, pants, shirt, accessory, hair, arms, hat into a
+//  stacked body, pants, shirt, accessory, hair, hat, arms into a
 //  WARD_CANVAS_W x WARD_CANVAS_H frame (CHAR_SW x CHAR_SH: a hat's brim
 //  sticks out of the 16x32 body box, which sits at WARD_BOX_X/Y in it). The
 //  hair, shirt, accessory and hat move with the frame's head (the body's bob).
@@ -5277,8 +5369,8 @@ static void ward_frame(int d, int f, bool held, uint16_t *cv)
         int  cell     = own_left ? 3 : d == PDIR_DOWN ? 0 : d == PDIR_UP ? 2 : 1;
         ward_blit(cv, hair, s_ward.lut[4], 0, cell, bx, by + dy, d == PDIR_LEFT && !own_left);
     }
-    ward_blit(cv, body, s_ward.lut[0], f, (held ? 8 : 4) + r, bx, by, false);   // the arms, over the shirt
     ward_blit(cv, s_ward.hat, s_ward.lut[5], 0, r, bx + WARD_HAT_X, by + WARD_HAT_Y + dy, false);
+    ward_blit(cv, body, s_ward.lut[0], f, (held ? 8 : 4) + r, bx, by, false);   // the arms, over the shirt and the hat
 }
 
 // An outfit's 16 frames [dir * 4 + frame] (player_dir_t order) into walk,
@@ -5623,6 +5715,11 @@ typedef struct {
     int8_t          lift;         // Floaty: px the item floats higher than normal
     uint8_t         drip;         // wet (QUALITY_WET): the dripping's frame (WET ITEMS)
     uint8_t         night;        // night stage it's darkened to (0 = day)
+    item_id_t       tool;         // TOOL SWING: the tool whose swing art is on the player (ITEM_NONE = none)...
+    uint8_t         tool_dir;     // ...and which way they swing it (player_dir_t; the swipe too)
+    uint8_t         swipe;        // the swipe's frame + 1 (0 = none)
+    uint8_t         spark;        // NEW ITEM: the sparkle's frame + 1 over their head (0 = none)
+    uint8_t         tool_turn;    // TOOL SWING: how far the tool has come down, 0 (raised) .. 255 (landed)
 } player_look_t;
 
 // Where a look's sprite goes: centred on the player, bottom on the feet
@@ -5692,6 +5789,317 @@ static void held_item_xy(const player_look_t *l, int iw, int ih, int *x, int *y)
     *y = l->y - HELD_ITEM_GAP - ih + HELD_ITEM_DROP + l->squash - l->lift;   // down with a squashed head; up when floating
 }
 
+// ============================================================
+//  TOOL SWING — a tool (an item with "tool 1", items.h; the Item Editor's
+//  "Tool use" box) is swung whenever the player uses it on what they walked
+//  up to: a tree, a rock, farmland, grass, a wall...
+//   - its swing art (the item's `use` bundle, 16x32 to sit right on the
+//     player) is drawn over them for the swing, instead of the item over
+//     their head. Facing up (hitting something behind them) it goes BEHIND
+//     the player. Frames: 1 = every way (mirrored facing left), 2 = down/up
+//     then sideways, 3 = down, up, sideways (drawn facing right, mirrored
+//     facing left), 4 = down, up, left, right. Its interval_ms = how long
+//     the swing shows. No swing art: the item stays over the head.
+//   - the swipe (assets/fx/tool_swipe.png, drawn facing right; mirrored or
+//     turned for the other ways) sweeps through the tile in front, unless
+//     the item has "tool_swipe 0" (a watering can).
+//   - a sound when the swing starts: "tool_sfx:<name>" (one picked at random
+//     if there are more).
+//   - the hit lands mid-swing (TOOL_HIT_MS): a breakable or the farmland in
+//     front gets it then, not on the tap. "tool_power N" = hits a swing lands
+//     on a breakable (copper / steel / gold / iridium tools); "counts_as:<id>"
+//     = breakables that need item <id> take this one too (a copper axe
+//     counts as "axe").
+//  A swing can't be cut short by another tap (that press is dropped), and
+//  walking off ends it (the hit doesn't land).
+//
+//  NEW ITEM — whenever the player gets something (a breakable's drop, a
+//  harvest, a catch, a stack picked up, a product, a photo made into an
+//  item...) a sparkle (assets/fx/new_item.png) plays over their head:
+//  newitem_sparkle(). Got with a UI screen open (the catch card), it plays
+//  once the world is back.
+// ============================================================
+#define SWIPE_PX        32    // assets/fx/tool_swipe.png: SWIPE_FRAMES frames this square, side by side, the swing facing right
+#define SWIPE_FRAMES    4
+#define SWIPE_FRAME_MS  60
+#define TOOL_HIT_MS     (2 * SWIPE_FRAME_MS)   // the hit lands as the swipe reaches the front (no swipe: half way through)
+#define TOOL_ART_MAX_W  32    // swing art bigger than this isn't drawn (the player background cache is sized for it)
+#define TOOL_ART_MAX_H  48
+#define TOOL_ART_RAISE  16    // swing art sits this much higher than the player's own 16x32 box (it looked low on the board)
+#define TOOL_ROT_MS     180   // the tool coming down: turning (sideways) or dropping (facing up / down); the swipe and the hit follow right after
+#define TOOL_ROT_FROM   (-40.0f)   // sideways (facing right): from raised back over the head, degrees clockwise from the art as drawn...
+#define TOOL_ROT_TO     100.0f     // ...to down in front (facing left: mirrored)
+#define TOOL_CHOP_PX    14    // facing up / down: the tool starts this much higher and drops into place
+#define TOOL_ROT_MAX_W  16    // swing art up to this size turns around the hands (its bottom middle); bigger art drops instead
+#define TOOL_ROT_MAX_H  32
+#define TOOL_ROT_R      34    // how far turning art reaches from the hands: ceil(hypot(TOOL_ROT_MAX_W / 2, TOOL_ROT_MAX_H)) + 1
+#define SPARK_PX        16    // assets/fx/new_item.png: SPARK_FRAMES frames this square, side by side
+#define SPARK_FRAMES    8
+#define SPARK_FRAME_MS  70
+_Static_assert(FX_TOOL_SWIPE_W == SWIPE_FRAMES * SWIPE_PX && FX_TOOL_SWIPE_H == SWIPE_PX,
+               "assets/fx/tool_swipe.png must be 4 frames of 32x32 side by side, the swing facing right");
+_Static_assert(FX_NEW_ITEM_W == SPARK_FRAMES * SPARK_PX && FX_NEW_ITEM_H == SPARK_PX,
+               "assets/fx/new_item.png must be 8 frames of 16x16 side by side");
+
+static struct {
+    item_id_t item;       // the tool being swung; ITEM_NONE = no swing
+    uint8_t   dir;        // player_dir_t
+    bool      swipe;      // with the swipe
+    bool      hit_due;    // the breakable / farmland in front gets the hit at TOOL_HIT_MS
+    uint16_t  art_ms;     // how long its swing art shows (0 = it has none)
+    uint32_t  start_ms;
+} s_swing;
+
+static bool     s_spark_due = false;   // got something: the sparkle starts the next time the world is on screen
+static bool     s_spark_on  = false;
+static uint32_t s_spark_start;
+
+static void newitem_sparkle(void) { s_spark_due = true; }
+
+static bool tool_is(item_id_t item)
+{
+    return item != ITEM_NONE && item_attr(item, ITEM_ATTR_TOOL, 0) > 0 && item_attr(item, ITEM_ATTR_ROD, 0) <= 0;   // a rod casts instead (FISHING)
+}
+
+// The item's swing art, or NULL (none, or too big to draw).
+static const frame_bundle_t *tool_art(item_id_t item)
+{
+    const item_asset_t *a = item_get(item);
+    if (!a || !a->use.frame_count || !a->use.pixels || a->use.w > TOOL_ART_MAX_W || a->use.h > TOOL_ART_MAX_H) return NULL;
+    return &a->use;
+}
+
+// True if holding `held` will do for something that needs item `need`: it is
+// that item, or it "counts_as:<need's id>" (a better tool of the same kind).
+static bool item_counts_as(item_id_t held, item_id_t need)
+{
+    if (held == need) return true;
+    const item_asset_t *n = item_get(need), *h = item_get(held);
+    if (!n || !h || held == ITEM_NONE) return false;
+    size_t pl = strlen(ITEM_ATTR_COUNTS_AS);
+    for (int i = 0; i < h->attr_count; i++)
+        if (h->attrs[i].value > 0 && strncmp(h->attrs[i].name, ITEM_ATTR_COUNTS_AS, pl) == 0 && strcmp(h->attrs[i].name + pl, n->id) == 0) return true;
+    return false;
+}
+
+// Hits one swing of `item` lands on a breakable (none = 1).
+static int tool_power(item_id_t item)
+{
+    int32_t p = item_attr(item, ITEM_ATTR_TOOL_POWER, 1);
+    return p < 1 ? 1 : p > BRK_MAX_HITS ? BRK_MAX_HITS : (int)p;
+}
+
+// With swing art the tool comes down first (TOOL_ROT_MS) and the swipe follows; without, the swipe starts at once.
+static uint32_t tool_swing_lead_ms(void) { return s_swing.art_ms ? TOOL_ROT_MS : 0; }
+
+static uint32_t tool_swing_len_ms(void)
+{
+    uint32_t swipe = s_swing.swipe ? tool_swing_lead_ms() + SWIPE_FRAMES * SWIPE_FRAME_MS : 0;
+    return s_swing.art_ms > swipe ? s_swing.art_ms : swipe;
+}
+
+static bool tool_swinging(void) { return s_swing.item != ITEM_NONE; }
+static void tool_swing_reset(void) { s_swing.item = ITEM_NONE; s_swing.hit_due = false; }
+
+// The swing's sound: one of the item's "tool_sfx:<name>" attributes, at random.
+static void tool_sfx_play(item_id_t item)
+{
+    const item_asset_t *a = item_get(item);
+    if (!a) return;
+    const char *pick = NULL;
+    size_t pl = strlen(ITEM_ATTR_TOOL_SFX);
+    int seen = 0;
+    for (int i = 0; i < a->attr_count; i++)
+        if (a->attrs[i].value > 0 && strncmp(a->attrs[i].name, ITEM_ATTR_TOOL_SFX, pl) == 0 && a->attrs[i].name[pl] &&
+            esp_random() % (uint32_t)++seen == 0) pick = a->attrs[i].name + pl;   // each one as likely (reservoir pick)
+    if (pick) sfx_play(pick);
+}
+
+// update_player(), the action press: holding a tool, it swings now (art,
+// swipe, sound). true = a swing started — the caller leaves the hit on a
+// breakable / farmland to it (s_swing.hit_due).
+static bool tool_swing_start(void)
+{
+    item_id_t held = inv_held_item();
+    if (!tool_is(held)) return false;
+    const frame_bundle_t *art = tool_art(held);
+    s_swing.item     = held;
+    s_swing.dir      = (uint8_t)player_dir_from_facing(s_player_facing);
+    s_swing.swipe    = item_attr(held, ITEM_ATTR_TOOL_SWIPE, 1) > 0;
+    s_swing.art_ms   = art ? (art->interval_ms ? art->interval_ms : 250) : 0;
+    s_swing.hit_due  = false;
+    s_swing.start_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    tool_sfx_play(held);
+    return true;
+}
+
+// Once a frame from update_player() (moved: the player walked this frame):
+// lands the hit when it's due, and ends the swing.
+static void tool_swing_tick(bool moved)
+{
+    if (!tool_swinging()) return;
+    if (moved) { tool_swing_reset(); return; }   // walked off: the swing is over, nothing gets hit
+    uint32_t t   = (uint32_t)(esp_timer_get_time() / 1000) - s_swing.start_ms;
+    uint32_t len = tool_swing_len_ms();
+    uint32_t hit = s_swing.art_ms ? TOOL_ROT_MS : s_swing.swipe ? TOOL_HIT_MS : len / 2;   // as the tool lands
+    if (s_swing.hit_due && t >= hit) {
+        s_swing.hit_due = false;
+        brk_on_action();   // hit whatever breakable is in reach (needs the right held item)
+        farm_on_action();  // till / water / harvest the faced tile
+    }
+    if (t >= len && !s_swing.hit_due) s_swing.item = ITEM_NONE;
+}
+
+// player_look_now(): the swing and the sparkle as they are at `now`. true =
+// the tool's swing art is in the player's hands (instead of over their head).
+static bool tool_swing_look(player_look_t *l, uint32_t now)
+{
+    if (s_spark_on) {
+        uint32_t t = now - s_spark_start;
+        if (t < SPARK_FRAMES * SPARK_FRAME_MS) l->spark = (uint8_t)(t / SPARK_FRAME_MS + 1);
+        else s_spark_on = false;
+    }
+    if (!tool_swinging()) return false;
+    uint32_t t = now - s_swing.start_ms;
+    if (t >= tool_swing_len_ms()) return false;
+    l->tool_dir = s_swing.dir;
+    uint32_t lead = tool_swing_lead_ms();   // the swipe follows the tool coming down
+    if (s_swing.swipe && t >= lead && t - lead < SWIPE_FRAMES * SWIPE_FRAME_MS) l->swipe = (uint8_t)((t - lead) / SWIPE_FRAME_MS + 1);
+    if (!s_swing.art_ms || !tool_art(s_swing.item)) return false;
+    l->tool      = s_swing.item;
+    l->tool_turn = (uint8_t)(t >= TOOL_ROT_MS ? 255 : t * 255 / TOOL_ROT_MS);
+    return true;
+}
+
+// Sideways swing art that's small enough turns around the hands; the rest drops into place.
+static bool tool_art_turns(const player_look_t *l, const frame_bundle_t *b)
+{
+    return (l->tool_dir == PDIR_LEFT || l->tool_dir == PDIR_RIGHT) && b->w <= TOOL_ROT_MAX_W && b->h <= TOOL_ROT_MAX_H;
+}
+
+// How far down the tool has come, eased: slow off the top, fast into the hit.
+static float tool_turn_eased(const player_look_t *l)
+{
+    float p = l->tool_turn / 255.0f;
+    return p * p;
+}
+
+// The hands: where the swing art's bottom middle is (it's centred on the player, TOOL_ART_RAISE above their feet line).
+static void tool_hands(const player_look_t *l, int *x, int *y)
+{
+    *x = l->x + PLAYER_W / 2;
+    *y = l->y + PLAYER_H - TOOL_ART_RAISE;
+}
+
+// Where the swing art is drawn now: turning, the square it can sweep around the hands; dropping, where it is on the way down.
+static rect_t tool_art_rect(const player_look_t *l, const frame_bundle_t *b)
+{
+    int hx, hy;
+    tool_hands(l, &hx, &hy);
+    if (tool_art_turns(l, b)) return (rect_t){ hx - TOOL_ROT_R, hy - TOOL_ROT_R, 2 * TOOL_ROT_R, 2 * TOOL_ROT_R };
+    int drop = (int)lroundf(TOOL_CHOP_PX * (1.0f - tool_turn_eased(l)));
+    return (rect_t){ hx - b->w / 2, hy - b->h - drop, b->w, b->h };
+}
+
+// The swipe's 32x32 box, from the player's top-left, by direction: through the tile in front.
+static const int8_t k_swipe_at[PDIR_COUNT][2] = {
+    { -8, 16 },   // down: below the feet
+    { -8, -4 },   // up: over the head (drawn behind them)
+    { -16, 0 },   // left: from over the head down through the tile in front
+    {  0, 0 },    // right
+};
+static rect_t swipe_rect(const player_look_t *l)
+{
+    return (rect_t){ l->x + k_swipe_at[l->tool_dir][0], l->y + k_swipe_at[l->tool_dir][1], SWIPE_PX, SWIPE_PX };
+}
+
+// The sparkle: on the held item (it's what was got, often), else just over the head.
+static rect_t spark_rect(const player_look_t *l)
+{
+    int cx = l->x + PLAYER_W / 2, cy = l->y + PLAYER_H - CHAR_SH;   // the top of the head
+    if (l->item != ITEM_NONE) {
+        int iw, ih, ix, iy;
+        held_item_size(l->item, &iw, &ih);
+        held_item_xy(l, iw, ih, &ix, &iy);
+        cx = ix + iw / 2;
+        cy = iy + ih / 2 + SPARK_PX / 2;
+    }
+    return (rect_t){ cx - SPARK_PX / 2, cy - SPARK_PX, SPARK_PX, SPARK_PX };
+}
+
+// The swing art and the swipe, over (or, facing up, under) the sprite.
+static void tool_paint(const player_look_t *l)
+{
+    const frame_bundle_t *b = l->tool != ITEM_NONE ? tool_art(l->tool) : NULL;
+    if (b) {
+        static const uint8_t k_pick[4][PDIR_COUNT] = { { 0, 0, 0, 0 }, { 0, 0, 1, 1 }, { 0, 1, 2, 2 }, { 0, 1, 2, 3 } };   // [frames - 1][direction]
+        int n = b->frame_count < 4 ? b->frame_count : 4;
+        bool flip = l->tool_dir == PDIR_LEFT && n < 4;   // sideways art faces right
+        const uint16_t *f = b->pixels + (size_t)k_pick[n - 1][l->tool_dir] * b->w * b->h;
+        rect_t r = tool_art_rect(l, b);
+        if (tool_art_turns(l, b)) {   // turned around the hands: each screen pixel looks back into the art
+            float deg = TOOL_ROT_FROM + (TOOL_ROT_TO - TOOL_ROT_FROM) * tool_turn_eased(l);
+            if (l->tool_dir == PDIR_LEFT) deg = -deg;   // (with the art mirrored: the same swing the other way)
+            float a = deg * 0.017453293f, ca = cosf(a), sa = sinf(a);
+            int hx, hy;
+            tool_hands(l, &hx, &hy);
+            for (int dy = -TOOL_ROT_R; dy < TOOL_ROT_R; dy++)
+                for (int dx = -TOOL_ROT_R; dx < TOOL_ROT_R; dx++) {
+                    float ox = dx + 0.5f, oy = dy + 0.5f;
+                    int sx = (int)floorf(b->w / 2.0f + ca * ox + sa * oy), sy = (int)floorf(b->h - sa * ox + ca * oy);
+                    if (sx < 0 || sy < 0 || sx >= b->w || sy >= b->h) continue;
+                    uint16_t c = f[sy * b->w + (flip ? b->w - 1 - sx : sx)];
+                    if (c != FB_TRANSPARENT_COLOR) draw_pixel(hx + dx, hy + dy, l->night ? night_px(&s_night_lut, c) : c);
+                }
+        } else {                       // dropping into place
+            for (int row = 0; row < b->h; row++)
+                for (int col = 0; col < b->w; col++) {
+                    uint16_t c = f[row * b->w + (flip ? b->w - 1 - col : col)];
+                    if (c != FB_TRANSPARENT_COLOR) draw_pixel(r.x + col, r.y + row, l->night ? night_px(&s_night_lut, c) : c);
+                }
+        }
+    }
+    if (l->swipe) {
+        rect_t r = swipe_rect(l);
+        int    f = l->swipe - 1;
+        for (int row = 0; row < SWIPE_PX; row++) {
+            int py = r.y + row;
+            if (py < 0 || py >= s_fb_h) continue;
+            for (int col = 0; col < SWIPE_PX; col++) {
+                int px = r.x + col, sx, sy;
+                if (px < 0 || px >= s_fb_w) continue;
+                switch (l->tool_dir) {   // the art faces right: mirrored for left, a quarter turn for down / up
+                case PDIR_LEFT: sx = SWIPE_PX - 1 - col; sy = row; break;
+                case PDIR_DOWN: sx = row; sy = SWIPE_PX - 1 - col; break;
+                case PDIR_UP:   sx = SWIPE_PX - 1 - row; sy = col; break;
+                default:        sx = col; sy = row; break;
+                }
+                int k = sy * FX_TOOL_SWIPE_W + f * SWIPE_PX + sx;
+                if (!fx_tool_swipe_a[k]) continue;
+                uint16_t *p = &s_fb[py * s_fb_w + px];
+                *p = rgb565_blend(*p, fx_tool_swipe[k], fx_tool_swipe_a[k]);
+            }
+        }
+    }
+}
+
+static void spark_paint(const player_look_t *l)
+{
+    if (!l->spark) return;
+    rect_t r = spark_rect(l);
+    int    f = l->spark - 1;
+    for (int row = 0; row < SPARK_PX; row++) {
+        int py = r.y + row;
+        if (py < 0 || py >= s_fb_h) continue;
+        for (int col = 0; col < SPARK_PX; col++) {
+            int px = r.x + col, k = row * FX_NEW_ITEM_W + f * SPARK_PX + col;
+            if (px < 0 || px >= s_fb_w || !fx_new_item_a[k]) continue;
+            uint16_t *p = &s_fb[py * s_fb_w + px];
+            *p = rgb565_blend(*p, fx_new_item[k], fx_new_item_a[k]);
+        }
+    }
+}
+
 // What the player should look like this frame.
 static player_look_t player_look_now(void)
 {
@@ -5712,6 +6120,11 @@ static player_look_t player_look_now(void)
     l.sw   = CHAR_SW;
     l.sh   = CHAR_SH;
     player_dir_t row = player_dir_from_facing(s_player_facing);
+    if (tool_swing_look(&l, now)) {   // TOOL SWING: the tool in their hands (arms down), not over the head
+        l.item   = ITEM_NONE;
+        l.sprite = s_player_frames[row][0];
+        return l;
+    }
     l.sprite = (l.item != ITEM_NONE ? s_player_held_frames : s_player_frames)[row][s_player_anim_frame];
     if (l.item != ITEM_NONE) {
         l.item_q = s_inv[s_inv_held].quality;
@@ -5740,7 +6153,8 @@ static bool player_look_equal(const player_look_t *a, const player_look_t *b)
 {
     return a->x == b->x && a->y == b->y && a->sprite == b->sprite && a->sw == b->sw && a->sh == b->sh &&
            a->item == b->item && a->item_frame == b->item_frame && a->item_q == b->item_q && a->mfx == b->mfx &&
-           a->squash == b->squash && a->lift == b->lift && a->drip == b->drip && a->night == b->night;
+           a->squash == b->squash && a->lift == b->lift && a->drip == b->drip && a->night == b->night &&
+           a->tool == b->tool && a->tool_dir == b->tool_dir && a->swipe == b->swipe && a->spark == b->spark && a->tool_turn == b->tool_turn;
 }
 
 // Screen rect a look covers: the sprite plus the held item above it (and,
@@ -5748,6 +6162,10 @@ static bool player_look_equal(const player_look_t *a, const player_look_t *b)
 static rect_t player_look_rect(const player_look_t *l)
 {
     rect_t r = player_sprite_rect(l);
+    const frame_bundle_t *tb = l->tool != ITEM_NONE ? tool_art(l->tool) : NULL;   // TOOL SWING / NEW ITEM
+    if (tb)       r = rect_union(r, tool_art_rect(l, tb));
+    if (l->swipe) r = rect_union(r, swipe_rect(l));
+    if (l->spark) r = rect_union(r, spark_rect(l));
     if (l->item == ITEM_NONE) return r;
     int iw, ih, ix, iy;
     held_item_size(l->item, &iw, &ih);
@@ -5786,6 +6204,8 @@ static void wet_paint_drips(const player_look_t *l, int ix, int iy, int iw, cons
 static void player_paint(const player_look_t *l)
 {
     rect_t s = player_sprite_rect(l);
+    bool behind = l->tool_dir == PDIR_UP;   // TOOL SWING: facing away, the tool and the swipe go behind them
+    if (behind) tool_paint(l);
     if (!l->squash) {
         draw_image_keyed_night(s.x, s.y, s.w, s.h, l->sprite);   // 0x0000 = transparent; darkened at night like the map
     } else {   // squashed under a Heavy item: the sprite stretched to s
@@ -5795,6 +6215,7 @@ static void player_paint(const player_look_t *l)
                 if (c != FB_TRANSPARENT_COLOR) draw_pixel(s.x + col, s.y + row, l->night ? night_px(&s_night_lut, c) : c);
             }
     }
+    if (!behind) tool_paint(l);
     if (l->item != ITEM_NONE) {
         int iw, ih, ix, iy;
         held_item_size(l->item, &iw, &ih);
@@ -5822,6 +6243,7 @@ static void player_paint(const player_look_t *l)
             if (QUALITY_IS_WET(l->item_q)) wet_paint_drips(l, ix, iy, iw, bottom);
         }
     }
+    spark_paint(l);   // NEW ITEM
     rect_t r = player_look_rect(l);
     redraw_foreground_over_rect(r.x, r.y, r.w, r.h);
 }
@@ -5836,12 +6258,17 @@ static void player_paint(const player_look_t *l)
 //    if another moving sprite could touch the same tile the same
 //    frame, use restore_map_rect() (map-truth based) instead.
 // ============================================================
-#define PLAYER_BG_MAX_W_ (PLAYER_W + MUT_SQUASH_PX > HELD_GIANT_MAX ? PLAYER_W + MUT_SQUASH_PX : HELD_GIANT_MAX)   // a Heavy item widens the player
+#define PLAYER_BG_MAX_W__ (PLAYER_W + MUT_SQUASH_PX > HELD_GIANT_MAX ? PLAYER_W + MUT_SQUASH_PX : HELD_GIANT_MAX)   // a Heavy item widens the player
+#define PLAYER_BG_MAX_W_ (PLAYER_BG_MAX_W__ > 2 * TOOL_ROT_R ? PLAYER_BG_MAX_W__ : 2 * TOOL_ROT_R)                // a tool turning around the hands (TOOL SWING)
 #define PLAYER_BG_MAX_W  (PLAYER_BG_MAX_W_ > PLAYER_ANIM_MAX ? PLAYER_BG_MAX_W_ : PLAYER_ANIM_MAX)
-#define PLAYER_BG_MAX_H_ (PLAYER_H + HELD_ITEM_GAP + HELD_GIANT_MAX + MUT_FLOAT_LIFT + MUT_FLOAT_BOB)  // item above the head, floating at its highest (HELD_ITEM_DROP only shrinks this)
+#define PLAYER_BG_MAX_H_ (PLAYER_H + HELD_ITEM_GAP + HELD_GIANT_MAX + MUT_FLOAT_LIFT + MUT_FLOAT_BOB + (SWIPE_PX - PLAYER_H / 2))  // item above the head, floating at its highest (HELD_ITEM_DROP only shrinks this); a swipe facing down reaches below the feet
 #define PLAYER_BG_MAX_H  (PLAYER_BG_MAX_H_ > PLAYER_ANIM_MAX ? PLAYER_BG_MAX_H_ : PLAYER_ANIM_MAX)
+_Static_assert(PLAYER_BG_MAX_W >= (SWIPE_PX - PLAYER_W) + (PLAYER_W + CHAR_SW) / 2 && PLAYER_BG_MAX_W >= TOOL_ART_MAX_W &&
+               SPARK_PX + (CHAR_SH - PLAYER_H) + TOOL_ART_MAX_H + TOOL_ART_RAISE + (SWIPE_PX - PLAYER_H / 2) <= PLAYER_BG_MAX_H &&   // sparkle over the head .. swipe under the feet
+               TOOL_ART_MAX_H + TOOL_CHOP_PX + TOOL_ROT_R <= PLAYER_BG_MAX_H,   // big art at the top of its drop .. a turning tool's reach below the hands
+               "the swing art, the swipe and the new-item sparkle must fit the player background cache (TOOL SWING)");
 
-static uint16_t      s_player_bg[PLAYER_BG_MAX_W * PLAYER_BG_MAX_H];
+EXT_RAM_BSS_ATTR static uint16_t s_player_bg[PLAYER_BG_MAX_W * PLAYER_BG_MAX_H];   // PSRAM: ~14 KB kept off the scarce internal RAM
 static rect_t        s_player_bg_rect;            // where s_player_bg came from (row stride = its w)
 static player_look_t s_player_drawn;              // the look that is on screen there
 static bool          s_player_bg_valid = false;   // false = the player isn't on screen (not drawn yet, or wiped by a full repaint)
@@ -6079,6 +6506,14 @@ void update_player(void)
         s_player_anim_counter = 0;
     }
 
+    // TOOL SWING: the hit lands (or walking off ends it). NEW ITEM: something got while away starts sparkling now.
+    tool_swing_tick(moved);
+    if (s_spark_due) {
+        s_spark_due   = false;
+        s_spark_on    = true;
+        s_spark_start = (uint32_t)(esp_timer_get_time() / 1000);
+    }
+
     // The hotbar gets out of the way first, so nothing is drawn under it.
     hotbar_follow_player();
 
@@ -6131,12 +6566,20 @@ void update_player(void)
         //   if (strcmp(current_map_name(), "cave") == 0 &&
         //       s_selected_tile_x == MY_TILE_X && s_selected_tile_y == MY_TILE_Y) { ... }
         check_selected_area(current_map_name(), s_selected_tile_x, s_selected_tile_y);
-        if (!trig_on_action(s_selected_tile_x, s_selected_tile_y) &&   // an object with actions (a shop) takes the press
-            !ranch_on_action() &&                                      // ...or the animal / grass the walk was for (ANIMALS — before a rug under it)
-            !place_on_action() &&                                      // ...or putting down / picking up a prop (PLACEMENT)
-            !fish_on_action()) {                                       // ...or casting a fishing rod into water (FISHING)
-            brk_on_action();   // hit whatever breakable is in reach (needs the right held item)
-            farm_on_action();  // plant the held seeds / harvest the crop on the faced tile
+        if (tool_swinging()) {
+            // mid-swing (TOOL SWING): this press is dropped
+        } else if (!trig_on_action(s_selected_tile_x, s_selected_tile_y)) {   // an object with actions (a shop) takes the press
+            if (ranch_on_action()) {             // ...the animal / grass the walk was for (ANIMALS — before a rug under it)
+                if (item_attr(inv_held_item(), ITEM_ATTR_CUTS, 0) > 0) tool_swing_start();   // a scythe through the grass swings (TOOL SWING)
+            } else if (!place_on_action() &&     // ...or putting down / picking up a prop (PLACEMENT)
+                       !fish_on_action()) {      // ...or casting a fishing rod into water (FISHING)
+                if (tool_swing_start()) {        // a tool in hand swings (TOOL SWING)...
+                    s_swing.hit_due = true;      // ...and the hit lands mid-swing (tool_swing_tick())
+                } else {
+                    brk_on_action();   // hit whatever breakable is in reach (needs the right held item)
+                    farm_on_action();  // plant the held seeds / harvest the crop on the faced tile
+                }
+            }
         }
     }
     bed_after_move(nav_on || settling);   // lying still in a bed: "Go to bed?" (BEDS)
@@ -6983,6 +7426,9 @@ static int hotbar_wanted_y(void)
     int home  = s_hotbar_invert ? HOTBAR_Y_TOP    : HOTBAR_Y_BOTTOM;
     int other = s_hotbar_invert ? HOTBAR_Y_BOTTOM : HOTBAR_Y_TOP;
     player_look_t l = player_look_now();
+    if (l.tool != ITEM_NONE) { l.item = inv_held_item(); l.item_q = s_inv[s_inv_held].quality; }   // mid-swing (TOOL SWING): as if it were still over the head...
+    l.tool  = ITEM_NONE;
+    l.swipe = l.spark = 0;   // ...and a swing or a sparkle doesn't move the bar (they're drawn under it)
     rect_t        p = player_look_rect(&l);
     const int     m = HOTBAR_DODGE_MARGIN;
     bool under = anim_rects_overlap(p.x, p.y, p.w, p.h, HOTBAR_X - m, home - m, HOTBAR_W + 2 * m, HOTBAR_H + 2 * m);
@@ -7278,6 +7724,7 @@ static void brk_pay_drops(const brk_level_t *L)
         ESP_LOGI(TAG, "brk: dropped %d x %s%s", n - left, item_name(D->item),
                  left ? " (some did not fit)" : "");
         if (QUALITY_MUT(q) && left < n) message(3000, "Whoa - %s %s!", item_mutation_name(QUALITY_MUT(q)), item_name(D->item));
+        if (left < n) newitem_sparkle();   // NEW ITEM (TOOL SWING section)
         changed = true;
     }
     if (changed) hud_refresh();          // a hotbar count may have changed
@@ -7487,15 +7934,18 @@ static void brk_on_action(void)
             ESP_LOGI(TAG, "brk: this needs an item that isn't in this build — can't be hit");
             return;
         }
-        if (L->need_item != ITEM_NONE && held != L->need_item) {
+        if (L->need_item != ITEM_NONE && !item_counts_as(held, L->need_item)) {   // (a better tool "counts_as:" it — TOOL SWING)
             ESP_LOGI(TAG, "brk: needs %s (holding %s)", item_name(L->need_item), item_name(held));
+            message(2000, "That needs %s", item_name(L->need_item));
             return;
         }
 
         // 2) the final hit pays out, so refuse it if the drops wouldn't fit
-        bool last = (b->hits_done + 1 >= L->hits);
+        int  power = tool_power(held);   // a stronger tool lands more hits a swing ("tool_power")
+        bool last  = (b->hits_done + power >= L->hits);
         if (last && !brk_drops_fit(L)) {
             ESP_LOGI(TAG, "brk: inventory too full for the drop — hit refused");
+            message(2000, "No room in your bag");
             return;
         }
 
@@ -7508,7 +7958,7 @@ static void brk_on_action(void)
         // rest plays from update_breakables() — always exactly one pass
         // through the bundle, regardless of the bundle's own loop_count
         // (see the BUNDLE format note above brk_level_t and frame_bundle.h).
-        b->hits_done++;
+        b->hits_done = (uint8_t)(b->hits_done + power > L->hits ? L->hits : b->hits_done + power);
         mapsave_mark_dirty();
         b->playing  = true;
         b->frame    = 0;
@@ -7694,6 +8144,7 @@ static bool ground_tile_ok(int tx, int ty)
     if (tx < 0 || ty < 0 || tx >= TILE_COLS || ty >= TILE_ROWS) return false;
     int x = tx * TILE_SIZE, y = ty * TILE_SIZE;
     if (farm_covers_tile(tx, ty)) return false;        // a crop's top half isn't solid, but it's baked there
+    if (tree_covers_rect(x, y, TILE_SIZE, TILE_SIZE)) return false;    // so is a tree's canopy (TREES)
     if (place_covers_rect(x, y, TILE_SIZE, TILE_SIZE)) return false;   // a prop (even a walk-on rug) or a building is baked there too
     for (int py = y + TILE_SIZE - PLAYER_FEET_H; py < y + TILE_SIZE; py++)
         for (int px = x; px < x + TILE_SIZE; px++)
@@ -7814,6 +8265,7 @@ static void ground_tick(void)
         }
         hud_refresh();
         mapsave_mark_dirty();
+        newitem_sparkle();   // NEW ITEM
         if (got > 1) message(2000, "Picked up %s x%d", item_name(g->item), got);
         else         message(2000, "Picked up %s", item_name(g->item));
         if (left > 0) {                // the rest stays on the ground
@@ -7925,9 +8377,38 @@ typedef struct {         // what a baked crop covered
     uint8_t  solid[FARM_MASK], layer[FARM_MASK];
 } farm_under_t;
 
+// Trees (TREES, after FARMING) are baked with the crops, in one order, so a
+// lower crop or tree is always in front of the one above it: s_farm_order
+// holds a crop's plot number, or FARM_MAX + a tree's slot.
+#include "trees.h"
+#define TREE_MAX 64                  // trees on one map
+
+typedef struct {
+    bool     used;
+    bool     mossy;      // a grown wild tree that turned mossy (it keeps it)
+    bool     baked;      // in the map pixels now (at rect)
+    uint8_t  def;        // s_trees[] index
+    uint8_t  stage;      // 0..TREE_STAGES-1 growing, TREE_GROWN, TREE_STUMP (trees.h)
+    int8_t   tx, ty;     // its base tile (its art reaches up and out from it)
+    uint8_t  hits;       // hits landed on this stage
+    uint8_t  age;        // days grown since it was planted (the growing stages)
+    uint8_t  fruit;      // fruit on it now (a fruit tree)
+    uint8_t  fruit_age;  // days since the last one grew, or it was picked
+    uint8_t  shown_fruit;
+    int32_t  shaken;     // the game day it was last shaken; -1 = never
+    const uint16_t *shown;   // the art it was baked with (a new season, a new stage: different)
+    rect_t   rect;       // where it's baked: its whole look, maybe partly off the map
+} tree_t;
+
+static tree_t s_tree[TREE_MAX];
+static bool   s_tree_seeded = false;            // the map's own trees (<map>.trees) were put on it once — its save says so
+static void   tree_bake(int i);                 // TREES section
+static void   tree_unbake(int i, bool pixels);  // ...pixels false: only the collision/layer bits (a night stage)
+
 static farm_plot_t   s_farm[FARM_MAX];
 static farm_under_t *s_farm_under   = NULL;   // PSRAM, FARM_MAX of them, taken on first use
-static uint8_t       s_farm_order[FARM_MAX];  // plots baked right now, in the order they were baked
+static uint8_t       s_farm_order[FARM_MAX + TREE_MAX];  // plots (and trees) baked right now, in the order they were baked
+_Static_assert(FARM_MAX + TREE_MAX <= 256, "s_farm_order holds them in a uint8_t");
 static int           s_farm_baked   = 0;
 static int           s_farm_seen_min = -1;    // the game minute farm_tick() last looked at
 static int32_t       s_farm_day      = 0;     // the game day the loaded map's crops and farmland are up to
@@ -8118,6 +8599,7 @@ static bool farm_tile_ok(int tx, int ty, bool check_player)
     if (tx < 0 || ty < 1 || tx >= TILE_COLS || ty >= TILE_ROWS) return false;
     if (s_soil[ty][tx] == SOIL_NONE) return false;   // seeds only go in farmland
     if (farm_at(tx, ty) >= 0) return false;   // (another crop's top half may cover this tile: it's drawn in front)
+    if (tree_at(tx, ty) >= 0 || tree_at(tx, ty - 1) >= 0) return false;   // not on a tree, nor its top half over one (TREES)
     if (ground_at(tx, ty) >= 0 || ground_at(tx, ty - 1) >= 0) return false;
     int x = tx * TILE_SIZE, y = ty * TILE_SIZE, ry = y - TILE_SIZE;        // the crop's rect: x, ry, CROP_W x CROP_H
     if (place_covers_rect(x, ry, CROP_W, CROP_H)) return false;            // not under (or over) a prop or building
@@ -8169,11 +8651,12 @@ static void farm_bake(int i)
     s_farm_order[s_farm_baked++] = (uint8_t)i;
 }
 
-// Takes every crop out of the map, newest first. Screen untouched.
+// Takes every crop (and tree) out of the map, newest first. Screen untouched.
 static void farm_unbake_all(void)
 {
     while (s_farm_baked > 0) {
         int i = s_farm_order[--s_farm_baked];
+        if (i >= FARM_MAX) { tree_unbake(i - FARM_MAX, true); continue; }
         const farm_under_t *u = &s_farm_under[i];
         int x0 = s_farm[i].tx * TILE_SIZE, y0 = (s_farm[i].ty - 1) * TILE_SIZE;
         for (int row = 0; row < CROP_H; row++) {
@@ -8188,13 +8671,15 @@ static void farm_unbake_all(void)
     }
 }
 
-// Bakes every planted crop, top row first (so a lower crop is in front of the one above it).
+// Bakes every planted crop and every tree, top row first (so a lower one is in front of the one above it).
 static void farm_bake_all(void)
 {
-    if (!s_farm_under) return;   // nothing was ever planted
-    for (int ty = 1; ty < TILE_ROWS; ty++)
-        for (int i = 0; i < FARM_MAX; i++)
+    for (int ty = 0; ty < TILE_ROWS; ty++) {
+        for (int i = 0; s_farm_under && i < FARM_MAX; i++)   // (no s_farm_under: nothing was ever planted)
             if (s_farm[i].used && s_farm[i].ty == ty) farm_bake(i);
+        for (int i = 0; i < TREE_MAX; i++)
+            if (s_tree[i].used && s_tree[i].ty == ty) tree_bake(i);
+    }
 }
 
 // The map pixels were just replaced wholesale (a night stage): the crops'
@@ -8204,6 +8689,7 @@ static void farm_unbake_masks(void)
 {
     while (s_farm_baked > 0) {
         int i = s_farm_order[--s_farm_baked];
+        if (i >= FARM_MAX) { tree_unbake(i - FARM_MAX, false); continue; }
         const farm_under_t *u = &s_farm_under[i];
         int x0 = s_farm[i].tx * TILE_SIZE, y0 = (s_farm[i].ty - 1) * TILE_SIZE;
         for (int k = 0; k < FARM_PX; k++) {
@@ -8242,8 +8728,10 @@ static bool farm_covers_any(void)
 }
 
 // A new map is replacing the old one (and its pixels): its crops and farmland go with it.
+static void tree_clear(void);   // TREES: ...and its trees
 static void farm_clear(void)
 {
+    tree_clear();
     memset(s_farm, 0, sizeof(s_farm));
     memset(s_soil, 0, sizeof(s_soil));
     s_farm_baked    = 0;
@@ -8284,6 +8772,7 @@ static bool ground_spot_free(int tx, int ty)
 {
     int x = tx * TILE_SIZE, y = ty * TILE_SIZE;
     if (ty < 1) return false;                          // a crop's top half would be off the map (farm_tile_ok())
+    if (tree_at(tx, ty) >= 0) return false;            // a tree stands there (even a seed, which is walked over — TREES)
     if (place_covers_rect(x, y, TILE_SIZE, TILE_SIZE)) return false;   // under a prop or building
     for (int py = y + TILE_SIZE - PLAYER_FEET_H; py < y + TILE_SIZE; py++)
         for (int px = x; px < x + TILE_SIZE; px++)
@@ -8653,10 +9142,14 @@ static bool herd_catch_up(bool baked, bool repaint);   // ...FARM: the midnights
 static int  ranch_animal_count(void);     // ...MAP SAVES: how many animals, their lines, one read back
 static void ranch_write(FILE *f, char *line, size_t n);
 static bool ranch_restore(const char *id, int tx, int ty, int fed, int days, int ready, int pending, int variant, int age);
+static bool tree_any(void);                  // TREES section: any trees on the loaded map
+static bool tree_day(int32_t day);           // ...one night: they grow, fruit, gather moss
+static void tree_snapshot(void);             // ...how they look now, and after a change:
+static void tree_show_changes(bool repaint); // ...baked again, the ones that look different repainted
 static bool farm_catch_up(bool baked, bool repaint)
 {
     int32_t today = (int32_t)clock_day();
-    if (s_farm_day >= today || (!soil_any() && !farm_covers_any() && !ranch_any())) {   // up to date (or the clock went back: Dev Tools), or no farm here
+    if (s_farm_day >= today || (!soil_any() && !farm_covers_any() && !ranch_any() && !tree_any())) {   // up to date (or the clock went back: Dev Tools), or no farm here
         s_farm_day = today;
         if (s_morning_day < today - 1) s_morning_day = today - 1;   // (nothing for a morning to do: today's still plays at 6:00)
         return false;
@@ -8666,6 +9159,7 @@ static bool farm_catch_up(bool baked, bool repaint)
     int eaten = 0;
     int8_t withered[FARM_MAX][2];   // SEASONS: the tiles of crops a new season killed
     int    n_withered = 0;
+    tree_snapshot();                // TREES: what they look like before the nights (a new season changes them too)
     memcpy(s_grass_was, s_grass, sizeof(s_grass_was));
     farm_guards_update();   // the sprinklers' and scarecrows' squares (SPRINKLERS + SCARECROWS)
     for (int32_t d = from; d < today; d++) {
@@ -8687,6 +9181,7 @@ static bool farm_catch_up(bool baked, bool repaint)
         // map wasn't on screen for (or the rest of the day it was left on), they grazed.
         if ((!baked || d != s_farm_day) && ranch_graze_away()) changed = true;
         if (ranch_new_day()) changed = true;
+        if (tree_day(d)) changed = true;   // TREES: they grow, fruit, gather moss
         grass_night();
         int next = season_of_day(d + 1);   // SEASONS: a new season tomorrow — what can't grow in it withers
         if (next != season_of_day(d))
@@ -8714,6 +9209,7 @@ static bool farm_catch_up(bool baked, bool repaint)
     s_farm_day = today;
     if (s_morning_day < today - 1) s_morning_day = today - 1;
     if (changed && baked) soil_show_changes(repaint);
+    if (baked && tree_any()) tree_show_changes(repaint);  // TREES: a new stage, fruit, moss, a new season's look
     if (eaten && baked && repaint) crows_ate_repaint();   // (they're not baked again: where they were is shown)
     if (eaten) message(3500, "Crows ate %d of the crops here while you were away", eaten);
     if (n_withered) {   // SEASONS: take the dead ones out of the map
@@ -8755,8 +9251,10 @@ static bool soil_restore(int tx, int ty, bool watered)
 // (either half; *gy is moved to its tile), or, holding seeds, farmland they
 // could go in, or, holding a hoe, a tile it could till, or, holding a
 // watering can, farmland? Then the walk goes next to it and presses action there.
+static bool tree_tap_target(int *gx, int *gy);   // TREES section: a tree, or ground for the held seed
 static bool farm_tap_target(int *gx, int *gy)
 {
+    if (tree_tap_target(gx, gy)) return true;
     if (farm_at(*gx, *gy) >= 0) return true;
     if (farm_at(*gx, *gy + 1) >= 0) { (*gy)++; return true; }
     item_id_t held = inv_held_item();
@@ -8817,9 +9315,11 @@ static void soil_on_can(int tx, int ty)
 
 // update_player(), when a walk arrives and presses action: till, plant,
 // water, harvest, or say how long is left, on the tile the player is facing.
+static bool tree_on_action(void);   // TREES section: the faced tree (chop, shake, pick up) or planting one
 static void farm_on_action(void)
 {
     if (!s_map_loaded) return;
+    if (tree_on_action()) return;
     int tx = s_selected_tile_x, ty = s_selected_tile_y, i = farm_at(tx, ty);
     bool can = ITEM_WATERS(inv_held_item());
     if (i >= 0) {
@@ -8845,6 +9345,7 @@ static void farm_on_action(void)
         if (spill > 0 && !ground_drop(item, q, spill))   // the rest goes on the ground next to the player
             ESP_LOGW(TAG, "farm: %d x %s didn't fit anywhere — lost", spill, item_name(item));
         hud_refresh();
+        if (item != ITEM_NONE) newitem_sparkle();   // NEW ITEM
         char ql[32];
         quality_label(q, ql, sizeof(ql));   // "Radioactive Gold" (MUTATIONS)
         if (q != QUALITY_STANDARD && n > 1) message(2500, "Harvested %d %s %s!", n, ql, item_name(item));
@@ -9084,6 +9585,11 @@ static void mapsave_delete(void)
 static bool mapsave_brk_changed(const brk_inst_t *b)   { return b->level > 0 || b->hits_done > 0; }
 static bool mapsave_ground_kept(const ground_item_t *g) { return g->count > 0 && g->item < item_count; }
 
+static bool tree_any(void);                                  // TREES section: any trees here...
+static void tree_write(FILE *f, char *line, size_t n);       // ...their lines
+static bool tree_restore(const char *id, const int *v);      // ...one read back
+static bool tree_seed_from_map(void);                        // ...the map's own trees (<map>.trees), the first time
+
 // Writes the loaded map's save. Lines are formatted into a static buffer
 // and written with fputs (not fprintf): the main task's stack is small.
 static bool mapsave_write(void)
@@ -9098,8 +9604,10 @@ static bool mapsave_write(void)
     for (int i = 0; i < FARM_MAX; i++)    planted += s_farm[i].used;
     for (int ty = 0; ty < TILE_ROWS; ty++)
         for (int tx = 0; tx < TILE_COLS; tx++) tilled += s_soil[ty][tx] != SOIL_NONE;
-    if (broken == 0 && dropped == 0 && planted == 0 && tilled == 0 && props == 0 && animals == 0 && grassed == 0 && !grassy_any()) {   // back to as exported: no save, and the regrowth timer stops
-        // (a map with Grassy ground keeps one: without it, its wild grass would start full again — FARMING)
+    if (broken == 0 && dropped == 0 && planted == 0 && tilled == 0 && props == 0 && animals == 0 && grassed == 0 && !grassy_any() &&
+        !tree_any() && !s_tree_seeded) {   // back to as exported: no save, and the regrowth timer stops
+        // (a map with Grassy ground keeps one: without it, its wild grass would start full again — FARMING;
+        // one whose own trees were put on it, the same: they'd come back — TREES)
         mapsave_delete();
         s_save_since_day = -1;
         ESP_LOGI(TAG, "save: %s is as exported again — no save kept", s_map_path);
@@ -9120,6 +9628,7 @@ static bool mapsave_write(void)
     else          snprintf(line, sizeof(line), "# this map never grows back (s_map_regen in main.c)\n");
     fputs(line, f);
     place_write_props(f, line, sizeof(line));   // first: what comes after is checked against them as it loads
+    tree_write(f, line, sizeof(line));          // (before the dropped stacks: they keep out from under trees — TREES)
     for (int n = 0; n < s_brk.count; n++) {
         const brk_inst_t *b = &s_brk.inst[n];
         if (!mapsave_brk_changed(b)) continue;
@@ -9134,7 +9643,7 @@ static bool mapsave_write(void)
         else            snprintf(line, sizeof(line), "dropped %d %s at tile %d %d\n", g->count, item_get(g->item)->id, g->tx, g->ty);
         fputs(line, f);
     }
-    if (soil_any() || farm_covers_any() || ranch_any()) {   // the day the farmland, crops, animals and grass below are up to (FARMING)
+    if (soil_any() || farm_covers_any() || ranch_any() || tree_any()) {   // the day the farmland, crops, animals, grass and trees are up to (FARMING)
         snprintf(line, sizeof(line), "farm day %ld\n", (long)s_farm_day);
         fputs(line, f);
     }
@@ -9296,7 +9805,8 @@ static void mapsave_load(void)
     if (!f) {                          // a power cut between removing the old save and renaming the new one?
         mapsave_path(s_map_path, ".tmp", path, sizeof(path));
         if (!(f = fopen(path, "r"))) {
-            if (grass_seed_wild()) mapsave_mark_dirty();   // never changed yet: its Grassy ground starts full of grass (FARMING)
+            bool trees = tree_seed_from_map();             // never been here: the map's own trees go on it (TREES)
+            if (grass_seed_wild() || trees) mapsave_mark_dirty();   // ...and its Grassy ground starts full of grass (FARMING)
             return;
         }
     }
@@ -9323,12 +9833,12 @@ static void mapsave_load(void)
     fgets(line, sizeof(line), f);      // the header again
 
     // Pass 2: apply it.
-    int  broken = 0, dropped = 0, tilled = 0, planted = 0, props = 0, animals = 0, grassed = 0, skipped = 0, saved_count = -1;
+    int  broken = 0, dropped = 0, tilled = 0, planted = 0, props = 0, animals = 0, grassed = 0, treed = 0, skipped = 0, saved_count = -1;
     int  farm_day = -1;                // no "farm day" line (an older save): the crops count as up to date
     int  morning_day = -1;             // no "morning day" line (an older save): the farm day's morning counts as played
     bool other_export = false;
     while (fgets(line, sizeof(line), f)) {
-        int nw = mapsave_words(line, word), v[8];
+        int nw = mapsave_words(line, word), v[10];
         const char *any = NULL;
         if (nw == 0 || word[0][0] == '#') continue;
         if (mapsave_match(word, nw, "fingerprint *", v, &any)) {
@@ -9357,6 +9867,10 @@ static void mapsave_load(void)
             if (!place_restore_machine(v, any)) skipped++;
         } else if (mapsave_match(word, nw, "gate at tile # # open", v, &any)) {   // a gate left open (FENCES)
             if (!place_restore_gate(v[0], v[1])) skipped++;
+        } else if (mapsave_match(word, nw, "trees seeded", v, &any)) {   // the map's own trees were put on it once (TREES)
+            s_tree_seeded = true;
+        } else if (mapsave_match(word, nw, "tree * at tile # # stage # age # moss # shaken # fruit # # hits #", v, &any)) {   // kept by regrowth
+            if (tree_restore(any, v)) treed++; else skipped++;
         } else if (mapsave_match(word, nw, "grass at tile # # tufts #", v, &any)) {   // the player's too (ANIMALS)
             if (grass_restore(v[0], v[1], v[2])) grassed++; else skipped++;
         } else if (mapsave_match(word, nw, "animal * at tile # # fed # days # ready # pending #", v, &any) ||
@@ -9377,6 +9891,7 @@ static void mapsave_load(void)
         }
     }
     fclose(f);
+    if (!s_tree_seeded && tree_seed_from_map()) mapsave_mark_dirty();   // a save from before the map had trees of its own (TREES)
 
     // The days that passed while the player was away: crops grow on the
     // ones it rained, the farmland dries (FARMING). Baked by mapsave_show().
@@ -9394,7 +9909,7 @@ static void mapsave_load(void)
     // with only them.
     if (regrown) {
         mapsave_delete();
-        if (planted || tilled || props || animals || grassed) mapsave_mark_dirty();
+        if (planted || tilled || props || animals || grassed || treed || s_tree_seeded) mapsave_mark_dirty();
     } else if (since >= 0 && since <= today) {
         s_save_since_day = since;
     } else if (broken || dropped) {
@@ -9477,7 +9992,7 @@ static bool mapsave_regrow_now(void)
     mapsave_delete();
     s_save_dirty     = false;
     s_save_since_day = -1;
-    if (farm_covers_any() || soil_any() || place_props_any() || ranch_any()) mapsave_mark_dirty();   // farmland, crops, props, animals and grass stay: a new save with just them
+    if (farm_covers_any() || soil_any() || place_props_any() || ranch_any() || tree_any() || s_tree_seeded) mapsave_mark_dirty();   // farmland, crops, props, animals, grass and trees stay: a new save with just them
     return true;
 }
 
@@ -9496,6 +10011,954 @@ static void mapsave_regen_tick(void)
     ESP_LOGI(TAG, "save: %s grew back in place (first changed on day %ld, after %d days) — save deleted",
              s_map_path, (long)since, days);
     message(3000, "Everything here has grown back");
+}
+
+// ============================================================
+//  TREES — wild trees and fruit trees, Stardew Valley style (trees.h; each
+//  made in the Game Tools Trees Editor as one assets/trees/<id>.c).
+//
+//  Planting: hold a tree's seed ("<id>_seed") and tap open ground — Tillable
+//  or Grassy (the Map Editor's tile flags), not farmland, nothing on it, the
+//  player could stand there, and no other tree on the 8 tiles around it
+//  (tree_plant_ok()). The walk goes next to it, as for a crop.
+//  Growing: four stages (seed, sprout, sapling, bush) spread evenly over the
+//  tree's grow_days, a day at a time (tree_day(), played for every night by
+//  farm_catch_up() with the crops — so trees on maps the player isn't on grow
+//  too). A tree waits while its next stage would cover a dropped stack or a
+//  prop. Then it's grown: a wild one may turn mossy (moss_pct a day, not in
+//  winter); a fruit tree grows a fruit every fruit_days days in its season
+//  (up to fruit_max, drawn on the canopy), and loses them out of season.
+//  Tapping a tree walks next to its base (its base tile, or the trunk tile
+//  above a tall one) and acts on it with what's held (tree_act()):
+//    seed     anything, bare hands too: picked up, the seed back
+//    sprout / sapling   any tool: gone (no drop); bare hands: days left
+//    bush     its chop_tool (the axe, or one that "counts_as:axe"): bush_hits
+//             hits -> bush_wood wood
+//    grown    the chop tool: hits hits; the last one fells it — the canopy
+//             tips over away from the player and falls (TREE_FALL_MS), and
+//             where it hits the ground leaves burst out and drift down; then
+//             wood_min..max wood and 0..seed_max seeds (a fruit tree: never its
+//             sapling). The stump is left.
+//             Bare hands (or any item that isn't a tool): it's shaken — once
+//             a game day: leaves fall and 0..shake_seed_max seeds; in winter
+//             nothing falls. A fruit tree's fruit falls off any time it has
+//             some: each lands on a tile in front of the tree as a dropped
+//             stack, picked up by walking onto it (tree_drop_fruit()). It
+//             never drops its sapling, and its wood is "hardwood" (its file's
+//             wood item).
+//    stump    the chop tool: stump_hits hits -> stump wood, and it's gone
+//  Every hit makes a few of the season's leaves fall (and the tree's hit
+//  sound plays). What doesn't fit in the bag goes on the ground (tree_give()).
+//
+//  Drawing: baked into s_map_pixels like a crop, together with the crops and
+//  in one order (farm_bake_all(): top row first, so the lower one is in
+//  front). What a tree covers is kept (s_tree_under, PSRAM, one per slot,
+//  taken the first time it's baked) to put back. Its base tile is drawn under
+//  the player and is solid from the bush on; everything above it is in front
+//  of the player. Nothing else is baked where a tree is: dropped stacks, props
+//  and farmland keep off its art (tree_covers_rect(), tree_at()). A change
+//  bakes them all again (tree_snapshot() + tree_show_changes() repaint the
+//  ones that look different). The falling canopy and the leaves aren't baked:
+//  they're drawn over the map wherever it's repainted (tree_fx_paint_rect(),
+//  from farmfx_paint_rect()) and repaint their own areas as they move.
+//
+//  The map's own trees: the Map Editor's Trees tool exports <map>.trees next
+//  to the .map ("tree <id> at tile <x> <y> stage <s> moss <0/1>" lines). The
+//  first time the map loads in a save they're put on it (tree_seed_from_map())
+//  and the save says "trees seeded" from then on, so a tree chopped down stays
+//  chopped down. Saved with the map (MAP SAVES), kept by regrowth (they're the
+//  player's, like crops): "tree <id> at tile <x> <y> stage <s> age <days>
+//  moss <0/1> shaken <day> fruit <n> <days> hits <n>".
+// ============================================================
+#define TREE_PX           (TREE_W * TREE_H)
+#define TREE_MASK         ((TREE_PX + 7) / 8)
+#define TREE_WINTER       3        // clock_season(): nothing falls when a tree is shaken
+#define TREE_LEAVES_MAX   48       // falling leaves at once
+#define TREE_HIT_LEAVES   3        // leaves a hit knocks off
+#define TREE_SHAKE_LEAVES 14       // ...and the day's shake
+#define TREE_CLOUD_LEAVES 30       // ...and the canopy hitting the ground
+#define TREE_FALL_MS      900      // the canopy tipping over to lying on the ground
+#define TREE_LEAF_VMAX    30.0f    // px/s a leaf drifts down at, at most
+#define TREE_LEAF_GRAV    90.0f    // px/s/s it speeds up by (a burst out of a fallen canopy slows to that first)
+#define TREE_LEAF_SWAY    2.5f     // px it sways from side to side
+
+typedef struct {         // what a baked tree covered
+    uint16_t px[TREE_PX];
+    uint8_t  solid[TREE_MASK], layer[TREE_MASK];
+} tree_under_t;
+
+typedef struct { const tree_art_t *main, *log; } tree_look_t;   // what a tree shows: its art (canopy, stage, stump) and the log under a grown one
+
+typedef struct {
+    bool              used;
+    uint8_t           frame;
+    const tree_art_t *art;
+    float             x, y, vx, vy, ground, ph;
+    uint32_t          born;
+    uint16_t          life;
+    rect_t            drawn;   // where it's on screen now (0 wide: not yet)
+} tree_leaf_t;
+
+typedef struct {                 // a grown tree coming down
+    bool              on;
+    const tree_art_t *art;       // its canopy
+    const tree_art_t *leaf;      // its leaves (the burst where it lands)
+    int               px, py;    // the pivot: the canopy's bottom middle
+    int               ground;    // the y its leaves settle at (its base tile's bottom)
+    int8_t            dir;       // +1 falls to the right, -1 to the left
+    float             deg;       // turned this far (clockwise)
+    uint32_t          t0;
+    rect_t            drawn;
+    item_id_t         wood, seed;   // paid when it lands
+    uint8_t           wood_n, seed_n;
+    const char       *name;
+} tree_fall_t;
+
+#define TREE_DROPS_MAX    8        // fruit falling off a shaken tree at once
+#define TREE_DROP_MS      420      // a fruit's fall from the canopy to the ground...
+#define TREE_DROP_GAP_MS  110      // ...each one a moment after the one before
+
+typedef struct {                   // a fruit falling off a shaken tree: it lands as a dropped stack (GROUND ITEMS), walked over to pick up
+    bool      used;
+    item_id_t item;
+    uint8_t   quality;
+    int16_t   x0, y0;              // its top-left where it hung on the canopy
+    int8_t    tx, ty;              // the tile it lands on
+    uint32_t  t0;                  // when it lets go
+    rect_t    drawn;
+    uint16_t  px[GROUND_TILE_PX];  // how it looks (as it'll lie on the ground)
+} tree_drop_t;
+
+static tree_drop_t s_tdrop[TREE_DROPS_MAX];
+static tree_under_t *s_tree_under[TREE_MAX];
+EXT_RAM_BSS_ATTR static uint16_t s_tree_comp[TREE_PX];   // a tree's look, put together before it's baked
+static struct { bool baked; const uint16_t *shown; uint8_t fruit; rect_t rect; } s_tree_was[TREE_MAX];   // tree_snapshot()
+static tree_leaf_t s_leaf[TREE_LEAVES_MAX];
+static tree_fall_t s_tfall;
+static uint32_t    s_treefx_ms;
+
+static void npc_dirty_add(rect_t r);   // MARKET: repainted at the end of the frame
+
+static uint32_t tree_now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
+static int tree_roll(int lo, int hi) { return hi <= lo ? lo : lo + (int)(esp_random() % (uint32_t)(hi - lo + 1)); }
+static const char *tree_name(const tree_t *t) { const tree_def_t *d = s_trees[t->def]; return d->name ? d->name : d->id; }
+
+// Season `season`'s art in arr[] — or the season before's, when it has none of its own.
+static const tree_art_t *tree_art_in(const tree_art_t *arr, int season)
+{
+    for (int s = season; s >= 0; s--) if (arr[s].px) return &arr[s];
+    return NULL;
+}
+
+// A mossy tree's art: the season's moss art — or its plain art when it has
+// its own and no moss (winter: bare, nothing for moss to show on); else the season before's.
+static const tree_art_t *tree_mossy_art(const tree_art_t *moss, const tree_art_t *plain, int season)
+{
+    for (int s = season; s >= 0; s--) {
+        if (moss[s].px)  return &moss[s];
+        if (plain[s].px) return &plain[s];
+    }
+    return NULL;
+}
+
+static bool tree_has_moss(const tree_def_t *d)
+{
+    for (int s = 0; s < 4; s++) if (d->moss[s].px) return true;
+    return false;
+}
+
+// What tree t would show at `stage`, this season.
+static tree_look_t tree_look_at(const tree_t *t, int stage)
+{
+    const tree_def_t *d = s_trees[t->def];
+    int s = clock_season();
+    tree_look_t l = { 0 };
+    if (stage < TREE_STAGES) {
+        for (int k = d->fruit ? 0 : s; k >= 0 && !l.main; k--)   // a fruit tree's growing stages aren't seasonal
+            if (d->stage[k][stage].px) l.main = &d->stage[k][stage];
+    } else if (stage == TREE_GROWN) {
+        l.main = t->mossy ? tree_mossy_art(d->moss, d->grown, s) : tree_art_in(d->grown, s);
+        l.log  = tree_art_in(d->log, s);
+    } else {
+        l.main = t->mossy ? tree_mossy_art(d->stump_moss, d->stump, s) : tree_art_in(d->stump, s);
+    }
+    return l;
+}
+static tree_look_t tree_look(const tree_t *t) { return tree_look_at(t, t->stage); }
+static int tree_log_h(const tree_look_t *l) { return l->log ? l->log->h : 0; }
+
+// The pixel rect look l covers: bottom-centred on t's base tile (the canopy
+// on the log), at least the base tile. May reach off the map.
+static rect_t tree_rect_of(const tree_t *t, const tree_look_t *l)
+{
+    int w = l->main ? l->main->w : TILE_SIZE, h = (l->main ? l->main->h : TILE_SIZE) + tree_log_h(l);
+    if (l->log && l->log->w > w) w = l->log->w;
+    if (w < TILE_SIZE) w = TILE_SIZE;
+    if (h < TILE_SIZE) h = TILE_SIZE;
+    if (w > TREE_W) w = TREE_W;
+    if (h > TREE_H) h = TREE_H;
+    return (rect_t){ t->tx * TILE_SIZE + TILE_SIZE / 2 - w / 2, (t->ty + 1) * TILE_SIZE - h, w, h };
+}
+
+static bool tree_any(void)
+{
+    for (int i = 0; i < TREE_MAX; i++) if (s_tree[i].used) return true;
+    return false;
+}
+
+static int tree_at(int tx, int ty)
+{
+    for (int i = 0; i < TREE_MAX; i++)
+        if (s_tree[i].used && s_tree[i].tx == tx && s_tree[i].ty == ty) return i;
+    return -1;
+}
+
+static bool tree_covers_rect(int x, int y, int w, int h)
+{
+    for (int i = 0; i < TREE_MAX; i++) {
+        if (!s_tree[i].used) continue;
+        tree_look_t l = tree_look(&s_tree[i]);
+        rect_t r = tree_rect_of(&s_tree[i], &l);
+        if (anim_rects_overlap(x, y, w, h, r.x, r.y, r.w, r.h)) return true;
+    }
+    return false;
+}
+
+static int tree_find(const char *id)
+{
+    for (int d = 0; d < tree_count; d++)
+        if (strcmp(s_trees[d]->id, id) == 0) return d;
+    return -1;
+}
+
+// The tree planted from item `item` (its id is "<tree id>_seed"), or -1.
+static int tree_of_seed(item_id_t item)
+{
+    const item_asset_t *a = item == ITEM_NONE ? NULL : item_get(item);
+    if (!a) return -1;
+    size_t n = strlen(a->id);
+    if (n <= 5 || strcmp(a->id + n - 5, "_seed") != 0) return -1;
+    for (int d = 0; d < tree_count; d++)
+        if (strlen(s_trees[d]->id) == n - 5 && strncmp(s_trees[d]->id, a->id, n - 5) == 0) return d;
+    return -1;
+}
+
+static item_id_t tree_seed_item(int def)
+{
+    char id[BRK_ITEM_ID_MAX + 1];
+    snprintf(id, sizeof(id), "%s_seed", s_trees[def]->id);
+    return item_find(id);
+}
+
+// ---- in the map pixels ----
+// Art a drawn into s_tree_comp (laid out as rect r) with its top-left at (x0,y0).
+static void tree_blit(rect_t r, const uint16_t *px, int aw, int ah, int x0, int y0)
+{
+    for (int row = 0; row < ah; row++) {
+        int y = y0 + row - r.y;
+        if (y < 0 || y >= r.h) continue;
+        for (int col = 0; col < aw; col++) {
+            int x = x0 + col - r.x;
+            uint16_t c = px[row * aw + col];
+            if (x >= 0 && x < r.w && c != FB_TRANSPARENT_COLOR) s_tree_comp[y * r.w + x] = c;
+        }
+    }
+}
+
+// Where fruit k hangs on tree t (look l, a grown canopy): its top-left on the map.
+static void tree_fruit_spot(const tree_t *t, const tree_look_t *l, int k, int *x, int *y)
+{
+    int mw = l->main->w, mh = l->main->h, lh = tree_log_h(l);
+    const int spot[TREE_FRUIT_MAX][2] = { { mw / 2 - 20, mh / 4 }, { mw / 2 + 4, mh / 6 }, { mw / 2 - 8, mh * 2 / 5 } };   // on the canopy
+    *x = t->tx * TILE_SIZE + TILE_SIZE / 2 - mw / 2 + spot[k][0];
+    *y = (t->ty + 1) * TILE_SIZE - lh - mh + spot[k][1];
+}
+
+// Tree t's look l put together in s_tree_comp, laid out as rect r: the log, the canopy on it, its fruit on that.
+static void tree_compose(const tree_t *t, const tree_look_t *l, rect_t r)
+{
+    const tree_def_t *d = s_trees[t->def];
+    memset(s_tree_comp, 0, (size_t)r.w * r.h * sizeof(uint16_t));
+    int cx = t->tx * TILE_SIZE + TILE_SIZE / 2, by = (t->ty + 1) * TILE_SIZE, lh = tree_log_h(l);
+    if (l->log)  tree_blit(r, l->log->px, l->log->w, l->log->h, cx - l->log->w / 2, by - lh);
+    if (l->main) tree_blit(r, l->main->px, l->main->w, l->main->h, cx - l->main->w / 2, by - lh - l->main->h);
+    if (t->stage != TREE_GROWN || !d->fruit || !t->fruit || !l->main || !d->fruit_item) return;
+    const item_asset_t *fa = item_get(item_find(d->fruit_item));
+    if (!fa || !fa->passive.frame_count || !fa->passive.pixels) return;
+    for (int k = 0; k < t->fruit && k < TREE_FRUIT_MAX; k++) {
+        int fx, fy;
+        tree_fruit_spot(t, l, k, &fx, &fy);
+        tree_blit(r, fa->passive.pixels, fa->passive.w, fa->passive.h, fx, fy);
+    }
+}
+
+// Writes tree i into the map as it looks now, keeping what it covers. Screen untouched.
+static void tree_bake(int i)
+{
+    tree_t *t = &s_tree[i];
+    if (!s_tree_under[i] && !(s_tree_under[i] = heap_caps_malloc(sizeof(tree_under_t), MALLOC_CAP_SPIRAM))) {
+        ESP_LOGE(TAG, "tree: out of PSRAM — a %s isn't shown", tree_name(t));
+        return;
+    }
+    tree_under_t *u = s_tree_under[i];
+    tree_look_t   l = tree_look(t);
+    rect_t        r = tree_rect_of(t, &l);
+    tree_compose(t, &l, r);
+    bool solid = t->stage >= TREE_STAGES - 1;   // the bush, a grown tree, a stump: its base tile (the seed, sprout and sapling are walked over)
+    int  base_y = t->ty * TILE_SIZE, bx0 = t->tx * TILE_SIZE;
+    for (int row = 0; row < r.h; row++) {
+        int y = r.y + row;
+        if (y < 0 || y >= s_map_h) continue;
+        for (int col = 0; col < r.w; col++) {
+            int x = r.x + col;
+            if (x < 0 || x >= s_map_w) continue;
+            int k = row * r.w + col, mi = y * s_map_w + x;
+            uint16_t c = s_tree_comp[k];
+            u->px[k] = s_map_pixels[mi];
+            bit_put(u->solid, k, bit_get(s_map_hitbox, mi));
+            bit_put(u->layer, k, bit_get(s_map_fgmask, mi));
+            if (c != FB_TRANSPARENT_COLOR) {
+                s_map_pixels[mi] = s_night_shown ? night_px(&s_night_lut, c) : c;
+                bit_put(s_map_fgmask, mi, y < base_y);   // above its base tile: in front of the player; the base: under them
+            }
+            if (solid && y >= base_y && x >= bx0 && x < bx0 + TILE_SIZE) bit_put(s_map_hitbox, mi, true);
+        }
+    }
+    t->rect        = r;
+    t->baked       = true;
+    t->shown       = l.main ? l.main->px : NULL;
+    t->shown_fruit = t->fruit;
+    s_farm_order[s_farm_baked++] = (uint8_t)(FARM_MAX + i);
+}
+
+// Puts back what tree i covered (pixels false: only its collision and layer bits — a night stage). Screen untouched.
+static void tree_unbake(int i, bool pixels)
+{
+    tree_t *t = &s_tree[i];
+    const tree_under_t *u = s_tree_under[i];
+    t->baked = false;
+    if (!u) return;
+    rect_t r = t->rect;
+    for (int row = 0; row < r.h; row++) {
+        int y = r.y + row;
+        if (y < 0 || y >= s_map_h) continue;
+        for (int col = 0; col < r.w; col++) {
+            int x = r.x + col;
+            if (x < 0 || x >= s_map_w) continue;
+            int k = row * r.w + col, mi = y * s_map_w + x;
+            if (pixels) s_map_pixels[mi] = u->px[k];
+            bit_put(s_map_hitbox, mi, bit_get(u->solid, k));
+            bit_put(s_map_fgmask, mi, bit_get(u->layer, k));
+        }
+    }
+}
+
+static void tree_repaint(rect_t r)
+{
+    r = rect_clip_screen(r);
+    if (r.w > 0 && r.h > 0) map_repaint_rect(r.x, r.y, r.w, r.h, NULL);
+}
+
+// How every tree looks now — tree_show_changes() repaints the ones that look different after a change.
+static void tree_snapshot(void)
+{
+    for (int i = 0; i < TREE_MAX; i++) {
+        const tree_t *t = &s_tree[i];
+        s_tree_was[i].baked = t->used && t->baked;
+        s_tree_was[i].shown = t->shown;
+        s_tree_was[i].fruit = t->shown_fruit;
+        s_tree_was[i].rect  = t->rect;
+    }
+}
+
+// Trees changed since tree_snapshot() (grew, went, came, a new season):
+// every crop and tree baked again; repaint: and the ones that look different shown.
+static void tree_show_changes(bool repaint)
+{
+    farm_unbake_all();
+    farm_bake_all();
+    if (!repaint) return;
+    for (int i = 0; i < TREE_MAX; i++) {
+        const tree_t *t = &s_tree[i];
+        bool was = s_tree_was[i].baked, now = t->used && t->baked;
+        rect_t o = s_tree_was[i].rect;
+        if (!was && !now) continue;
+        if (was && now && s_tree_was[i].shown == t->shown && s_tree_was[i].fruit == t->shown_fruit &&
+            o.x == t->rect.x && o.y == t->rect.y && o.w == t->rect.w && o.h == t->rect.h) continue;
+        if (was) tree_repaint(o);
+        if (now) tree_repaint(t->rect);
+    }
+}
+
+// Puts a tree in a free slot (not baked yet). -1 = the map is full of trees.
+static int tree_add(int def, int tx, int ty, int stage, bool mossy)
+{
+    int i;
+    for (i = 0; i < TREE_MAX && s_tree[i].used; i++) {}
+    if (i == TREE_MAX) return -1;
+    const tree_def_t *d = s_trees[def];
+    int need = d->grow_days ? d->grow_days : 1;
+    int age  = stage >= TREE_GROWN ? need : (stage * need + TREE_STAGES - 1) / TREE_STAGES;
+    s_tree[i] = (tree_t){ .used = true, .def = (uint8_t)def, .tx = (int8_t)tx, .ty = (int8_t)ty, .stage = (uint8_t)stage,
+                          .age = (uint8_t)(age > 255 ? 255 : age), .mossy = mossy && !d->fruit && tree_has_moss(d), .shaken = -1 };
+    return i;
+}
+
+// Tree i goes (picked up, broken, the stump dug out): out of the map and off the screen.
+static void tree_remove(int i)
+{
+    tree_snapshot();
+    s_tree[i].used = false;
+    tree_show_changes(true);
+    mapsave_mark_dirty();
+}
+
+// A new map is replacing the old one (and its pixels): its trees go with it — after a
+// tree that's still falling has landed (its wood is paid, into the bag only).
+static void tree_fall_land(bool here);
+static void tree_drop_settle(tree_drop_t *d, bool here);
+static void tree_clear(void)
+{
+    if (s_tfall.on) tree_fall_land(false);
+    for (int i = 0; i < TREE_DROPS_MAX; i++) if (s_tdrop[i].used) tree_drop_settle(&s_tdrop[i], false);   // fruit still falling: into the bag
+    memset(s_leaf, 0, sizeof(s_leaf));
+    memset(s_tree, 0, sizeof(s_tree));
+    s_tree_seeded = false;
+}
+
+// ---- growing ----
+// Would tree i's look at `stage` cover a dropped stack or a prop? Then it waits.
+static bool tree_room(int i, int stage)
+{
+    tree_look_t l = tree_look_at(&s_tree[i], stage);
+    rect_t r = tree_rect_of(&s_tree[i], &l);
+    if (place_covers_rect(r.x, r.y, r.w, r.h)) return false;
+    for (int g = 0; g < GROUND_MAX; g++)
+        if (s_ground[g].count > 0 && anim_rects_overlap(r.x, r.y, r.w, r.h, s_ground[g].tx * TILE_SIZE, s_ground[g].ty * TILE_SIZE, TILE_SIZE, TILE_SIZE)) return false;
+    return true;
+}
+
+// The night after game day `day` (farm_catch_up()): every tree grows a day,
+// a grown wild one may gather moss, a fruit tree in season grows its fruit. true = something changed.
+static bool tree_day(int32_t day)
+{
+    bool changed = false;
+    int  next = season_of_day(day + 1);   // the morning it wakes up to
+    for (int i = 0; i < TREE_MAX; i++) {
+        tree_t *t = &s_tree[i];
+        if (!t->used) continue;
+        const tree_def_t *d = s_trees[t->def];
+        if (t->stage < TREE_GROWN) {
+            int need = d->grow_days ? d->grow_days : 1, age = t->age + 1;
+            int stage = age >= need ? TREE_GROWN : age * TREE_STAGES / need;
+            if (stage < t->stage) stage = t->stage;
+            if (stage != t->stage && !tree_room(i, stage)) continue;   // its next size wouldn't fit: it waits
+            t->age = (uint8_t)(age > 255 ? 255 : age);
+            if (stage != t->stage) { t->stage = (uint8_t)stage; t->hits = 0; }
+            changed = true;
+        } else if (t->stage == TREE_GROWN) {
+            if (!d->fruit && !t->mossy && next != TREE_WINTER && d->moss_pct && tree_has_moss(d) && (int)(esp_random() % 100) < d->moss_pct) {
+                t->mossy = true;
+                changed  = true;
+            }
+            if (!d->fruit) continue;
+            int most = d->fruit_max < 1 ? 1 : d->fruit_max > TREE_FRUIT_MAX ? TREE_FRUIT_MAX : d->fruit_max;
+            if ((d->fruit_seasons >> next) & 1) {
+                if (++t->fruit_age >= (d->fruit_days ? d->fruit_days : 1) && t->fruit < most) { t->fruit++; t->fruit_age = 0; }
+                changed = true;
+            } else if (t->fruit || t->fruit_age) {   // out of season: it drops them
+                t->fruit = t->fruit_age = 0;
+                changed = true;
+            }
+        }
+    }
+    return changed;
+}
+
+// ---- what it gives ----
+// n of item into the bag (rolled for quality and mutation, wet in the rain, as
+// a breakable's drop); what doesn't fit goes on the ground next to the player
+// (here: false = not, the map's going). Returns how many the player got.
+static int tree_give(item_id_t item, int n, bool here)
+{
+    if (item == ITEM_NONE || n <= 0) return 0;
+    uint8_t q = wet_if_raining(QUALITY_MAKE(item_roll_quality(item, esp_random()), mut_roll(item, 1.0f)));   // MUTATIONS, WET ITEMS
+    int spill = inv_add_q(item, q, n);
+    if (spill > 0 && here && ground_drop(item, q, spill)) spill = 0;
+    if (spill > 0) ESP_LOGW(TAG, "tree: %d x %s didn't fit anywhere — lost", spill, item_name(item));
+    if (spill < n) { hud_refresh(); newitem_sparkle(); }   // NEW ITEM
+    return n - spill;
+}
+
+// ---- falling leaves, and a felled tree coming down ----
+// n leaves (frames of the season's leaf art) somewhere in `area`, falling to y
+// `ground`; burst: thrown out first (where a felled canopy hits the ground).
+static void tree_leaves(const tree_art_t *leaf, rect_t area, int n, int ground, bool burst)
+{
+    if (!leaf || !leaf->px || leaf->w < TREE_LEAF_PX || leaf->h < TREE_LEAF_PX) return;
+    int frames = leaf->w / TREE_LEAF_PX;
+    uint32_t aw = area.w > TREE_LEAF_PX ? (uint32_t)(area.w - TREE_LEAF_PX) : 1, ah = area.h > TREE_LEAF_PX ? (uint32_t)(area.h - TREE_LEAF_PX) : 1;
+    uint32_t now = tree_now_ms();
+    for (int i = 0; i < TREE_LEAVES_MAX && n > 0; i++) {
+        tree_leaf_t *l = &s_leaf[i];
+        if (l->used) continue;
+        *l = (tree_leaf_t){ .used = true, .art = leaf, .frame = (uint8_t)(esp_random() % (uint32_t)frames),
+                            .x = (float)(area.x + (int)(esp_random() % aw)), .y = (float)(area.y + (int)(esp_random() % ah)),
+                            .vx = (float)(burst ? (int)(esp_random() % 61) - 30 : (int)(esp_random() % 11) - 5),
+                            .vy = burst ? -(float)(15 + esp_random() % 35) : (float)(5 + esp_random() % 15),
+                            .ground = (float)(ground + (int)(esp_random() % 14) - 6), .ph = (float)(esp_random() % 628) / 100.0f,
+                            .born = now, .life = (uint16_t)(1500 + esp_random() % 1500) };
+        n--;
+    }
+}
+
+// The rect the falling canopy covers at its current angle.
+static rect_t tree_fall_rect(void)
+{
+    const tree_art_t *a = s_tfall.art;
+    float r = s_tfall.deg * 0.017453293f, c = cosf(r), s = sinf(r);
+    const float u[2] = { -a->w / 2.0f, a->w / 2.0f }, v[2] = { -(float)a->h, 0.0f };
+    float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f;
+    for (int i = 0; i < 2; i++)
+        for (int j = 0; j < 2; j++) {
+            float x = u[i] * c - v[j] * s, y = u[i] * s + v[j] * c;
+            if (x < x0) x0 = x;
+            if (x > x1) x1 = x;
+            if (y < y0) y0 = y;
+            if (y > y1) y1 = y;
+        }
+    return (rect_t){ s_tfall.px + (int)floorf(x0) - 1, s_tfall.py + (int)floorf(y0) - 1, (int)ceilf(x1 - x0) + 3, (int)ceilf(y1 - y0) + 3 };
+}
+
+// The felled canopy hits the ground: leaves burst out where it lies, and its
+// wood and seeds are paid (here: false = the map's going — into the bag only, no show).
+static void tree_fall_land(bool here)
+{
+    tree_fall_t f = s_tfall;
+    s_tfall.on = false;
+    if (here && f.art) {
+        int w = f.art->w, h = f.art->h;
+        rect_t lie = { f.dir > 0 ? f.px : f.px - h, f.py - w / 2, h, w / 2 + TILE_SIZE / 2 };   // where it lies, its upper half
+        tree_leaves(f.leaf, lie, TREE_CLOUD_LEAVES, f.ground, true);
+        rect_t d = rect_clip_screen(f.drawn);
+        if (d.w > 0 && d.h > 0) npc_dirty_add(d);
+    }
+    int wood = tree_give(f.wood, f.wood_n, here), seeds = tree_give(f.seed, f.seed_n, here);
+    if (wood && seeds) message(3000, "Timber! %d %s and %d %s", wood, item_name(f.wood), seeds, item_name(f.seed));
+    else if (wood)     message(3000, "Timber! %d %s", wood, item_name(f.wood));
+}
+
+// ---- fruit falling off a shaken tree ----
+// Is a different falling fruit headed for tile (tx,ty)? (They'd make two stacks on one tile.)
+static bool tree_drop_headed(int tx, int ty, item_id_t item, uint8_t q)
+{
+    for (int i = 0; i < TREE_DROPS_MAX; i++) {
+        const tree_drop_t *d = &s_tdrop[i];
+        if (d->used && d->tx == tx && d->ty == ty && (d->item != item || d->quality != q)) return true;
+    }
+    return false;
+}
+
+// The tile fruit k of tree t lands on: in front of it (the rows below its base,
+// spread out), not the one the player stands on if there's another. false = nowhere.
+static bool tree_drop_pick(const tree_t *t, int k, item_id_t item, uint8_t q, int *ox, int *oy)
+{
+    static const int8_t k_at[6][2] = { { -1, 1 }, { 1, 1 }, { 0, 1 }, { -1, 2 }, { 1, 2 }, { 0, 2 } };
+    int ptx = (s_player_x + PLAYER_W / 2) / TILE_SIZE, pty = (s_player_y + PLAYER_H - 1) / TILE_SIZE;
+    for (int pass = 0; pass < 2; pass++)   // the second time round: the player's tile too
+        for (int j = 0; j < 6; j++) {
+            int a = (j % 3 + k) % 3 + j / 3 * 3, x = t->tx + k_at[a][0], y = t->ty + k_at[a][1];
+            if (pass == 0 && x == ptx && y == pty) continue;
+            if (!ground_tile_takes(x, y, item, q, 1) || tree_drop_headed(x, y, item, q)) continue;
+            *ox = x;
+            *oy = y;
+            return true;
+        }
+    return false;
+}
+
+// Fruit d has landed: it lies on its tile as a dropped stack (or the nearest
+// free one) — here: false = the map's going, into the bag instead.
+static void tree_drop_settle(tree_drop_t *d, bool here)
+{
+    d->used = false;
+    if (here) {
+        rect_t r = rect_clip_screen(d->drawn);
+        if (r.w > 0 && r.h > 0) npc_dirty_add(r);
+        if (ground_drop_near(d->item, d->quality, 1, d->tx, d->ty, 0, 0, true, false)) return;   // shown by ground_tick()
+    }
+    if (inv_add_q(d->item, d->quality, 1) == 0) { hud_refresh(); newitem_sparkle(); }
+    else ESP_LOGW(TAG, "tree: a %s had nowhere to land and no room in the bag — lost", item_name(d->item));
+}
+
+// Fruit k of grown tree t (look l) lets go `delay` ms from now — or, with nowhere to land, goes straight into the bag.
+static void tree_drop_fruit(const tree_t *t, const tree_look_t *l, int k, item_id_t item, uint32_t delay)
+{
+    uint8_t q = wet_if_raining(QUALITY_MAKE(item_roll_quality(item, esp_random()), mut_roll(item, 1.0f)));   // MUTATIONS, WET ITEMS
+    int i, tx, ty, fx, fy;
+    for (i = 0; i < TREE_DROPS_MAX && s_tdrop[i].used; i++) {}
+    if (i == TREE_DROPS_MAX || !tree_drop_pick(t, k, item, q, &tx, &ty)) {   // no room to fall: into the bag
+        tree_drop_t d = { .item = item, .quality = q };
+        tree_drop_settle(&d, false);
+        return;
+    }
+    tree_fruit_spot(t, l, k, &fx, &fy);
+    tree_drop_t *d = &s_tdrop[i];
+    *d = (tree_drop_t){ .used = true, .item = item, .quality = q, .x0 = (int16_t)fx, .y0 = (int16_t)fy, .tx = (int8_t)tx, .ty = (int8_t)ty,
+                        .t0 = tree_now_ms() + delay };
+    ground_sprite(item, q, d->px);
+}
+
+// Once per game frame (see update_input): the leaves drift down, a felled tree comes down.
+static void tree_fx_tick(void)
+{
+    uint32_t now = tree_now_ms(), el = now - s_treefx_ms;
+    s_treefx_ms = now;
+    if (!s_map_loaded) return;
+    float dt = el > 100 ? 0.1f : (float)el / 1000.0f;   // back from a screen: carry on, don't jump
+    if (s_tfall.on) {
+        uint32_t t = now - s_tfall.t0;
+        if (t >= TREE_FALL_MS) tree_fall_land(true);
+        else {
+            float p = (float)t / TREE_FALL_MS;
+            s_tfall.deg = 90.0f * p * p * s_tfall.dir;   // slow to start, faster and faster
+            rect_t r = tree_fall_rect(), d = s_tfall.drawn.w ? rect_union(s_tfall.drawn, r) : r;
+            s_tfall.drawn = r;
+            d = rect_clip_screen(d);
+            if (d.w > 0 && d.h > 0) npc_dirty_add(d);
+        }
+    }
+    for (int i = 0; i < TREE_DROPS_MAX; i++) {   // fruit falling: still where it hung until it lets go, then faster and faster to its tile
+        tree_drop_t *d = &s_tdrop[i];
+        if (!d->used) continue;
+        int32_t t = (int32_t)(now - d->t0);
+        float   p = t <= 0 ? 0.0f : t >= TREE_DROP_MS ? 1.0f : (float)t / TREE_DROP_MS;
+        if (p >= 1.0f) { tree_drop_settle(d, true); continue; }
+        int lx = d->tx * TILE_SIZE, ly = d->ty * TILE_SIZE;
+        rect_t r = { d->x0 + (int)((lx - d->x0) * p), d->y0 + (int)((ly - d->y0) * p * p), TILE_SIZE, TILE_SIZE };
+        if (d->drawn.w && r.x == d->drawn.x && r.y == d->drawn.y) continue;
+        rect_t u = d->drawn.w ? rect_union(d->drawn, r) : r;
+        d->drawn = r;
+        u = rect_clip_screen(u);
+        if (u.w > 0 && u.h > 0) npc_dirty_add(u);
+    }
+    for (int i = 0; i < TREE_LEAVES_MAX; i++) {
+        tree_leaf_t *l = &s_leaf[i];
+        if (!l->used) continue;
+        uint32_t age = now - l->born;
+        l->vy += TREE_LEAF_GRAV * dt;
+        if (l->vy > TREE_LEAF_VMAX) l->vy = TREE_LEAF_VMAX;
+        l->vx -= l->vx * 2.0f * dt;
+        l->x  += l->vx * dt;
+        l->y  += l->vy * dt;
+        rect_t r = { (int)(l->x + TREE_LEAF_SWAY * sinf(l->ph + (float)age * 0.004f)), (int)l->y, TREE_LEAF_PX, TREE_LEAF_PX };
+        if (age > l->life || (l->vy > 0 && l->y + TREE_LEAF_PX >= l->ground)) {   // settled (or blown away): gone
+            l->used = false;
+            r = l->drawn;
+        } else if (l->drawn.w && r.x == l->drawn.x && r.y == l->drawn.y) {
+            continue;
+        } else {
+            rect_t was = l->drawn;
+            l->drawn = r;
+            if (was.w) r = rect_union(was, r);
+        }
+        r = rect_clip_screen(r);
+        if (r.w > 0 && r.h > 0) npc_dirty_add(r);
+    }
+}
+
+// The felled canopy and the falling leaves inside (x,y,w,h), over what's there (farmfx_paint_rect()).
+static void tree_fx_paint_rect(int x, int y, int w, int h)
+{
+    if (s_tfall.on && s_tfall.art && s_tfall.drawn.w) {
+        rect_t r = s_tfall.drawn;
+        const tree_art_t *a = s_tfall.art;
+        int x0 = anim_imax(anim_imax(r.x, x), 0), y0 = anim_imax(anim_imax(r.y, y), 0);
+        int x1 = anim_imin(anim_imin(r.x + r.w, x + w), s_fb_w), y1 = anim_imin(anim_imin(r.y + r.h, y + h), s_fb_h);
+        float rad = s_tfall.deg * 0.017453293f, c = cosf(rad), s = sinf(rad);
+        for (int yy = y0; yy < y1; yy++)
+            for (int xx = x0; xx < x1; xx++) {   // each screen pixel looks back into the canopy, turned
+                float dx = xx + 0.5f - s_tfall.px, dy = yy + 0.5f - s_tfall.py;
+                int sx = (int)floorf(dx * c + dy * s + a->w / 2.0f), sy = (int)floorf(-dx * s + dy * c + a->h);
+                if (sx < 0 || sy < 0 || sx >= a->w || sy >= a->h) continue;
+                uint16_t v = a->px[sy * a->w + sx];
+                if (v != FB_TRANSPARENT_COLOR) s_fb[yy * s_fb_w + xx] = s_night_shown ? night_px(&s_night_lut, v) : v;
+            }
+    }
+    for (int i = 0; i < TREE_DROPS_MAX; i++) {
+        const tree_drop_t *d = &s_tdrop[i];
+        if (!d->used || !d->drawn.w) continue;
+        rect_t r = d->drawn;
+        int x0 = anim_imax(anim_imax(r.x, x), 0), y0 = anim_imax(anim_imax(r.y, y), 0);
+        int x1 = anim_imin(anim_imin(r.x + r.w, x + w), s_fb_w), y1 = anim_imin(anim_imin(r.y + r.h, y + h), s_fb_h);
+        for (int yy = y0; yy < y1; yy++)
+            for (int xx = x0; xx < x1; xx++) {
+                uint16_t v = d->px[(yy - r.y) * TILE_SIZE + (xx - r.x)];
+                if (v != FB_TRANSPARENT_COLOR) s_fb[yy * s_fb_w + xx] = s_night_shown ? night_px(&s_night_lut, v) : v;
+            }
+    }
+    for (int i = 0; i < TREE_LEAVES_MAX; i++) {
+        const tree_leaf_t *l = &s_leaf[i];
+        if (!l->used || !l->drawn.w) continue;
+        rect_t r = l->drawn;
+        int x0 = anim_imax(anim_imax(r.x, x), 0), y0 = anim_imax(anim_imax(r.y, y), 0);
+        int x1 = anim_imin(anim_imin(r.x + r.w, x + w), s_fb_w), y1 = anim_imin(anim_imin(r.y + r.h, y + h), s_fb_h);
+        const uint16_t *px = l->art->px + l->frame * TREE_LEAF_PX;
+        for (int yy = y0; yy < y1; yy++)
+            for (int xx = x0; xx < x1; xx++) {
+                uint16_t v = px[(yy - r.y) * l->art->w + (xx - r.x)];
+                if (v != FB_TRANSPARENT_COLOR) s_fb[yy * s_fb_w + xx] = s_night_shown ? night_px(&s_night_lut, v) : v;
+            }
+    }
+}
+
+// ---- the player at a tree ----
+// A few leaves off tree i (n of them; none for a stump), and its hit sound.
+static void tree_hit_fx(int i, int n)
+{
+    const tree_t     *t = &s_tree[i];
+    const tree_def_t *d = s_trees[t->def];
+    if (d->sfx_hit && d->sfx_hit[0]) sfx_play(d->sfx_hit);
+    if (n <= 0) return;
+    tree_look_t l = tree_look(t);
+    rect_t r = tree_rect_of(t, &l);
+    if (t->stage == TREE_GROWN) r.h = (r.h - tree_log_h(&l)) * 2 / 3;   // out of the canopy's top two thirds
+    tree_leaves(tree_art_in(d->leaf, clock_season()), r, n, (t->ty + 1) * TILE_SIZE, false);
+}
+
+static void tree_say_growing(const tree_t *t)
+{
+    const tree_def_t *d = s_trees[t->def];
+    int left = (d->grow_days ? d->grow_days : 1) - t->age;
+    if (left < 1) left = 1;
+    message(2500, "%s: grown in %d day%s", tree_name(t), left, left == 1 ? "" : "s");
+}
+
+// The last hit on grown tree i: it falls (away from the player), the stump stays.
+static void tree_fell(int i)
+{
+    tree_t *t = &s_tree[i];
+    const tree_def_t *d = s_trees[t->def];
+    tree_look_t l = tree_look(t);
+    if (s_tfall.on) tree_fall_land(true);   // one at a time: the last one lands now
+    int cx = t->tx * TILE_SIZE + TILE_SIZE / 2, pcx = s_player_x + PLAYER_W / 2;
+    int8_t dir = s_player_facing == DIR_RIGHT ? 1 : s_player_facing == DIR_LEFT ? -1 : pcx < cx ? 1 : pcx > cx ? -1 : (esp_random() & 1) ? 1 : -1;
+    s_tfall = (tree_fall_t){ .on = true, .art = l.main, .leaf = tree_art_in(d->leaf, clock_season()),
+                             .px = cx, .py = (t->ty + 1) * TILE_SIZE - tree_log_h(&l), .ground = (t->ty + 1) * TILE_SIZE, .dir = dir,
+                             .t0 = tree_now_ms(), .wood = d->wood ? item_find(d->wood) : ITEM_NONE, .seed = tree_seed_item(t->def),
+                             .wood_n = (uint8_t)tree_roll(d->wood_min, d->wood_max), .seed_n = (uint8_t)(d->fruit ? 0 : tree_roll(0, d->seed_max)),   // (a fruit tree never drops its sapling)
+                             .name = tree_name(t) };
+    if (d->sfx_fall && d->sfx_fall[0]) sfx_play(d->sfx_fall);
+    tree_snapshot();
+    t->stage = TREE_STUMP;
+    t->hits  = 0;
+    t->fruit = t->fruit_age = 0;
+    if (!tree_look(t).main) t->used = false;   // no stump art: nothing is left
+    tree_show_changes(true);
+    mapsave_mark_dirty();
+    if (!s_tfall.art) tree_fall_land(true);   // no canopy art to show coming down
+}
+
+// Grown tree i shaken (tapped holding no tool): its fruit any time; once a
+// day leaves and maybe seeds — nothing in winter.
+static void tree_shake(int i)
+{
+    tree_t *t = &s_tree[i];
+    const tree_def_t *d = s_trees[t->def];
+    int32_t today = (int32_t)clock_day();
+    item_id_t fruit = ITEM_NONE, seed = tree_seed_item(t->def);
+    int got_fruit = 0, got_seeds = 0;
+    if (d->fruit && t->fruit && d->fruit_item && (fruit = item_find(d->fruit_item)) != ITEM_NONE) {   // it falls off, onto the ground in front
+        tree_look_t l = tree_look(t);
+        got_fruit = t->fruit;
+        tree_snapshot();
+        t->fruit = t->fruit_age = 0;
+        tree_show_changes(true);
+        if (!l.main) got_fruit = tree_give(fruit, got_fruit, true);   // (no canopy art to fall from)
+        else for (int k = 0; k < got_fruit; k++) tree_drop_fruit(t, &l, k, fruit, (uint32_t)k * TREE_DROP_GAP_MS);
+        mapsave_mark_dirty();
+    }
+    if (t->shaken == today) {
+        if (got_fruit) message(2500, "Shook down %d %s", got_fruit, item_name(fruit));
+        else           message(2000, "You've shaken the %s today", tree_name(t));
+        return;
+    }
+    t->shaken = today;
+    mapsave_mark_dirty();
+    if (clock_season() == TREE_WINTER) {
+        if (got_fruit) message(2500, "Shook down %d %s", got_fruit, item_name(fruit));
+        else           message(2000, "Nothing falls from the %s in winter", tree_name(t));
+        return;
+    }
+    tree_hit_fx(i, TREE_SHAKE_LEAVES);
+    if (!d->fruit) got_seeds = tree_give(seed, tree_roll(0, d->shake_seed_max), true);   // (a fruit tree never drops its sapling)
+    if (got_fruit && got_seeds) message(2500, "Shook down %d %s and %d %s", got_fruit, item_name(fruit), got_seeds, item_name(seed));
+    else if (got_fruit)         message(2500, "Shook down %d %s", got_fruit, item_name(fruit));
+    else if (got_seeds)         message(2500, "Shook the %s: %d %s fell", tree_name(t), got_seeds, item_name(seed));
+    else                        message(1500, "Shook the %s", tree_name(t));
+}
+
+// Tree i, faced, with `held` in hand (the hit of a tool's swing, or the press with anything else). See the section comment.
+static void tree_act(int i, item_id_t held)
+{
+    tree_t *t = &s_tree[i];
+    const tree_def_t *d = s_trees[t->def];
+    if (ITEM_WATERS(held)) { message(1500, "Trees don't need watering"); return; }
+    bool tool = tool_is(held);
+    item_id_t chop = d->chop_tool && d->chop_tool[0] ? item_find(d->chop_tool) : ITEM_NONE;
+    bool axe = tool && (chop == ITEM_NONE || item_counts_as(held, chop));   // (a better axe "counts_as:axe" — TOOL SWING)
+    int need;
+    switch (t->stage) {
+    case 0: {                          // the seed: anything picks it up, bare hands too
+        item_id_t seed = tree_seed_item(t->def);
+        tree_remove(i);
+        if (tree_give(seed, 1, true)) message(1500, "Picked up %s", item_name(seed));
+        return;
+    }
+    case 1: case 2:                    // the sprout, the sapling: any tool breaks it, nothing comes of it
+        if (!tool) { tree_say_growing(t); return; }
+        tree_hit_fx(i, 2);
+        tree_remove(i);
+        return;
+    case TREE_STAGES - 1: need = d->bush_hits;  break;
+    case TREE_GROWN:      need = d->hits;       break;
+    default:              need = d->stump_hits; break;
+    }
+    if (!tool) {
+        if (t->stage == TREE_GROWN)      tree_shake(i);
+        else if (t->stage < TREE_GROWN)  tree_say_growing(t);
+        else                             message(2000, "%s stump: chop it with %s", tree_name(t), chop != ITEM_NONE ? item_name(chop) : "an axe");
+        return;
+    }
+    if (!axe) { message(2000, "That needs %s", chop != ITEM_NONE ? item_name(chop) : "an axe"); return; }
+    int hits = t->hits + tool_power(held);   // a stronger axe lands more hits a swing ("tool_power")
+    t->hits = (uint8_t)(hits > 255 ? 255 : hits);
+    tree_hit_fx(i, t->stage == TREE_STUMP ? 0 : TREE_HIT_LEAVES);
+    mapsave_mark_dirty();
+    if (t->hits < (need < 1 ? 1 : need)) return;
+    item_id_t wood = d->wood ? item_find(d->wood) : ITEM_NONE;
+    int n;
+    if (t->stage == TREE_GROWN) { tree_fell(i); return; }
+    n = t->stage == TREE_STUMP ? tree_roll(d->stump_wood_min, d->stump_wood_max) : d->bush_wood;
+    tree_remove(i);
+    if ((n = tree_give(wood, n, true)) > 0) message(2000, "Got %d %s", n, item_name(wood));
+}
+
+// Could a tree be planted on tile (tx,ty)? See the section comment.
+static bool tree_plant_ok(int tx, int ty, bool check_player)
+{
+    if (!tile_on_map(tx, ty) || ty < 1) return false;
+    if (!tile_tillable(tx, ty) && !tile_grassy(tx, ty)) return false;
+    if (s_soil[ty][tx] != SOIL_NONE || farm_at(tx, ty) >= 0 || farm_at(tx, ty + 1) >= 0 || ground_at(tx, ty) >= 0) return false;
+    for (int dy = -1; dy <= 1; dy++)   // trees need room to grow
+        for (int dx = -1; dx <= 1; dx++)
+            if (tree_at(tx + dx, ty + dy) >= 0) return false;
+    if (!ground_spot_free(tx, ty)) return false;   // the player could stand there; no prop, animation, breakable, teleporter
+    if (check_player && anim_rects_overlap(tx * TILE_SIZE, ty * TILE_SIZE, TILE_SIZE, TILE_SIZE, s_player_x, s_player_y + PLAYER_H - PLAYER_FEET_H,
+                                           PLAYER_W, PLAYER_FEET_H)) return false;
+    return true;
+}
+
+static void tree_plant(int def, int tx, int ty)
+{
+    if (!tree_plant_ok(tx, ty, true)) { message(2000, "Can't plant a tree here"); return; }
+    grass_set(tx, ty, 0);   // (planting in grass digs it up)
+    tree_snapshot();
+    int i = tree_add(def, tx, ty, 0, false);
+    if (i < 0) { message(2000, "This map can't fit more trees"); return; }
+    inv_slot_t *seeds = &s_inv[s_inv_held];
+    if (--seeds->count == 0) *seeds = (inv_slot_t){ ITEM_NONE, 0, QUALITY_STANDARD };
+    hud_refresh();
+    tree_show_changes(true);
+    mapsave_mark_dirty();
+    message(1500, "Planted a %s", tree_name(&s_tree[i]));
+}
+
+// TAP-TO-WALK (farm_tap_target()): a tap on a tree's base, or the trunk tile
+// above a tall one (*gy moves to the base) — or, holding a seed, on ground it
+// could be planted in. Then the walk goes next to it and presses action there.
+static bool tree_tap_target(int *gx, int *gy)
+{
+    if (tree_at(*gx, *gy) >= 0) return true;
+    int j = tree_at(*gx, *gy + 1);
+    if (j >= 0 && s_tree[j].stage >= TREE_STAGES - 1) { (*gy)++; return true; }
+    return tree_of_seed(inv_held_item()) >= 0 && tree_plant_ok(*gx, *gy, false);
+}
+
+// farm_on_action(): the faced tile has a tree, or a tree's seed is held. true = it was for a tree.
+static bool tree_on_action(void)
+{
+    int tx = s_selected_tile_x, ty = s_selected_tile_y, i = tree_at(tx, ty);
+    item_id_t held = inv_held_item();
+    if (i >= 0) { tree_act(i, held); return true; }
+    int def = tree_of_seed(held);
+    if (def < 0) return false;
+    tree_plant(def, tx, ty);
+    return true;
+}
+
+// ---- saved with the map ----
+static void tree_write(FILE *f, char *line, size_t n)
+{
+    if (s_tree_seeded) fputs("trees seeded\n", f);
+    for (int i = 0; i < TREE_MAX; i++) {
+        const tree_t *t = &s_tree[i];
+        if (!t->used) continue;
+        snprintf(line, n, "tree %s at tile %d %d stage %d age %d moss %d shaken %ld fruit %d %d hits %d\n", s_trees[t->def]->id,
+                 t->tx, t->ty, t->stage, t->age, t->mossy, (long)t->shaken, t->fruit, t->fruit_age, t->hits);
+        fputs(line, f);
+    }
+}
+
+// A "tree" line (v = x, y, stage, age, moss, shaken, fruit, fruit days, hits). false = skipped (logged).
+static bool tree_restore(const char *id, const int *v)
+{
+    int def = tree_find(id);
+    if (def < 0) { ESP_LOGW(TAG, "save: tree \"%s\" isn't in this build — skipped", id); return false; }
+    if (!tile_on_map(v[0], v[1]) || tree_at(v[0], v[1]) >= 0 || v[2] < 0 || v[2] > TREE_STUMP) {
+        ESP_LOGW(TAG, "save: the %s tree at tile (%d,%d) doesn't fit any more — skipped", id, v[0], v[1]);
+        return false;
+    }
+    int i = tree_add(def, v[0], v[1], v[2], v[4] != 0);
+    if (i < 0) return false;
+    tree_t *t = &s_tree[i];   // baked by mapsave_show()
+    t->age       = (uint8_t)(v[3] < 0 ? 0 : v[3] > 255 ? 255 : v[3]);
+    t->shaken    = v[5];
+    t->fruit     = (uint8_t)(v[6] < 0 ? 0 : v[6] > TREE_FRUIT_MAX ? TREE_FRUIT_MAX : v[6]);
+    t->fruit_age = (uint8_t)(v[7] < 0 ? 0 : v[7] > 255 ? 255 : v[7]);
+    t->hits      = (uint8_t)(v[8] < 0 ? 0 : v[8] > 255 ? 255 : v[8]);
+    return true;
+}
+
+// The first time this map loads in this save: its own trees, from <map>.trees
+// (the Map Editor's Trees tool) next to its .map. true = it has that file
+// (s_tree_seeded: the save remembers they were put on it, so they don't come back).
+static bool tree_seed_from_map(void)
+{
+    static char  path[MAPSAVE_PATH_MAX], line[MAPSAVE_LINE_MAX];
+    static char *word[MAPSAVE_WORDS];
+    if (!map_path_for(current_map_name(), path, sizeof(path))) return false;
+    char *dot = strrchr(path, '.');
+    if (!dot || (size_t)(dot - path) + sizeof(".trees") > sizeof(path)) return false;
+    strcpy(dot, ".trees");
+    FILE *f = fopen(path, "r");
+    if (!f) return false;
+    int n = 0, bad = 0;
+    while (fgets(line, sizeof(line), f)) {
+        int nw = mapsave_words(line, word), v[4], def;
+        const char *any = NULL;
+        if (nw == 0 || word[0][0] == '#') continue;
+        if (!mapsave_match(word, nw, "tree * at tile # # stage # moss #", v, &any) || (def = tree_find(any)) < 0 ||
+            !tile_on_map(v[0], v[1]) || tree_at(v[0], v[1]) >= 0 || v[2] < 0 || v[2] > TREE_STUMP || tree_add(def, v[0], v[1], v[2], v[3] != 0) < 0) {
+            bad++;
+            continue;
+        }
+        n++;
+    }
+    fclose(f);
+    s_tree_seeded = true;
+    ESP_LOGI(TAG, "trees: %s — %d of its own trees put on it (%d lines skipped: a tree not in this build, or off the map)", path, n, bad);
+    return true;
 }
 
 // ============================================================
@@ -9892,6 +11355,7 @@ static bool place_ok(const place_geom_t *g, bool check_player, const char **why)
         if (s_farm[i].used && anim_rects_overlap(r.x, r.y, r.w, r.h, s_farm[i].tx * TILE_SIZE, (s_farm[i].ty - 1) * TILE_SIZE, CROP_W, CROP_H)) return false;
     for (int i = 0; i < GROUND_MAX; i++)
         if (s_ground[i].count > 0 && rect_has_tile(r, s_ground[i].tx, s_ground[i].ty)) return false;
+    if (tree_covers_rect(r.x, r.y, r.w, r.h)) return false;   // a tree, even a seed (TREES)
     for (int ty = r.y / TILE_SIZE; ty <= (r.y + r.h - 1) / TILE_SIZE; ty++)
         for (int tx = r.x / TILE_SIZE; tx <= (r.x + r.w - 1) / TILE_SIZE; tx++)
             if (tile_on_map(tx, ty) && s_soil[ty][tx] != SOIL_NONE) { *why = "Not on farmland"; return false; }
@@ -10950,6 +12414,7 @@ static void machine_on_action(int i)
         int n = p->mk_count, spill = inv_add_q(item, q, n);
         if (spill == n) { message(2000, "No room for %s", item_name(item)); return; }
         if (spill > 0 && !ground_drop(item, q, spill)) ESP_LOGW(TAG, "machine: %d x %s didn't fit anywhere — lost", spill, item_name(item));
+        newitem_sparkle();   // NEW ITEM
         machine_set(i, ITEM_NONE, 0, QUALITY_STANDARD, 0);
         hud_refresh();
         char ql[32];
@@ -11090,6 +12555,7 @@ static bool place_on_action(void)
         else if (pot_of(&s_place[i].g))        pot_on_action(i);   // the catch, bait, or pick it up (CRAB POTS)
         else if (geom_is_gate(&s_place[i].g) && inv_held_item() != ITEM_NONE) gate_toggle(i);   // open / shut it (FENCES)
         else if (place_is_bed(&s_place[i].g))  sleep_open(i);   // sleep (its PICK UP button takes it)
+        else if (item_attr(s_place[i].g.what, ITEM_ATTR_MARKET_BOARD, 0) > 0) board_open(i);   // today's demand, requests, captures (its PICK UP button takes it)
         else if (inv_held_item() != ITEM_NONE) message(2000, "Empty your hands to pick up %s", place_name(&s_place[i].g));
         else                                   place_pick_up(i);
     }
@@ -11715,6 +13181,7 @@ static void farmfx_paint_rect(int x, int y, int w, int h)
 {
     crow_paint_rect(x, y, w, h);
     range_paint_rect(x, y, w, h);
+    tree_fx_paint_rect(x, y, w, h);   // a felled tree coming down, falling leaves (TREES)
 }
 
 // ============================================================
@@ -12713,7 +14180,7 @@ static void open_menu(menu_id_t id);   // defined after the settings table
 #define SLIDER_MAX 100.0f
 
 // ---- UI state ----
-typedef enum { UI_NONE, UI_INVENTORY, UI_MENU, UI_KEYBOARD, UI_SHOP, UI_SHELF, UI_OFFER, UI_AUCTION, UI_LEDGER, UI_FISHING, UI_SLEEP, UI_FISHBOOK, UI_CRAFT } ui_screen_t;
+typedef enum { UI_NONE, UI_INVENTORY, UI_MENU, UI_KEYBOARD, UI_SHOP, UI_SHELF, UI_OFFER, UI_AUCTION, UI_LEDGER, UI_FISHING, UI_SLEEP, UI_FISHBOOK, UI_CRAFT, UI_BOARD } ui_screen_t;
 
 // LEDGER section (after the CLOCK): every buy and sell, for the ledger screen and ledger.csv.
 static void ledger_add(bool sell, item_id_t item, uint8_t quality, int count, uint32_t amount, const char *who, const char *where);
@@ -17641,6 +19108,7 @@ static void ranch_give(item_id_t item, uint8_t q, int n)
     int spill = inv_add_q(item, q, n);
     if (spill > 0 && !ground_drop(item, q, spill)) ESP_LOGW(TAG, "ranch: %d x %s didn't fit anywhere — lost", spill, item_name(item));
     hud_refresh();
+    newitem_sparkle();   // NEW ITEM
 }
 
 // The player, next to animal a and facing it, pressed action holding `held`.
@@ -17727,6 +19195,7 @@ static void silo_on_action(item_id_t held)
     if (spill == n) { message(2000, "No room in your bag for hay"); return; }
     s_silo_hay -= (uint32_t)(n - spill);
     hud_refresh();
+    newitem_sparkle();   // NEW ITEM
     farm_mark_dirty();
     message(2500, "Took %d hay from the silo: %lu of %lu left", n - spill, (unsigned long)s_silo_hay, (unsigned long)cap);
 }
@@ -18179,6 +19648,11 @@ enum { FISH_OFF, FISH_CAST, FISH_WAIT, FISH_BITE, FISH_GAME, FISH_DONE };
 #define FISH_CAST_MS      450      // the bobber's flight
 #define FISH_BITE_MS      1000     // the "!": tap within this to hook it
 #define FISH_BOB_MS       450      // the bobber bobbing
+#define FISH_SPLASH_PX    16       // the bobber landing: assets/fx/fish_splash.png, FISH_SPLASH_FRAMES frames this square side by side
+#define FISH_SPLASH_FRAMES 8
+#define FISH_SPLASH_MS    70       // ...each frame
+_Static_assert(FX_FISH_SPLASH_W == FISH_SPLASH_FRAMES * FISH_SPLASH_PX && FX_FISH_SPLASH_H == FISH_SPLASH_PX,
+               "assets/fx/fish_splash.png must be 8 frames of 16x16 side by side");
 #define FISH_WATER_H      280      // the minigame's water column, px
 #define FISH_GRACE_S      0.6f     // the minigame's first moments: the meter doesn't drain yet
 #define FISH_FILL_S       0.125f   // the catch meter, per second, with the fish in the bar...
@@ -18770,6 +20244,20 @@ static void fish_paint_rect(int x, int y, int w, int h)
                 }
         }
     } else {
+        if (s_fish.state == FISH_WAIT && s_fish.t_ms < FISH_SPLASH_FRAMES * FISH_SPLASH_MS) {   // just landed: the splash around it
+            int      f   = (int)(s_fish.t_ms / FISH_SPLASH_MS), sx = s_fish.ex - FISH_SPLASH_PX / 2, sy = s_fish.ey - FISH_SPLASH_PX / 2 + 1;
+            uint16_t col = s_fish.lava ? COLOR_RGB565(255, 170, 60) : COLOR_RGB565(255, 255, 255);   // the art is white: lava splashes orange
+            if (s_night_shown) col = night_px(&s_night_lut, col);
+            rect_t r = s_fish_clip;
+            for (int yy = 0; yy < FISH_SPLASH_PX; yy++)
+                for (int xx = 0; xx < FISH_SPLASH_PX; xx++) {
+                    int     x = sx + xx, y = sy + yy;
+                    uint8_t a = fx_fish_splash_a[yy * FX_FISH_SPLASH_W + f * FISH_SPLASH_PX + xx];
+                    if (!a || x < r.x || y < r.y || x >= r.x + r.w || y >= r.y + r.h || x < 0 || y < 0 || x >= s_fb_w || y >= s_fb_h) continue;
+                    uint16_t *p = &s_fb[y * s_fb_w + x];
+                    *p = rgb565_blend(*p, col, a);
+                }
+        }
         fish_px_sprite(s_fish.bx - 3, s_fish.by - 3, k_fish_bobber, 6, true);
     }
 }
@@ -18975,6 +20463,7 @@ static void fish_land_junk(void)
     s_fish.inches   = 0;
     s_fish.left     = inv_add_q(it, q, 1) == 0 ? 0 : ground_drop(it, q, 1) ? 1 : 2;
     s_fish.level_up = fish_xp_add(3);
+    newitem_sparkle();   // NEW ITEM: once the card is closed
     s_fish.t        = 0;
     s_fish.state    = FISH_DONE;
     s_fish.last_ms  = fish_now_ms();
@@ -19039,9 +20528,11 @@ static void fish_tick(void)
             sfx_play("fish_plop");
         }
     } else if (s_fish.state == FISH_WAIT) {
-        look = (s_fish.t_ms / FISH_BOB_MS) & 1;
+        int bob = (int)((s_fish.t_ms / FISH_BOB_MS) & 1);
+        look = bob;
+        if (s_fish.t_ms < FISH_SPLASH_FRAMES * FISH_SPLASH_MS) look += 2 * (s_fish.t_ms / FISH_SPLASH_MS + 1);   // the landing splash (fish_paint_rect()); once over, look changes and it's wiped
         s_fish.bx = s_fish.ex;
-        s_fish.by = s_fish.ey + (int)look;
+        s_fish.by = s_fish.ey + bob;
         if (s_fish.t_ms >= s_fish.wait_ms) {
             bool junk;
             s_fish.fish = fish_bite_pick(&junk);
@@ -19348,6 +20839,7 @@ static void fish_caught(void)
     for (int k = 1; k < count; k++) fishbook_record(it, q, in);
     int spill = inv_add_q(it, q, count);
     s_fish.left = spill == 0 ? 0 : ground_drop(it, q, spill) ? 1 : 2;
+    newitem_sparkle();   // NEW ITEM: once the card is closed
     // xp, Stardew's way: (grade + 1) * 3 + difficulty / 3; perfect x2.4; a legend x5
     int diff = (int)item_attr(it, ITEM_ATTR_FISH, 30);
     float xp = (QUALITY_GRADE(q) + 1) * 3 + diff / 3.0f;
@@ -19572,6 +21064,7 @@ static void pot_on_action(int i)
         int n = p->mk_count, spill = inv_add_q(item, q, n);
         if (spill == n) { message(2000, "No room for %s", item_name(item)); return; }
         if (spill > 0 && !ground_drop(item, q, spill)) ESP_LOGW(TAG, "crab pot: %d x %s didn't fit anywhere — lost", spill, item_name(item));
+        newitem_sparkle();   // NEW ITEM
         machine_set(i, ITEM_NONE, 0, QUALITY_STANDARD, 0);
         int lvl = fish_xp_add(5);
         if (lvl) message(3000, "Got %s%s! Fishing level %d!", n > 1 ? "2 " : "", item_name(item), lvl);
@@ -20759,6 +22252,530 @@ static void update_menu(const input_frame_t *in)
 }
 
 // ============================================================
+//  MARKET BOARD — a notice board (UI_BOARD): a map object with the
+//  "market_board" action (actions.c), or a prop the player puts down (an item
+//  with "market_board 1", items.h; sold in the Build shop). Three tabs:
+//   - DEMAND: today's demand for every market type (pipeline_msgs.h
+//     CAM_TYPES, worked out from the save's seed and the day — see "Market
+//     types + today's demand" next to the photo traits), highest first, with
+//     which way each moved since yesterday.
+//   - REQUESTS: today's REQ_COUNT photo requests — a look ("Round"), a
+//     material or use ("Electronics"), and both at once ("Red + Metal") —
+//     picked from the types the same way. Only which are done is stored
+//     (world.txt "requests DAY BITS"). A photo item made with the camera that
+//     has the type(s) does one and pays k_req_reward[] (market_photo_taken()).
+//   - CAPTURES: the capture book — every kind of thing made into a photo item
+//     (the AI's "kind": mug, sandal...), with a 16x16 picture of the first one,
+//     how many, the best appraisal and the types seen. The first of a kind pays
+//     CAPBOOK_NEW_PCT % of its price (CAPBOOK_NEW_MIN..MAX), and reaching each
+//     k_capbook_prizes[] count of kinds pays a prize. Kept only on the SD card
+//     (the save's captures.bin: "CICAPS01", then capbook_rec_t records) and read
+//     into PSRAM only while the tab is open — nothing of it stays in RAM.
+// ============================================================
+#define REQ_COUNT          3
+#define REQ_LOOKS          (CAM_TYPE_wood)                        // types 0.. this - 1: colours, shapes, feel
+#define REQ_COLOURS        (CAM_TYPE_gray + 1)                    // types 0.. this - 1: colours
+static const int32_t k_req_reward[REQ_COUNT] = { 150, 250, 500 }; // a look, a material / use, a colour + a material / use
+#define CAPBOOK_MAGIC      "CICAPS01"
+#define CAPBOOK_ICON       16
+#define CAPBOOK_MAX        999
+#define CAPBOOK_NEW_PCT    25       // the first of a kind: this % of its price...
+#define CAPBOOK_NEW_MIN    20       // ...at least...
+#define CAPBOOK_NEW_MAX    500      // ...at most
+#define BOARD_TAB_Y        (BOOK_Y + 46)
+#define BOARD_TAB_H        24
+#define BOARD_TAB_W        ((BOOK_W - 32 - 2 * 6) / 3)
+#define BOARD_TOP          (BOOK_Y + 80)                           // where a tab's page starts
+#define BOARD_ROW_H        12
+#define BOARD_ROWS         ((CAM_TYPE_COUNT + 1) / 2)              // the demand list: two columns of this many
+#define BOARD_PICK_W       84
+#define BOARD_PICK_X       (BOOK_X + BOOK_W - 16 - BOARD_PICK_W)
+#define BOARD_PICK_Y       (BOOK_Y + BOOK_H - 30)
+#define BOARD_COL_HOT      COLOR_RGB565( 60, 140,  50)
+#define BOARD_COL_COLD     COLOR_RGB565(176,  76,  56)
+
+typedef struct {                   // (not packed: the file is only ever read by this firmware)
+    char     kind[CAM_KIND_LEN];   // the AI's word for it ("mug"), zero-padded
+    uint16_t count;                // photo items made of it
+    uint32_t best;                 // $ the best one was appraised at
+    uint32_t first_day;            // clock_day() of the first
+    uint64_t types;                // every market type seen on one
+    uint16_t icon[CAPBOOK_ICON * CAPBOOK_ICON];   // the first one, shrunk to fit; 0x0000 = see-through
+} capbook_rec_t;
+
+typedef struct { uint16_t kinds; int32_t money; const char *item; uint8_t n; } capbook_prize_t;
+static const capbook_prize_t k_capbook_prizes[] = {   // reaching this many kinds pays this (an item that isn't in the build: just the money)
+    { 5, 250, NULL, 0 }, { 10, 500, "deluxe_bait", 10 }, { 25, 1500, "magic_bait", 10 }, { 50, 5000, "treasure_hunter", 1 }, { 100, 20000, NULL, 0 },
+};
+#define CAPBOOK_PRIZES ((int)(sizeof(k_capbook_prizes) / sizeof(k_capbook_prizes[0])))
+
+static uint32_t       s_req_day;          // the day s_req_done is for
+static uint8_t        s_req_done;         // bit r: today's request r is done
+static int            s_board_tab;        // 0 demand, 1 requests, 2 captures
+static int            s_board_place = -1; // the placed board prop it was opened from (its PICK UP button), -1 = a map object
+static capbook_rec_t *s_capbook;          // PSRAM, the capture book while its tab is open (NULL otherwise)
+static int            s_capbook_n;        // kinds in the book (read when the board opens)
+static int            s_capbook_sel = -1, s_capbook_scroll;
+static bool           s_capbook_dragging, s_capbook_dragged;
+static int            s_capbook_drag_x, s_capbook_drag_y, s_capbook_drag_scroll;
+
+// ---- photo requests ----
+static uint32_t req_hash(uint32_t day, int r)
+{
+    uint32_t h = (s_weather_seed ^ 0x1B873593u) + day * 0xCC9E2D51u + (uint32_t)r * 0x27D4EB2Fu;
+    h ^= h >> 16; h *= 0x7FEB352Du; h ^= h >> 15; h *= 0x846CA68Bu; h ^= h >> 16;
+    return h;
+}
+
+// What request r of `day` wants: a bit set of types, all of which the photo item must have.
+static uint64_t req_want(uint32_t day, int r)
+{
+    uint32_t h = req_hash(day, r);
+    int      what = CAM_TYPE_COUNT - REQ_LOOKS;   // materials and uses
+    if (r == 0) return 1ULL << (h % REQ_LOOKS);
+    int use = REQ_LOOKS + (int)((h >> 8) % (uint32_t)what);
+    if (r == 1) return 1ULL << use;
+    int use1 = REQ_LOOKS + (int)((req_hash(day, 1) >> 8) % (uint32_t)what);
+    if (use == use1) use = REQ_LOOKS + (use - REQ_LOOKS + 1) % what;   // not the same as request 1's
+    return 1ULL << (h % REQ_COLOURS) | 1ULL << use;
+}
+
+// A new day: nothing done yet.
+static void req_sync(void)
+{
+    if (s_req_day == clock_day()) return;
+    s_req_day  = clock_day();
+    s_req_done = 0;
+}
+
+// "Round", "Red + Metal".
+static void req_text(uint64_t want, char *out, size_t n)
+{
+    int len = 0;
+    out[0] = '\0';
+    for (int k = 0; k < CAM_TYPE_COUNT && len < (int)n; k++)
+        if ((want >> k) & 1) len += snprintf(out + len, n - len, "%s%s", len ? " + " : "", k_type_label[k]);
+}
+
+static void req_reset(void) { s_req_day = 0; s_req_done = 0; }
+static void req_write(FILE *f, char *line, size_t n)
+{
+    req_sync();
+    snprintf(line, n, "requests %lu %u\n", (unsigned long)s_req_day, s_req_done);
+    fputs(line, f);
+}
+static void req_load(int day, int done) { s_req_day = (uint32_t)day; s_req_done = (uint8_t)(done & ((1 << REQ_COUNT) - 1)); }
+
+// ---- the capture book ----
+static const char *capbook_path(void)
+{
+    static char path[sizeof(s_save_dir) + 16];
+    snprintf(path, sizeof(path), "%s/captures.bin", s_save_dir);
+    return path;
+}
+
+// The item's art, shrunk (never blown up) to fit CAPBOOK_ICON square, centred.
+static void capbook_icon(item_id_t item, uint16_t *out)
+{
+    memset(out, 0, CAPBOOK_ICON * CAPBOOK_ICON * sizeof(uint16_t));
+    const item_asset_t *a = item_get(item);
+    if (!a || !a->passive.frame_count || !a->passive.pixels) return;
+    int w = a->passive.w, h = a->passive.h, big = w > h ? w : h;
+    int dw = big > CAPBOOK_ICON ? w * CAPBOOK_ICON / big : w, dh = big > CAPBOOK_ICON ? h * CAPBOOK_ICON / big : h;
+    if (dw < 1) dw = 1;
+    if (dh < 1) dh = 1;
+    int ox = (CAPBOOK_ICON - dw) / 2, oy = (CAPBOOK_ICON - dh) / 2;
+    for (int y = 0; y < dh; y++)
+        for (int x = 0; x < dw; x++) out[(oy + y) * CAPBOOK_ICON + ox + x] = a->passive.pixels[(y * h / dh) * w + x * w / dw];
+}
+
+// A photo item of `kind` was just made: into the book. Returns how many kinds the
+// book holds when this was a new one, 0 when it was known, -1 if it couldn't be written.
+static int capbook_record(const char *kind, item_id_t item, uint32_t price, uint64_t types)
+{
+    const char *path = capbook_path();
+    FILE *f = fopen(path, "r+b");
+    if (!f) {
+        mapsave_make_dirs(path);
+        if (!(f = fopen(path, "w+b"))) { ESP_LOGW(TAG, "capture book: can't write %s", path); return -1; }
+        fwrite(CAPBOOK_MAGIC, 1, 8, f);
+    } else {
+        char magic[8];
+        if (fread(magic, 1, 8, f) != 8 || memcmp(magic, CAPBOOK_MAGIC, 8) != 0) { fclose(f); ESP_LOGW(TAG, "capture book: %s isn't one", path); return -1; }
+    }
+    capbook_rec_t *r = heap_caps_malloc(sizeof(*r), MALLOC_CAP_SPIRAM);   // one record at a time, only while recording
+    if (!r) { fclose(f); return -1; }
+    long at = 8;
+    int  n  = 0, ret = -1;
+    while (fread(r, sizeof(*r), 1, f) == 1) {
+        if (strncasecmp(r->kind, kind, CAM_KIND_LEN) == 0) {   // known: one more, maybe a better one
+            r->count  = r->count < UINT16_MAX ? r->count + 1 : r->count;
+            r->best   = price > r->best ? price : r->best;
+            r->types |= types;
+            fseek(f, at, SEEK_SET);
+            fwrite(r, offsetof(capbook_rec_t, icon), 1, f);   // (the first one's picture stays)
+            ret = 0;
+            break;
+        }
+        at += (long)sizeof(*r);
+        n++;
+    }
+    if (ret < 0 && n < CAPBOOK_MAX) {   // a new kind: on the end
+        memset(r, 0, sizeof(*r));
+        strlcpy(r->kind, kind, sizeof(r->kind));
+        r->count     = 1;
+        r->best      = price;
+        r->first_day = clock_day();
+        r->types     = types;
+        capbook_icon(item, r->icon);
+        fseek(f, at, SEEK_SET);   // (reading to writing needs a seek)
+        if (fwrite(r, sizeof(*r), 1, f) == 1) ret = n + 1;
+    }
+    if (fclose(f) != 0 && ret > 0) ret = -1;
+    heap_caps_free(r);
+    return ret;
+}
+
+// The whole book into PSRAM (the CAPTURES tab), or just how many kinds (want_recs false).
+static void capbook_load(bool want_recs)
+{
+    heap_caps_free(s_capbook);
+    s_capbook   = NULL;
+    s_capbook_n = 0;
+    FILE *f = fopen(capbook_path(), "rb");
+    if (!f) return;
+    char magic[8];
+    fseek(f, 0, SEEK_END);
+    long size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    int n = size > 8 ? (int)((size - 8) / (long)sizeof(capbook_rec_t)) : 0;
+    if (fread(magic, 1, 8, f) != 8 || memcmp(magic, CAPBOOK_MAGIC, 8) != 0) n = 0;
+    if (n > CAPBOOK_MAX) n = CAPBOOK_MAX;
+    if (n && want_recs && (s_capbook = heap_caps_malloc((size_t)n * sizeof(capbook_rec_t), MALLOC_CAP_SPIRAM)) != NULL)
+        n = (int)fread(s_capbook, sizeof(capbook_rec_t), (size_t)n, f);
+    else if (want_recs) n = 0;   // (no PSRAM: shown empty)
+    fclose(f);
+    s_capbook_n = n;
+}
+
+static void capbook_free(void)
+{
+    heap_caps_free(s_capbook);
+    s_capbook = NULL;
+}
+
+// The prize for reaching `kinds` kinds (its index), or -1.
+static int capbook_prize_at(int kinds)
+{
+    for (int i = 0; i < CAPBOOK_PRIZES; i++) if (k_capbook_prizes[i].kinds == kinds) return i;
+    return -1;
+}
+
+// "$1500 + 10 Magic Bait"
+static void capbook_prize_text(int i, char *out, size_t n)
+{
+    const capbook_prize_t *p = &k_capbook_prizes[i];
+    item_id_t it = p->item ? item_find(p->item) : ITEM_NONE;
+    if (it != ITEM_NONE) snprintf(out, n, "$%ld + %d %s", (long)p->money, p->n, item_name(it));
+    else                 snprintf(out, n, "$%ld", (long)p->money);
+}
+
+// The camera made `item` (a photo item of the AI's `kind`; "" = none): today's
+// requests it does, and the capture book. Pays what it earns; *note (n bytes)
+// says what happened, "" = nothing to say.
+static void market_photo_taken(item_id_t item, const char *kind, char *note, size_t n)
+{
+    note[0] = '\0';
+    req_sync();
+    uint64_t types = item_types(item);
+    int32_t  paid  = 0;
+    char     what[48] = "";
+    for (int r = 0; r < REQ_COUNT; r++) {
+        uint64_t want = req_want(s_req_day, r);
+        if ((s_req_done >> r) & 1 || !types || (types & want) != want) continue;
+        s_req_done |= (uint8_t)(1 << r);
+        paid += k_req_reward[r];
+        req_text(want, what, sizeof(what));
+    }
+    int len = 0;
+    if (paid) len = snprintf(note, n, "Request done (%s)! +$%ld", what, (long)paid);
+    int kinds = kind && kind[0] ? capbook_record(kind, item, (uint32_t)item_sell_price(item), types) : -1;
+    if (kinds > 0) {   // a new kind
+        int32_t bonus = item_sell_price(item) * CAPBOOK_NEW_PCT / 100;
+        bonus = bonus < CAPBOOK_NEW_MIN ? CAPBOOK_NEW_MIN : bonus > CAPBOOK_NEW_MAX ? CAPBOOK_NEW_MAX : bonus;
+        paid += bonus;
+        if ((size_t)len < n) len += snprintf(note + len, n - len, "%sNEW in the capture book: %s +$%ld", len ? ". " : "", kind, (long)bonus);
+        int pz = capbook_prize_at(kinds);
+        if (pz >= 0) {
+            const capbook_prize_t *p = &k_capbook_prizes[pz];
+            item_id_t it = p->item ? item_find(p->item) : ITEM_NONE;
+            paid += p->money;
+            if (it != ITEM_NONE) { int left = inv_add(it, p->n); if (left && !ground_drop(it, QUALITY_STANDARD, left)) ESP_LOGW(TAG, "capture book: no room for the prize"); }
+            if ((size_t)len < n) snprintf(note + len, n - len, ". %d kinds! +$%ld%s%s", kinds, (long)p->money, it != ITEM_NONE ? " and " : "",
+                                          it != ITEM_NONE ? item_name(it) : "");
+        }
+    }
+    if (paid) {
+        money_add(paid);
+        hud_refresh();
+        ESP_LOGI(TAG, "market: photo item %s (%s) earned $%ld: %s", item_name(item), kind ? kind : "", (long)paid, note);
+    }
+}
+
+// ---- the board screen ----
+static rect_t board_rect(void) { return (rect_t){ BOOK_X, BOOK_Y, BOOK_W, BOOK_H }; }
+
+static bool board_open(int place_i)
+{
+#if ESPNOW_CAMERA_ENABLED
+    if (camera_owns_screen()) return false;
+#endif
+    if (s_ui_screen == UI_KEYBOARD) return false;
+    inv_carry_return();
+    if (!ui_begin()) return false;
+    s_ui_screen        = UI_BOARD;
+    s_active_menu      = NULL;
+    s_board_place      = place_i;
+    s_board_tab        = 0;
+    s_capbook_sel      = -1;
+    s_capbook_scroll   = 0;
+    s_capbook_dragging = false;
+    req_sync();
+    capbook_load(false);   // how many kinds (the CAPTURES tab reads the rest)
+    return true;
+}
+bool market_board_open(void) { return board_open(-1); }   // actions.h: the "market_board" action
+
+static void board_set_tab(int tab)
+{
+    s_board_tab = tab;
+    if (tab == 2) capbook_load(true);
+    else          capbook_free();
+    s_ui_needs_redraw = true;
+}
+
+static void board_close(void)
+{
+    capbook_free();
+    s_board_place = -1;
+    ui_close();
+}
+
+// Type k's demand as "x7.4" in out, and its colour (hot / cold / plain).
+static uint16_t board_mult(float e, char *out, size_t n)
+{
+    long tenths = lroundf(powf(10.0f, e) * 10.0f);
+    snprintf(out, n, "x%d.%d", (int)(tenths / 10 % 1000), (int)(tenths % 10));
+    return tenths >= 15 ? BOARD_COL_HOT : tenths <= 7 ? BOARD_COL_COLD : INV_COL_TEXT;
+}
+
+static void board_draw_demand(void)
+{
+    const int px = BOOK_X, pw = BOOK_W;
+    uint32_t day = clock_day();
+    uint8_t  order[CAM_TYPE_COUNT];
+    float    e[CAM_TYPE_COUNT];
+    for (int k = 0; k < CAM_TYPE_COUNT; k++) { order[k] = (uint8_t)k; e[k] = demand_exp(k, day); }
+    for (int i = 1; i < CAM_TYPE_COUNT; i++)   // highest first (insertion sort: 50 of them)
+        for (int j = i; j > 0 && e[order[j]] > e[order[j - 1]]; j--) { uint8_t t = order[j]; order[j] = order[j - 1]; order[j - 1] = t; }
+    char t[80], m[12];
+    item_id_t held = inv_held_item();
+    uint64_t  ht   = held != ITEM_NONE ? item_types(held) : 0;
+    if (ht) {
+        board_mult(log10f(types_demand(ht)), m, sizeof(m));
+        snprintf(t, sizeof(t), "Your %s sells at %s today", item_name(held), m);
+    } else {
+        snprintf(t, sizeof(t), "%s %d - what each type of thing sells for today", k_season_name[clock_season()], clock_season_day());
+    }
+    draw_text_clip(px + 18, BOARD_TOP, t, 1, BOOK_COL_HEAD, pw - 36);
+    const int col_w = (pw - 36) / 2, y0 = BOARD_TOP + 16;
+    for (int i = 0; i < CAM_TYPE_COUNT; i++) {
+        int k = order[i], x = px + 18 + (i / BOARD_ROWS) * (col_w + 6), y = y0 + (i % BOARD_ROWS) * BOARD_ROW_H;
+        float before = demand_exp(k, day - 1), d = e[k] - before;   // (day 0: against a made-up yesterday)
+        uint16_t c = board_mult(e[k], m, sizeof(m));
+        // which way it moved since yesterday: a small arrow
+        uint16_t ac = d > 0.05f ? BOARD_COL_HOT : d < -0.05f ? BOARD_COL_COLD : INV_COL_TEXT_DIM;
+        for (int r = 0; r < 4; r++) {
+            int half = d > 0.05f ? r : d < -0.05f ? 3 - r : 1;
+            fill_rect(x + 3 - half, y + 1 + r, 2 * half + 1, 1, ac);
+        }
+        // a bar: right of the middle wanted, left not
+        int bx = x + 10, bw = 40, mid = bx + bw / 2, len = (int)lroundf(e[k] * (bw / 2));
+        fill_rect(bx, y + 2, bw, 3, INV_COL_SLOT_LT);
+        if (len > 0) fill_rect(mid, y + 1, len, 5, c);
+        else if (len < 0) fill_rect(mid + len, y + 1, -len, 5, c);
+        fill_rect(mid, y, 1, 7, INV_COL_TEXT_DIM);
+        draw_text(bx + bw + 5, y, m, 1, c);
+        draw_text_clip(bx + bw + 36, y, k_type_label[k], 1, INV_COL_TEXT, col_w - (bw + 46));
+    }
+    draw_text_clip(px + 18, y0 + BOARD_ROWS * BOARD_ROW_H + 6, "Photo items sell for their types' demand. It moves every morning.", 1, INV_COL_TEXT_DIM,
+                   s_board_place >= 0 ? BOARD_PICK_X - px - 26 : pw - 36);
+}
+
+static void board_draw_requests(void)
+{
+    const int px = BOOK_X, pw = BOOK_W;
+    uint32_t day = clock_day();
+    char t[96], m[12];
+    int done = 0;
+    for (int r = 0; r < REQ_COUNT; r++) {
+        uint64_t want = req_want(day, r);
+        bool     ok   = (s_req_done >> r) & 1;
+        done += ok;
+        int x = px + 16, y = BOARD_TOP + r * 96, w = pw - 32, h = 86;
+        fill_round_rect(x, y, w, h, 6, ok ? COLOR_RGB565(196, 214, 150) : INV_COL_SLOT_LT, 255);
+        draw_round_rect(x, y, w, h, 6, 2, INV_COL_EDGE);
+        snprintf(t, sizeof(t), r == 2 ? "Wanted: both of these" : "Wanted: a photo of something");
+        draw_text(x + 12, y + 10, t, 1, INV_COL_TEXT_DIM);
+        req_text(want, t, sizeof(t));
+        draw_text_clip(x + 12, y + 24, t, text_width(t, 3) <= w - 120 ? 3 : 2, INV_COL_TEXT, w - 110);
+        snprintf(t, sizeof(t), "$%ld", (long)k_req_reward[r]);
+        draw_text(x + w - 12 - text_width(t, 2), y + 12, t, 2, INV_COL_GOLD);
+        board_mult(log10f(types_demand(want)), m, sizeof(m));
+        snprintf(t, sizeof(t), "Sells at %s today", m);
+        draw_text(x + 12, y + 64, t, 1, INV_COL_TEXT_DIM);
+        if (ok) {   // a stamp
+            const char *s = "DONE";
+            int sw = text_width(s, 2) + 14;
+            draw_round_rect(x + w - 16 - sw, y + 50, sw, 24, 4, 2, BOARD_COL_HOT);
+            draw_text(x + w - 9 - sw, y + 55, s, 2, BOARD_COL_HOT);
+        }
+    }
+    snprintf(t, sizeof(t), "%d of %d done today - new ones every morning.", done, REQ_COUNT);
+    draw_text_clip(px + 18, BOARD_TOP + REQ_COUNT * 96 + 4, t, 1, INV_COL_TEXT_DIM, s_board_place >= 0 ? BOARD_PICK_X - px - 26 : pw - 36);
+}
+
+static int capbook_rows(void) { return (s_capbook_n + BOOK_COLS - 1) / BOOK_COLS; }
+static int capbook_max_scroll(void) { return capbook_rows() > 5 ? capbook_rows() - 5 : 0; }
+#define CAPBOOK_GRID_Y (BOARD_TOP + 18)
+#define CAPBOOK_ROWS   5
+
+static void capbook_draw_icon(int x, int y, const uint16_t *icon, int scale)
+{
+    for (int r = 0; r < CAPBOOK_ICON; r++)
+        for (int c = 0; c < CAPBOOK_ICON; c++)
+            if (icon[r * CAPBOOK_ICON + c]) fill_rect(x + c * scale, y + r * scale, scale, scale, icon[r * CAPBOOK_ICON + c]);
+}
+
+static void board_draw_captures(void)
+{
+    const int px = BOOK_X, pw = BOOK_W;
+    char t[96], prize[40];
+    int next = -1;
+    for (int i = 0; i < CAPBOOK_PRIZES && next < 0; i++) if (k_capbook_prizes[i].kinds > s_capbook_n) next = i;
+    if (next >= 0) {
+        capbook_prize_text(next, prize, sizeof(prize));
+        snprintf(t, sizeof(t), "%d kind%s captured - at %d: %s", s_capbook_n, s_capbook_n == 1 ? "" : "s", k_capbook_prizes[next].kinds, prize);
+    } else {
+        snprintf(t, sizeof(t), "%d kinds captured - every prize won!", s_capbook_n);
+    }
+    draw_text_clip(px + 18, BOARD_TOP, t, 1, BOOK_COL_HEAD, pw - 36);
+    if (!s_capbook || s_capbook_n == 0) {
+        draw_text_clip(px + 18, BOARD_TOP + 30, "Nothing yet. Every kind of thing you make into an item", 1, INV_COL_TEXT, pw - 36);
+        draw_text_clip(px + 18, BOARD_TOP + 44, "with the camera goes in here - the first of each pays a bonus.", 1, INV_COL_TEXT, pw - 36);
+        return;
+    }
+    for (int k = 0; k < CAPBOOK_ROWS * BOOK_COLS; k++) {
+        int i = s_capbook_scroll * BOOK_COLS + k;
+        if (i >= s_capbook_n) break;
+        int x = BOOK_GRID_X + (k % BOOK_COLS) * (BOOK_CELL + BOOK_GAP), y = CAPBOOK_GRID_Y + (k / BOOK_COLS) * (BOOK_CELL + BOOK_GAP);
+        inv_draw_slot_well(x, y, BOOK_CELL);
+        capbook_draw_icon(x + (BOOK_CELL - 2 * CAPBOOK_ICON) / 2, y + (BOOK_CELL - 2 * CAPBOOK_ICON) / 2, s_capbook[i].icon, 2);
+        if (i == s_capbook_sel) draw_round_rect(x - 2, y - 2, BOOK_CELL + 4, BOOK_CELL + 4, 4, 2, INV_COL_GOLD);
+    }
+    int max = capbook_max_scroll();
+    if (max > 0) {   // scroll bar
+        int bx = BOOK_GRID_X + BOOK_GRID_W + 3, by = CAPBOOK_GRID_Y, bh = CAPBOOK_ROWS * (BOOK_CELL + BOOK_GAP) - BOOK_GAP;
+        int th = bh * CAPBOOK_ROWS / capbook_rows();
+        fill_round_rect(bx, by, 4, bh, 2, INV_COL_SLOT_DK, 140);
+        fill_round_rect(bx, by + (bh - th) * s_capbook_scroll / max, 4, th, 2, INV_COL_GOLD, 255);
+    }
+    int dy = CAPBOOK_GRID_Y + CAPBOOK_ROWS * (BOOK_CELL + BOOK_GAP) + 4;
+    if (s_capbook_sel < 0 || s_capbook_sel >= s_capbook_n) {
+        draw_text(px + 18, dy + 8, "Tap one to read about it.", 1, INV_COL_TEXT_DIM);
+        return;
+    }
+    const capbook_rec_t *r = &s_capbook[s_capbook_sel];
+    inv_draw_slot_well(px + 16, dy, 40);
+    capbook_draw_icon(px + 16 + 4, dy + 4, r->icon, 2);
+    char kind[CAM_KIND_LEN + 1];
+    memcpy(kind, r->kind, CAM_KIND_LEN);
+    kind[CAM_KIND_LEN] = '\0';
+    draw_text_clip(px + 64, dy + 2, kind, 2, INV_COL_TEXT, pw - 80);
+    snprintf(t, sizeof(t), "x%u - best $%lu - first: %s %d, year %lu", r->count, (unsigned long)r->best,
+             k_season_name[r->first_day / SEASON_DAYS % 4], (int)(r->first_day % SEASON_DAYS) + 1, (unsigned long)(r->first_day / SEASON_DAYS / 4 + 1));
+    draw_text_clip(px + 64, dy + 20, t, 1, INV_COL_TEXT, pw - 80);
+    int len = 0;
+    t[0] = '\0';
+    for (int k = 0; k < CAM_TYPE_COUNT && len < (int)sizeof(t); k++)
+        if ((r->types >> k) & 1) len += snprintf(t + len, sizeof(t) - len, "%s%s", len ? ", " : "", k_type_label[k]);
+    draw_text_clip(px + 64, dy + 32, t[0] ? t : "(no types)", 1, INV_COL_TEXT_DIM, s_board_place >= 0 ? BOARD_PICK_X - px - 74 : pw - 80);
+}
+
+static void board_draw(void)
+{
+    const int px = BOOK_X, py = BOOK_Y, pw = BOOK_W;
+    draw_leather_panel(px, py, pw, BOOK_H);
+    draw_text_centered(px + INV_BTN + 16, py + 17, pw - 2 * (INV_BTN + 16), "MARKET BOARD", INV_COL_TEXT, INV_COL_SHINE);
+    draw_close_button(BOOK_CLOSE_X, BOOK_BTN_Y, INV_BTN, false, COLOR_WHITE);
+    static const char *const k_tab[3] = { "DEMAND", "REQUESTS", "CAPTURES" };
+    for (int i = 0; i < 3; i++) {
+        int x = px + 16 + i * (BOARD_TAB_W + 6);
+        bool on = i == s_board_tab;
+        fill_round_rect(x, BOARD_TAB_Y, BOARD_TAB_W, BOARD_TAB_H, 5, on ? INV_COL_GOLD : INV_COL_SLOT, 255);
+        draw_round_rect(x, BOARD_TAB_Y, BOARD_TAB_W, BOARD_TAB_H, 5, 1, INV_COL_EDGE);
+        draw_text(x + (BOARD_TAB_W - text_width(k_tab[i], 1)) / 2, BOARD_TAB_Y + 8, k_tab[i], 1, on ? INV_COL_TEXT : INV_COL_SHINE);
+    }
+    if (s_board_tab == 0)      board_draw_demand();
+    else if (s_board_tab == 1) board_draw_requests();
+    else                       board_draw_captures();
+    if (s_board_place >= 0) {   // a board the player put down: it can be picked up from here
+        fill_round_rect(BOARD_PICK_X, BOARD_PICK_Y, BOARD_PICK_W, 20, 5, INV_COL_SLOT, 255);
+        draw_round_rect(BOARD_PICK_X, BOARD_PICK_Y, BOARD_PICK_W, 20, 5, 1, INV_COL_EDGE);
+        draw_text(BOARD_PICK_X + (BOARD_PICK_W - text_width("PICK UP", 1)) / 2, BOARD_PICK_Y + 7, "PICK UP", 1, INV_COL_SHINE);
+    }
+}
+
+static void update_board_touch(const input_frame_t *in)
+{
+    if (in->touch_pressed_edge && !in->touch_menu_btn) {
+        int tx = in->touch_x, ty = in->touch_y;
+        s_capbook_dragging = false;
+        if (pt_in(tx, ty, BOOK_CLOSE_X - 6, BOOK_BTN_Y - 6, INV_BTN + 12, INV_BTN + 12)) { board_close(); return; }
+        for (int i = 0; i < 3; i++)
+            if (pt_in(tx, ty, BOOK_X + 16 + i * (BOARD_TAB_W + 6), BOARD_TAB_Y - 4, BOARD_TAB_W, BOARD_TAB_H + 8)) { if (i != s_board_tab) board_set_tab(i); return; }
+        if (s_board_place >= 0 && pt_in(tx, ty, BOARD_PICK_X - 4, BOARD_PICK_Y - 4, BOARD_PICK_W + 8, 28)) {
+            int i = s_board_place;   // PICK UP: the screen goes, then the board
+            board_close();
+            place_pick_up(i);
+            return;
+        }
+        if (s_board_tab == 2 && s_capbook &&
+            pt_in(tx, ty, BOOK_GRID_X, CAPBOOK_GRID_Y, BOOK_GRID_W, CAPBOOK_ROWS * (BOOK_CELL + BOOK_GAP))) {
+            s_capbook_dragging    = true;   // one is picked when the finger lifts without having dragged
+            s_capbook_dragged     = false;
+            s_capbook_drag_x      = tx;
+            s_capbook_drag_y      = ty;
+            s_capbook_drag_scroll = s_capbook_scroll;
+        }
+        return;
+    }
+    if (!s_capbook_dragging) return;
+    if (in->touch_active) {
+        int s = s_capbook_drag_scroll - (in->touch_y - s_capbook_drag_y) / (BOOK_CELL + BOOK_GAP), max = capbook_max_scroll();
+        if (abs(in->touch_y - s_capbook_drag_y) > 10) s_capbook_dragged = true;
+        s = s < 0 ? 0 : s > max ? max : s;
+        if (s != s_capbook_scroll) { s_capbook_scroll = s; s_ui_needs_redraw = true; }
+        return;
+    }
+    s_capbook_dragging = false;   // lifted
+    if (s_capbook_dragged) return;
+    int cx = (s_capbook_drag_x - BOOK_GRID_X) / (BOOK_CELL + BOOK_GAP), cy = (s_capbook_drag_y - CAPBOOK_GRID_Y) / (BOOK_CELL + BOOK_GAP);
+    int i = (s_capbook_scroll + cy) * BOOK_COLS + cx;
+    if (cx >= 0 && cx < BOOK_COLS && cy >= 0 && cy < CAPBOOK_ROWS && i < s_capbook_n) { s_capbook_sel = i; s_ui_needs_redraw = true; }
+}
+
+// ============================================================
 //  CRAFTING — the hammer tab on top of the inventory (UI_CRAFT), laid out
 //  like Stardew Valley's crafting page: every recipe as an icon along the
 //  top (faded when the bag doesn't hold its ingredients), the bag under them,
@@ -21872,6 +23889,8 @@ static void ui_redraw(void)
             rects[n++] = sleep_rect();
         } else if (s_ui_screen == UI_FISHBOOK) {
             rects[n++] = fishbook_rect();
+        } else if (s_ui_screen == UI_BOARD) {
+            rects[n++] = board_rect();
         } else if (s_ui_screen == UI_FISHING) {
             rects[n++] = fish_ui_rect();
         } else {
@@ -21895,6 +23914,7 @@ static void ui_redraw(void)
     else if (s_ui_screen == UI_SLEEP) sleep_draw();
     else if (s_ui_screen == UI_FISHING) fish_draw();
     else if (s_ui_screen == UI_FISHBOOK) fishbook_draw();
+    else if (s_ui_screen == UI_BOARD) board_draw();
     else if (s_ui_screen == UI_CRAFT) craft_draw();
     else                             draw_menu();
     if (msg_new.w > 0) msg_blit();               // last: messages go over the panel
@@ -21930,6 +23950,8 @@ static void ui_update(const input_frame_t *in)
         update_fishing_touch(in);
     } else if (s_ui_screen == UI_FISHBOOK) {
         update_fishbook_touch(in);
+    } else if (s_ui_screen == UI_BOARD) {
+        update_board_touch(in);
     } else if (s_ui_screen == UI_CRAFT) {
         update_craft_touch(in);
     } else if (s_ui_screen == UI_MENU) {
@@ -22081,6 +24103,7 @@ static char            s_capture_currency[4];
 static bool            s_capture_has_prices;
 static cam_trait_t     s_capture_traits[CAM_MAX_BOXES][CAM_TRAITS_PER];  // the AI's traits per box ("" = none)
 static char            s_capture_kinds[CAM_MAX_BOXES][CAM_KIND_LEN];     // each box's kind (Photo sales; "" = none)
+static uint64_t        s_capture_types[CAM_MAX_BOXES];                   // each box's market types (MARKET BOARD; 0 = none)
 
 // Picking an object in the viewer and keeping it as an inventory item.
 static int             s_capture_sel = -1;        // picked box, -1 = none
@@ -22591,6 +24614,8 @@ static void live_update(const input_frame_t *in)
         int nt = cam_take_traits(s_capture_traits);
         memset(s_capture_kinds, 0, sizeof(s_capture_kinds));
         cam_take_kinds(s_capture_kinds);
+        memset(s_capture_types, 0, sizeof(s_capture_types));
+        cam_take_types(s_capture_types);
         for (int i = 0; i < boxes.count && i < CAM_MAX_BOXES; i++)
             if (s_capture_kinds[i][0] && sold_today(s_capture_kinds[i]))
                 devlog_add("Box %d is a %s: one was sold today", i + 1, s_capture_kinds[i]);
@@ -22999,6 +25024,14 @@ static item_id_t capture_make_item(const char *name)
     int     n     = capture_value(s_capture_sel) ? capture_ai_attrs(s_capture_sel, attrs)
                                                  : photo_appraise(&st, box, attrs, &price);
     s_capture_legendary = legendary_roll(attrs, &n, 1, ITEM_PHOTO_ATTR_MAX);   // rare: right after the price, so it's listed first
+    uint64_t types = s_capture_types[s_capture_sel];   // its market types (MARKET BOARD): the AI's...
+    for (int k = 0; !types && k < n; k++)              // ...or, without them, the colour the photo appraisal saw
+        for (int t = 0; t < CAM_TYPE_COUNT; t++)
+            if (!strcmp(attrs[k].name, k_type_id[t]) || (!strcmp(attrs[k].name, "teal") && t == CAM_TYPE_blue)) types |= 1ULL << t;
+    if (types && n + 2 <= ITEM_PHOTO_ATTR_MAX) {
+        attrs[n++] = (item_attr_t){ ITEM_ATTR_TYPES,  (int32_t)(types & 0x7FFFFFFF) };
+        attrs[n++] = (item_attr_t){ ITEM_ATTR_TYPES2, (int32_t)((types >> 31) & 0x7FFFFFFF) };
+    }
     item_id_t item  = item_add_photo(name, icon, (uint16_t)w, (uint16_t)h, attrs, (uint8_t)n);
     if (item == ITEM_NONE) {
         ESP_LOGW(TAG, "item: too many photo items this session");
@@ -23006,6 +25039,7 @@ static item_id_t capture_make_item(const char *name)
         return ITEM_NONE;
     }
     if (inv_add(item, 1) != 0) { ESP_LOGW(TAG, "item: inventory full"); return ITEM_NONE; }
+    newitem_sparkle();   // NEW ITEM: once the photo is closed
     photo_kind_set(item, s_capture_kinds[s_capture_sel]);   // Photo sales: one of each kind a day
     ESP_LOGI(TAG, "item: made \"%s\" (%s, %dx%d icon)", item_name(item), item_get(item)->id, w, h);
     return item;
@@ -23072,9 +25106,13 @@ static void capture_view_update(const input_frame_t *in)
             s_inv_cur_col = i % HOTBAR_SLOTS;
             break;
         }
+        char note[72];   // MARKET BOARD: a photo request done, a new kind in the capture book
+        market_photo_taken(item, kept >= 0 ? s_capture_kinds[kept] : "", note, sizeof(note));
         if (s_capture_legendary)
             message(6000, "LEGENDARY! %s (x%d) - appraised at $%ld", s_capture_legendary->label,
                     s_capture_legendary->mult, (long)item_sell_price(item));
+        else if (note[0])
+            message(6000, "%s - appraised at $%ld", note, (long)item_sell_price(item));
         else if (kept >= 0 && sold_today(s_capture_kinds[kept]))
             message(5000, "Appraised at $%ld - but you already sold a %s today: sell it tomorrow",
                     (long)item_sell_price(item), s_capture_kinds[kept]);
@@ -23849,6 +25887,7 @@ static bool world_save(void)
             fputs(line, f);
         }
         fish_rig_write(f, line, sizeof(line));   // the fishing line's bait and tackle, the fishing xp (FISHING)
+        req_write(f, line, sizeof(line));        // which of today's photo requests are done (MARKET BOARD)
         ok = !ferror(f);
         if (fclose(f) != 0) ok = false;
     }
@@ -23895,6 +25934,7 @@ static bool world_read(int slot, bool apply, world_info_t *info)
         s_weather_seed = 0;              // a save from before the weather: the same rain as any other such save
         s_can_water    = -1;             // ...or from before the watering can ran dry: full
         fish_rig_reset();                // ...or from before bait and fishing levels: none (FISHING)
+        req_reset();                     // ...or from before the photo requests: none done (MARKET BOARD)
     }
     int day = -1, minute = -1;
     while (fgets(line, sizeof(line), f)) {
@@ -23921,6 +25961,8 @@ static bool world_read(int slot, bool apply, world_info_t *info)
             s_weather_seed = (uint32_t)v[0];
         } else if (mapsave_match(word, nw, "inst #", v, &any)) {
             if (v[0] > 0 && v[0] < 65535) s_load_inst_next = (uint16_t)v[0];   // the map below is that building's inside
+        } else if (mapsave_match(word, nw, "requests # #", v, &any)) {   // MARKET BOARD
+            req_load(v[0], v[1]);
         } else if (mapsave_match(word, nw, "fishxp #", v, &any)) {   // FISHING
             fish_rig_load_xp(v[0]);
         } else if (mapsave_match(word, nw, "rig bait * # #", v, &any)) {
@@ -23978,6 +26020,7 @@ static void world_new(void)
     ledger_reset();                     // nothing bought or sold (LEDGER)
     fishbook_reset();                   // no fish caught (FISH BOOK)
     fish_rig_reset();                   // no bait or tackle on the line, fishing level 0 (FISHING)
+    req_reset();                        // no photo requests done (MARKET BOARD; the capture book is the slot's captures.bin)
     memset(s_inv, 0, sizeof(s_inv));
     item_custom_reset();                // no photo items from another game
     s_season_seen   = -1;               // Spring 1, Year 1 (SEASONS)
@@ -24919,6 +26962,7 @@ void update_input(void)
     aqua_tick();              // fish swimming in aquariums on this map (AQUARIUMS)
     machine_tick();           // a machine that just finished shows its output (MACHINES)
     crow_tick();              // crows peck where they ate a crop, and fly off (SPRINKLERS + SCARECROWS)
+    tree_fx_tick();           // leaves drifting down, a felled tree coming down (TREES)
     PROF(PROF_MARKET,
          ranch_tick();        // farm animals wander, graze, lay, sleep (ANIMALS) — repainted with the shoppers below
          market_tick());      // shoppers and bidders (MARKET), here and on every other map
@@ -26479,10 +28523,14 @@ static bool game_start(int slot, bool is_new, bool sd_ok)
 //    noclip on|off / speed N   walk through walls / N x walking speed
 //    crops [list|grow [N]|water|morning|crows [PCT]] / machines [list|done]   this map's crops / machines
 //                              (morning: today's 6:00 again — sprinklers, crows; crows: they come now, PCT % of the unguarded crops)
+//    tree [list|plant ID TX TY [STAGE]|grow [N]|fruit|moss|unshake]   this map's trees (TREES)
 //    ui close / dev            closes the open screen / the dev switches as they are
 //    goto MAP [TX TY [INST]]   loads MAP (INST = a building's inside), stands on tile (TX,TY)
 //    load N | load new         on the title screen: loads save N (1-based) / starts a new game, no taps needed
 //    held N                    holds hotbar slot N
+//    swing / sparkle           the held tool swings at what's in front (TOOL SWING) / the new-item sparkle
+//    board [TAB] / demand / requests   the MARKET BOARD (tab 0 demand, 1 requests, 2 captures) / @@DEMAND / @@REQ lines
+//    capture KIND              the held item counts as a camera capture of KIND (requests, the capture book)
 //    ls DIR / rm PATH / mkdir DIR
 //    put PATH SIZE             then "d <base64>" lines (each answered @@K) and "end":
 //                              writes PATH on the SD card (PATH.part first, then renamed)
@@ -26840,6 +28888,65 @@ static void dev_cmd_crops(char **w, int nw)
     }
 }
 
+// "tree" / "tree list" (every tree on this map, then @@END), "tree plant ID TX TY [STAGE]" (a tree of
+// assets/trees/ID.c on that base tile, STAGE 0-3 growing, 4 grown, 5 stump — no checks), "tree grow [N]"
+// (N more days for every growing tree, none = all grown), "tree fruit" (every grown fruit tree full of
+// fruit), "tree moss" (every grown wild tree that can be, mossy), "tree unshake" (all can be shaken again today).
+static void dev_cmd_tree(char **w, int nw)
+{
+    if (nw < 2 || strcmp(w[1], "list") == 0) {
+        for (int i = 0; i < TREE_MAX; i++) {
+            const tree_t *t = &s_tree[i];
+            if (t->used) dev_out("@@TREE %d %s tile=%d,%d stage=%d age=%d/%d moss=%d fruit=%d/%d shaken=%ld hits=%d", i, s_trees[t->def]->id,
+                                 t->tx, t->ty, t->stage, t->age, s_trees[t->def]->grow_days, t->mossy, t->fruit, t->fruit_age, (long)t->shaken, t->hits);
+        }
+        dev_out("@@END seeded=%d", s_tree_seeded);
+        return;
+    }
+    tree_snapshot();
+    int n = 0;
+    if (strcmp(w[1], "plant") == 0 && nw >= 5) {
+        int def = tree_find(w[2]), tx = atoi(w[3]), ty = atoi(w[4]), stage = nw > 5 ? atoi(w[5]) : 0;
+        if (def < 0)                                       { dev_out("@@ERR no tree %s (assets/trees/)", w[2]); return; }
+        if (!tile_on_map(tx, ty) || tree_at(tx, ty) >= 0) { dev_out("@@ERR tile %d,%d is off the map or has a tree", tx, ty); return; }
+        if (tree_add(def, tx, ty, stage < 0 ? 0 : stage > TREE_STUMP ? TREE_STUMP : stage, false) < 0) { dev_out("@@ERR no room for more trees"); return; }
+        n = 1;
+    } else if (strcmp(w[1], "grow") == 0) {
+        int days = nw > 2 ? atoi(w[2]) : 0;
+        for (int i = 0; i < TREE_MAX; i++) {
+            tree_t *t = &s_tree[i];
+            if (!t->used || t->stage >= TREE_GROWN) continue;
+            int need = s_trees[t->def]->grow_days ? s_trees[t->def]->grow_days : 1, age = days > 0 ? t->age + days : need;
+            t->age   = (uint8_t)(age > 255 ? 255 : age);
+            t->stage = (uint8_t)(age >= need ? TREE_GROWN : anim_imax(t->stage, age * TREE_STAGES / need));
+            t->hits  = 0;
+            n++;
+        }
+    } else if (strcmp(w[1], "fruit") == 0) {
+        for (int i = 0; i < TREE_MAX; i++) {
+            tree_t *t = &s_tree[i];
+            if (!t->used || t->stage != TREE_GROWN || !s_trees[t->def]->fruit) continue;
+            t->fruit = (uint8_t)anim_imin(anim_imax(s_trees[t->def]->fruit_max, 1), TREE_FRUIT_MAX);
+            n++;
+        }
+    } else if (strcmp(w[1], "moss") == 0) {
+        for (int i = 0; i < TREE_MAX; i++) {
+            tree_t *t = &s_tree[i];
+            if (!t->used || t->stage < TREE_GROWN || s_trees[t->def]->fruit || !tree_has_moss(s_trees[t->def])) continue;
+            t->mossy = true;
+            n++;
+        }
+    } else if (strcmp(w[1], "unshake") == 0) {
+        for (int i = 0; i < TREE_MAX; i++) if (s_tree[i].used) { s_tree[i].shaken = -1; n++; }
+    } else {
+        dev_out("@@ERR tree list | plant ID TX TY [STAGE] | grow [N] | fruit | moss | unshake");
+        return;
+    }
+    tree_show_changes(true);
+    mapsave_mark_dirty();
+    dev_out("@@OK %d trees", n);
+}
+
 // "machines" / "machines list" (every machine on this map, then @@END), "machines done" (all ready now).
 static void dev_cmd_machines(char **w, int nw)
 {
@@ -26948,6 +29055,8 @@ static void dev_main_poll(void)
             dev_cmd_crops(w, nw);
         } else if (strcmp(w[0], "machines") == 0) {
             dev_cmd_machines(w, nw);
+        } else if (strcmp(w[0], "tree") == 0) {
+            dev_cmd_tree(w, nw);
         } else if (strcmp(w[0], "noclip") == 0 && nw == 2) {
             s_dev_noclip = strcmp(w[1], "on") == 0;
             dev_out("@@OK noclip %s", s_dev_noclip ? "on" : "off");
@@ -27045,6 +29154,32 @@ static void dev_main_poll(void)
             inv_set_held(a);
             hud_refresh();
             dev_out("@@OK held %d", a);
+        } else if (strcmp(w[0], "swing") == 0) {   // TOOL SWING: the held tool swings at what's in front, as if tapped
+            if (tool_swinging())                  dev_out("@@ERR already swinging");
+            else if (!tool_swing_start())         dev_out("@@ERR %s isn't a tool (no \"tool\" attribute)", item_name(inv_held_item()));
+            else { s_swing.hit_due = true;        dev_out("@@OK swing %s facing %d", item_name(s_swing.item), s_swing.dir); }
+        } else if (strcmp(w[0], "sparkle") == 0) {   // NEW ITEM: the sparkle over the head
+            newitem_sparkle();
+            dev_out("@@OK sparkle");
+        } else if (strcmp(w[0], "board") == 0) {     // MARKET BOARD: open it (on tab N)
+            if (!market_board_open()) dev_out("@@ERR can't open it now");
+            else { if (nw >= 2 && a >= 0 && a <= 2) board_set_tab(a); dev_out("@@OK board"); }
+        } else if (strcmp(w[0], "demand") == 0) {    // ...today's demand, every type
+            for (int k = 0; k < CAM_TYPE_COUNT; k++) dev_out("@@DEMAND %d %s %.2f", k, k_type_id[k], (double)type_demand(k));
+            dev_out("@@END");
+        } else if (strcmp(w[0], "requests") == 0) {  // ...today's photo requests
+            req_sync();
+            for (int r = 0; r < REQ_COUNT; r++) {
+                char t[64];
+                req_text(req_want(s_req_day, r), t, sizeof(t));
+                dev_out("@@REQ %d $%ld %s %s", r, (long)k_req_reward[r], (s_req_done >> r) & 1 ? "done" : "open", t);
+            }
+            dev_out("@@END");
+        } else if (strcmp(w[0], "capture") == 0 && nw >= 2) {   // ...the held item as a camera capture of kind w[1] (requests, capture book)
+            item_id_t it = inv_held_item();
+            char note[96];
+            if (it == ITEM_NONE) dev_out("@@ERR hold something");
+            else { market_photo_taken(it, w[1], note, sizeof(note)); dev_out("@@OK %s", note[0] ? note : "(nothing new)"); }
         } else if (strcmp(w[0], "goto") == 0 && nw >= 2) {
             snprintf(s_dev_goto, sizeof(s_dev_goto), "%s", w[1]);
             s_dev_goto_tx   = nw >= 4 ? atoi(w[2]) : -1;

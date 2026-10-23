@@ -20,8 +20,8 @@
 //              outlines them, eBay prices them, the CAM comes back to channel 1...
 //   CAM -> S3  CAM_MSG_STATUS(id, ERROR, text)  on failure (ends the request), or
 //              CAM_MSG_STATUS(id, INFO, summary), [OUTLINE_START + OUTLINE_CHUNKs],
-//              CAM_MSG_LABELS(id), CAM_MSG_TRAITS(id), CAM_MSG_KINDS(id), CAM_MSG_PRICES(id),
-//              CAM_MSG_BOXES(id)
+//              CAM_MSG_LABELS(id), CAM_MSG_TRAITS(id), CAM_MSG_KINDS(id), CAM_MSG_TYPES(id),
+//              CAM_MSG_PRICES(id), CAM_MSG_BOXES(id)
 //                                    the boxes come last: they complete the result
 //
 // Camera Wi-Fi (the S3's Settings -> Camera Wi-Fi screen). The networks the CAM goes
@@ -56,6 +56,7 @@
 #define CAM_MSG_NET_LIST      0x11   // CAM -> S3  : the networks, no passwords (cam_net_list_msg_t)
 #define CAM_MSG_NET_SET       0x12   // S3  -> CAM : save / delete / move one network (cam_net_set_msg_t)
 #define CAM_MSG_NET_TEST      0x13   // S3  -> CAM : "try to go online now" (cam_request_msg_t)
+#define CAM_MSG_TYPES         0x14   // CAM -> S3  : each box's market types (cam_types_msg_t)
 
 #define CAM_OUT_SIZE       480                // final square image, in pixels
 #define CAM_PHOTO_SIZE     640                // the photo button's photo, as the AI and SAM 3 get it
@@ -94,6 +95,36 @@ typedef struct __attribute__((packed)) {
     uint8_t count;
     char    kind[CAM_MAX_BOXES][CAM_KIND_LEN];
 } cam_kinds_msg_t;
+
+// Market types: what the AI says each thing is, from this fixed list — its colour,
+// shape, material and what it's for. The game's market board (the S3) moves each
+// type's demand every day, and a photo item sells for more or less by its types.
+// X(id, label): the AI is asked by number (index + 1); a box's types travel as a
+// bit set, bit = index. APPEND ONLY — saves and the Item Editor keep the bits, so
+// never reorder or remove one (rename only its label). At most 62 (two 31-bit attrs).
+#define CAM_TYPES(X) \
+    X(red, "Red") X(orange, "Orange") X(yellow, "Yellow") X(green, "Green") X(blue, "Blue") \
+    X(purple, "Purple") X(pink, "Pink") X(brown, "Brown") X(black, "Black") X(white, "White") X(gray, "Gray") \
+    X(round, "Round") X(square, "Square") X(long, "Long") X(flat, "Flat") X(soft, "Soft") X(shiny, "Shiny") \
+    X(see_through, "See-through") X(colorful, "Colorful") \
+    X(wood, "Wooden") X(metal, "Metal") X(plastic, "Plastic") X(glass, "Glass") X(paper, "Paper") \
+    X(fabric, "Fabric") X(leather, "Leather") X(rubber, "Rubber") X(ceramic, "Ceramic") \
+    X(electronic, "Electronics") X(toy, "Toys") X(tool, "Tools") X(kitchen, "Kitchen") X(food, "Food") \
+    X(drink, "Drinks") X(clothing, "Clothes") X(footwear, "Shoes") X(jewelry, "Jewelry") X(book, "Books") \
+    X(art, "Art") X(sports, "Sports") X(music, "Music") X(office, "Office") X(furniture, "Furniture") \
+    X(decor, "Decor") X(plant, "Plants") X(beauty, "Beauty") X(cleaning, "Cleaning") X(game, "Games") \
+    X(collectible, "Collectibles") X(vintage, "Vintage")
+#define CAM_TYPE_ENUM_(id, label) CAM_TYPE_##id,
+enum { CAM_TYPES(CAM_TYPE_ENUM_) CAM_TYPE_COUNT };
+#define CAM_TYPES_PER_BOX  5                  // the AI picks up to this many
+
+// Each box's types as a bit set (bit k = type k), in box order. 0 = none (an older CAM sends no TYPES at all).
+typedef struct __attribute__((packed)) {
+    uint8_t  type;          // CAM_MSG_TYPES
+    uint8_t  frame_id;
+    uint8_t  count;
+    uint64_t mask[25];      // CAM_MAX_BOXES
+} cam_types_msg_t;
 
 typedef struct __attribute__((packed)) {
     uint16_t x, y, w, h; // top-left corner + size, in 480x480 pixels
@@ -230,6 +261,7 @@ typedef struct __attribute__((packed)) {
 #define CAM_TRAITS_ITEM_SIZE   (CAM_TRAITS_PER * sizeof(cam_trait_t))   // one box's traits
 #define CAM_APPRAISE_HEADER_SIZE (offsetof(cam_appraise_msg_t, known))
 #define CAM_KINDS_HEADER_SIZE  (offsetof(cam_kinds_msg_t, kind))
+#define CAM_TYPES_HEADER_SIZE  (offsetof(cam_types_msg_t, mask))
 #define CAM_NET_LIST_HEADER_SIZE (offsetof(cam_net_list_msg_t, net))
 #define CAM_OUTLINE_CHUNKS     ((CAM_OUTLINE_BYTES + CAM_CHUNK_BYTES - 1) / CAM_CHUNK_BYTES)
 
@@ -244,6 +276,9 @@ _Static_assert(sizeof(cam_prices_msg_t)    <= 1470, "prices message too big for 
 _Static_assert(sizeof(cam_traits_msg_t)    <= 1470, "traits message too big for ESP-NOW v2");
 _Static_assert(sizeof(cam_appraise_msg_t)  <= 1470, "appraise request too big for ESP-NOW v2");
 _Static_assert(sizeof(cam_kinds_msg_t)     <= 1470, "kinds message too big for ESP-NOW v2");
+_Static_assert(sizeof(cam_types_msg_t)     <= 250,  "types message too big for ESP-NOW");
+_Static_assert(CAM_TYPE_COUNT <= 62 && sizeof(((cam_types_msg_t *)0)->mask) / sizeof(uint64_t) == CAM_MAX_BOXES,
+               "market types: at most 62, one mask per box");
 _Static_assert(sizeof(cam_net_list_msg_t)  <= 1470, "network list too big for ESP-NOW v2");
 _Static_assert(sizeof(cam_net_set_msg_t)   <= 250,  "network message too big for ESP-NOW");
 _Static_assert(CAM_OUT_SIZE % 8 == 0, "outline rows must be whole bytes");

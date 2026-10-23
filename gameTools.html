@@ -1023,6 +1023,8 @@ body.farmOn #aniEdOverlay, body.farmOn #fbdEdOverlay, body.farmOn #fncEdOverlay 
             <label>Seed packet costs <input type="number" id="cropBuyPrice" min="0" max="999999" value="20" style="width:70px;"> coins in shops</label>
           </div>
           <div class="animCap">What a shop charges for one packet. 0 = no shop sells it.</div>
+          <div class="animFields"><span>Grows in</span><span class="animFields" id="cropSeasons"></span></div>
+          <div class="animCap">Seasons are 28 game days each. In game it can only be planted in these, the seed shop only sells the packet then, and it withers on the first day of a season it doesn't grow in. Inside buildings (a greenhouse) it grows any time. None ticked = all year.</div>
           <div class="animFields">
             <label><input type="checkbox" id="cropQuality" checked> Harvests roll a quality (rarity)</label>
           </div>
@@ -2553,6 +2555,23 @@ const TILE_FLAG_RIVER = 0x10, TILE_FLAG_OCEAN = 0x20, TILE_FLAG_LAVA = 0x40;
 const WATER_KINDS = [undefined, 'river', 'ocean', 'lava'];
 function waterKindName(w) { return w === 'river' ? 'River' : w === 'ocean' ? 'Ocean' : w === 'lava' ? 'Lava' : 'Pond / lake'; }
 function waterKindOk(w) { return w === 'river' || w === 'ocean' || w === 'lava' ? w : undefined; }
+// main.c SEASONS: SEASON_DAYS (28) game days each; a set of them is a bit mask (bit k = SEASONS[k]), 0 = all year
+const SEASONS = ['Spring', 'Summer', 'Fall', 'Winter'], SEASON_FILES = ['spring', 'summer', 'fall', 'winter'];
+const ITEM_SEASON_ATTR = 'season';   // items.h ITEM_ATTR_SEASON: a seed packet's seasons
+function seasonMaskText(m) { m &= 15; return !m || m === 15 ? 'all year' : SEASONS.filter((_, k) => m >> k & 1).join(', '); }
+// A row of 4 season checkboxes in `wrap` (ids prefix0..3); changed(mask) on every tick.
+function seasonBoxes(wrap, prefix, changed) {
+  wrap.innerHTML = '';
+  SEASONS.forEach((n, k) => {
+    const l = document.createElement('label'), b = document.createElement('input');
+    b.type = 'checkbox'; b.id = prefix + k;
+    b.addEventListener('change', () => changed && changed(seasonBoxesRead(prefix)));
+    l.append(b, ' ' + n);
+    wrap.appendChild(l);
+  });
+}
+function seasonBoxesRead(prefix) { return SEASONS.reduce((m, _, k) => m | (document.getElementById(prefix + k).checked ? 1 << k : 0), 0); }
+function seasonBoxesSet(prefix, mask) { SEASONS.forEach((_, k) => { document.getElementById(prefix + k).checked = !!(mask >> k & 1); }); }
 function nextWaterKind(w) { return WATER_KINDS[(WATER_KINDS.indexOf(w) + 1) % WATER_KINDS.length]; }
 let showTiles = false;        // the "Show tiles" overlay
 const COORDS_KEY = 'captureit.showCoords';
@@ -13962,7 +13981,7 @@ const cropEl = id => document.getElementById(id);
 
 // Images are { w, h, rgba: Uint8ClampedArray(w*h*4) }.
 function cropBlank() {
-  return { name: '', stageCount: 6, growDays: 4, regrows: false, regrowDays: 3, sellPrice: 10, seedPrice: 0, buyPrice: 20, quality: true, solid: false, extraChance: 0, extraMin: 2, extraMax: 3,
+  return { name: '', stageCount: 6, growDays: 4, regrows: false, regrowDays: 3, sellPrice: 10, seedPrice: 0, buyPrice: 20, quality: true, solid: false, extraChance: 0, extraMin: 2, extraMax: 3, seasons: 0,
            stages: [], icon: null, seedIcon: null,
            sheet: null, sheetRects: {} };   // which sprite sheet its art came from, and where: { stages, icon, seedIcon } rects
 }
@@ -14086,6 +14105,7 @@ function cropRender() {
   cropEl('cropExtraChance').value = c.extraChance || 0;   // ...and before bigger harvests: always 1
   cropEl('cropExtraMin').value = c.extraMin || 2;
   cropEl('cropExtraMax').value = c.extraMax || 3;
+  seasonBoxesSet('cropSeason', c.seasons || 0);   // crops from before seasons: all year
   cropRenderInfo();
 
   const box = cropEl('cropStages');
@@ -14139,6 +14159,7 @@ function cropReadForm() {
   c.extraChance = cropClampInt(cropEl('cropExtraChance').value, 0, 100, 0);
   c.extraMin = cropClampInt(cropEl('cropExtraMin').value, 1, 99, 2);
   c.extraMax = cropClampInt(cropEl('cropExtraMax').value, 1, 99, 3);   // below min counts as min (cropExtraRange)
+  c.seasons = seasonBoxesRead('cropSeason');
   c.stages.length = Math.min(c.stages.length, c.stageCount);
 }
 
@@ -14599,13 +14620,14 @@ function cropBuildC(c) {
   for (let s = 0; s < c.stageCount; s++) stagePx.set(cropPack(c.stages[s]), s * CROP_W * CROP_H);
   const meta = { name, stageCount: c.stageCount, growDays: c.growDays, regrows: c.regrows, regrowDays: c.regrowDays,
                  sellPrice: c.sellPrice, seedPrice: c.seedPrice, buyPrice: c.buyPrice, quality: c.quality, solid: c.solid !== false, extraChance: c.extraChance || 0, extraMin: cropExtraRange(c)[0], extraMax: cropExtraRange(c)[1],
-                 iconW: c.icon.w, iconH: c.icon.h, seedIconW: c.seedIcon.w, seedIconH: c.seedIcon.h };
+                 iconW: c.icon.w, iconH: c.icon.h, seedIconW: c.seedIcon.w, seedIconH: c.seedIcon.h, seasons: c.seasons || 0 };
   const cropAttrs = [];
   if (c.sellPrice > 0) cropAttrs.push([ITEM_SELL_ATTR, c.sellPrice]);
   if (c.quality) cropAttrs.push([ITEM_QUALITY_ATTR, 1]);
   const seedAttrs = [];
   if (c.seedPrice > 0) seedAttrs.push([ITEM_SELL_ATTR, c.seedPrice]);
   if (c.buyPrice > 0) seedAttrs.push([ITEM_BUY_ATTR, c.buyPrice]);
+  if ((c.seasons & 15) && (c.seasons & 15) !== 15) seedAttrs.push([ITEM_SEASON_ATTR, c.seasons & 15]);   // none / all = all year
   return `// AUTO-GENERATED by gameTools.html (Crops Editor) — "${name.replace(/\r?\n/g, ' ')}"
 // Lives in assets/crops/ as ${id}.c — the file name is the crop id, keep it.
 // One crop = the plant below + two items: "${id}" (the harvest) and "${id}_seeds" (what's planted).
@@ -14632,7 +14654,7 @@ const crop_def_t k_crop_${id} = {
 };
 
 ${cropItemBlock(id, name, c.icon, cropAttrs, `The harvest${c.sellPrice > 0 ? `: sells for ${c.sellPrice} (more at a better quality)` : ''}.`)}
-${cropItemBlock(`${id}_seeds`, seedName, c.seedIcon, seedAttrs, `The seed packet: hold it and tap a free tile to plant.${c.buyPrice > 0 ? ` Shops sell it for ${c.buyPrice}.` : ''}`)}`;
+${cropItemBlock(`${id}_seeds`, seedName, c.seedIcon, seedAttrs, `The seed packet: hold it and tap a free tile to plant (${seasonMaskText(c.seasons)}).${c.buyPrice > 0 ? ` Shops sell it for ${c.buyPrice}.` : ''}`)}`;
 }
 function cropSetStatus(t) { cropEl('cropExportStatus').textContent = t; }
 async function exportCrop() {
@@ -14714,6 +14736,7 @@ function closeCropEditor() {
 
 // ---- wiring ----
 (() => {
+  seasonBoxes(cropEl('cropSeasons'), 'cropSeason', () => cropReadForm());
   ['cropName', 'cropStageCount', 'cropGrowDays', 'cropRegrows', 'cropRegrowDays', 'cropSellPrice', 'cropSeedPrice', 'cropBuyPrice', 'cropQuality', 'cropSolid', 'cropExtraChance', 'cropExtraMin', 'cropExtraMax'].forEach(id => {
     const el = cropEl(id);
     el.addEventListener(el.tagName === 'SELECT' || el.type === 'checkbox' ? 'change' : 'input', () => {

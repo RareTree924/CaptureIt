@@ -312,6 +312,12 @@ bool                item_droppable(item_id_t item);
 #define ITEM_ATTR_ROD_BAIT     "rod_bait"
 #define ITEM_ATTR_ROD_TACKLE   "rod_tackle"
 #define ITEM_ATTR_ROD_LAVA     "rod_lava"   // 1 = the rod casts into lava too (others: "it would burn up")
+// Seasons (SEASONS in main.c, SEASON_DAYS each): a seed packet's "season" = the bit set of
+// seasons its crop grows in (1 spring, 2 summer, 4 fall, 8 winter, like fish_seasons; none = all year).
+// It's only planted then, the seed shop only sells it then, and it withers when its season ends
+// (not inside buildings). The Crops Editor's "Grows in" writes it.
+#define ITEM_ATTR_SEASON       "season"
+#define SEASON_ALL             0x0F
 // Minigame tricks ("fish_trait" bits).
 #define FISH_TRAIT_FREEZE   0x001   // plays dead: caught in the bar it freezes a moment, then bolts
 #define FISH_TRAIT_STICKY   0x002   // sticky: while the bar is on it, the bar gets stuck (barely moves)

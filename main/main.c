@@ -7987,6 +7987,62 @@ static int crop_find(const char *id)
     return -1;
 }
 
+// ============================================================
+//  SEASONS — every SEASON_DAYS game days the next one: Spring, Summer,
+//  Fall, Winter, then Spring again. Day 0 is Spring 1, Year 1. A set of
+//  seasons is a bit mask (1 spring, 2 summer, 4 fall, 8 winter; 0 = all year),
+//  as in the fish's "fish_seasons" (FISHING) and a seed packet's "season":
+//   - a crop is only planted in its seasons (farm_on_action()), the seed
+//     shop only sells it then (shop_stock()), and the first day of a season
+//     it doesn't grow in, it withers (farm_catch_up()). Inside a building
+//     (a greenhouse) anything grows any time.
+//   - a map can have art for a season: <map>.<season>.map (season_map_path()).
+// ============================================================
+#define SEASON_DAYS       28       // a season is this many game days: spring, summer, fall, winter, spring...
+static const char *const k_season_name[4] = { "Spring", "Summer", "Fall", "Winter" };
+static const char *const k_season_short[4] = { "Spr", "Sum", "Fall", "Win" };
+static int clock_season(void) { return (int)(clock_day() / SEASON_DAYS % 4); }   // 0 spring .. 3 winter
+static int clock_season_day(void) { return (int)(clock_day() % SEASON_DAYS) + 1; }
+static int clock_year(void) { return (int)(clock_day() / (SEASON_DAYS * 4)) + 1; }
+static int season_of_day(int32_t day) { return day < 0 ? 0 : (int)(day / SEASON_DAYS % 4); }
+
+// Does season bit set `mask` (0 = all year) have `season`?
+static bool season_fits(int32_t mask, int season)
+{
+    mask &= SEASON_ALL;
+    return mask == 0 || ((mask >> season) & 1);
+}
+
+// "Spring & Fall", "Spring, Summer & Fall" (brief: "Spr/Sum/Fall"); "all year" for none or all.
+static void season_list(int32_t mask, char *out, size_t n, bool brief)
+{
+    mask &= SEASON_ALL;
+    int count = 0, len = 0;
+    for (int k = 0; k < 4; k++) if ((mask >> k) & 1) count++;
+    if (count == 0 || count == 4) { snprintf(out, n, "all year"); return; }
+    out[0] = '\0';
+    for (int k = 0, i = 0; k < 4 && len >= 0 && (size_t)len < n; k++) {
+        if (!((mask >> k) & 1)) continue;
+        const char *sep = i == 0 ? "" : brief ? "/" : i == count - 1 ? " & " : ", ";
+        len += snprintf(out + len, n - (size_t)len, "%s%s", sep, brief ? k_season_short[k] : k_season_name[k]);
+        i++;
+    }
+}
+
+// Crop c's seasons: its seed packet's "season" bits (0 = all year).
+static int32_t crop_seasons(int c)
+{
+    char id[48];
+    snprintf(id, sizeof(id), "%s_seeds", s_crops[c]->id);
+    return item_attr(item_find(id), ITEM_ATTR_SEASON, 0) & SEASON_ALL;
+}
+
+// Can crop c grow on the loaded map in `season`? Inside a building (a greenhouse) always.
+static bool crop_grows_in(int c, int season)
+{
+    return s_map_inst || season_fits(crop_seasons(c), season);
+}
+
 // How many one harvest of crop c gives: 1, or extra_min..extra_max with extra_chance% odds.
 static int farm_yield(const crop_def_t *c)
 {
@@ -8590,6 +8646,8 @@ static bool farm_catch_up(bool baked, bool repaint)
     bool changed = false;
     int32_t from = today - s_farm_day > FARM_CATCHUP_MAX ? today - FARM_CATCHUP_MAX : s_farm_day;
     int eaten = 0;
+    int8_t withered[FARM_MAX][2];   // SEASONS: the tiles of crops a new season killed
+    int    n_withered = 0;
     memcpy(s_grass_was, s_grass, sizeof(s_grass_was));
     farm_guards_update();   // the sprinklers' and scarecrows' squares (SPRINKLERS + SCARECROWS)
     for (int32_t d = from; d < today; d++) {
@@ -8612,6 +8670,17 @@ static bool farm_catch_up(bool baked, bool repaint)
         if ((!baked || d != s_farm_day) && ranch_graze_away()) changed = true;
         if (ranch_new_day()) changed = true;
         grass_night();
+        int next = season_of_day(d + 1);   // SEASONS: a new season tomorrow — what can't grow in it withers
+        if (next != season_of_day(d))
+            for (int i = 0; i < FARM_MAX; i++) {
+                farm_plot_t *p = &s_farm[i];
+                if (!p->used || crop_grows_in(p->crop, next)) continue;
+                p->used = false;
+                withered[n_withered][0] = p->tx;
+                withered[n_withered][1] = p->ty;
+                n_withered++;
+                changed = true;
+            }
     }
     if (memcmp(s_grass_was, s_grass, sizeof(s_grass_was)) != 0) {
         changed = true;
@@ -8629,6 +8698,13 @@ static bool farm_catch_up(bool baked, bool repaint)
     if (changed && baked) soil_show_changes(repaint);
     if (eaten && baked && repaint) crows_ate_repaint();   // (they're not baked again: where they were is shown)
     if (eaten) message(3500, "Crows ate %d of the crops here while you were away", eaten);
+    if (n_withered) {   // SEASONS: take the dead ones out of the map
+        if (baked) farm_rebuild(-1, -1);
+        for (int k = 0; k < n_withered && baked && repaint; k++) farm_repaint(withered[k][0], withered[k][1]);
+        message(4000, "%d crop%s withered - %s doesn't suit %s", n_withered, n_withered == 1 ? "" : "s",
+                k_season_name[clock_season()], n_withered == 1 ? "it" : "them");
+        ESP_LOGI(TAG, "farm: %d crop%s on %s withered with the season", n_withered, n_withered == 1 ? "" : "s", current_map_name());
+    }
     return changed;
 }
 
@@ -8773,6 +8849,12 @@ static void farm_on_action(void)
     if (can) { soil_on_can(tx, ty); return; }
     int crop = crop_of_seed(inv_held_item());
     if (crop < 0) return;                                  // not holding seeds: nothing to do here
+    if (!crop_grows_in(crop, clock_season())) {            // SEASONS: out of season (it would only wither)
+        char when[40];
+        season_list(crop_seasons(crop), when, sizeof(when), false);
+        message(2500, "%s only grow in %s", item_name(inv_held_item()), when);
+        return;
+    }
     if (!farm_tile_ok(tx, ty, true)) {
         message(2000, tile_on_map(tx, ty) && s_soil[ty][tx] == SOIL_NONE ? "Till the ground first" : "Can't plant there");
         return;
@@ -13681,6 +13763,7 @@ static int shop_stock(int kind, item_id_t *out)
             char id[48];
             snprintf(id, sizeof(id), "%s_seeds", s_crops[c]->id);
             item_id_t seeds = item_find(id);
+            if (!season_fits(crop_seasons(c), clock_season())) continue;   // SEASONS: in-season seeds only
             if (seeds != ITEM_NONE && item_buy_price(seeds) > 0) out[n++] = seeds;
         }
     } else {
@@ -13789,12 +13872,14 @@ static void shop_draw_card(void)
     draw_text(x + w - 12 - pw, y + 8, p, 2, INV_COL_GOLD);
     char line[80];
     int  c = crop_of_seed(item), have = inv_count_of(item);
+    char when[24];   // SEASONS
+    if (c >= 0) season_list(crop_seasons(c), when, sizeof(when), true);
     if (c >= 0 && s_crops[c]->regrow_days)
-        snprintf(line, sizeof(line), "Ripe in %d days, then every %d days.  In bag: %d",
-                 s_crops[c]->grow_days, s_crops[c]->regrow_days, have);
+        snprintf(line, sizeof(line), "%s. Ripe in %d days, then every %d.  In bag: %d",
+                 when, s_crops[c]->grow_days, s_crops[c]->regrow_days, have);
     else if (c >= 0)
-        snprintf(line, sizeof(line), "Ripe in %d day%s, harvested once.  In bag: %d",
-                 s_crops[c]->grow_days, s_crops[c]->grow_days == 1 ? "" : "s", have);
+        snprintf(line, sizeof(line), "%s. Ripe in %d day%s, once.  In bag: %d",
+                 when, s_crops[c]->grow_days, s_crops[c]->grow_days == 1 ? "" : "s", have);
     else if (s_shop_kind == SHOP_RANCH)
         ranch_shop_card(item, line, sizeof(line));   // what the animal gives, or what the tool is for
     else if (s_shop_kind == SHOP_FISH) {             // what the gear does (FISHING)
@@ -18057,7 +18142,6 @@ enum { FISH_OFF, FISH_CAST, FISH_WAIT, FISH_BITE, FISH_GAME, FISH_DONE };
 #define FISH_SPEED_MAX    420.0f   // px/s
 #define FISH_LEVEL_MAX    10
 #define FISH_LOOT_MAX     3        // things in one treasure chest
-#define SEASON_DAYS       28       // a season is this many game days: spring, summer, fall, winter, spring...
 
 #define FISH_PANEL_W      108
 #define FISH_PANEL_H      (FISH_WATER_H + 74)
@@ -18073,7 +18157,6 @@ enum { FISH_OFF, FISH_CAST, FISH_WAIT, FISH_BITE, FISH_GAME, FISH_DONE };
 #define FISH_WOOD_LT      COLOR_RGB565(214, 156,  92)
 #define FISH_WOOD_DK      COLOR_RGB565( 84,  48,  22)
 
-static const char *const k_season_name[4] = { "Spring", "Summer", "Fall", "Winter" };
 static const char *const k_fish_trait_name[FISH_TRAIT_COUNT] = {
     "Plays dead", "Sticky", "Dasher", "Jumper", "Ghost", "Decoy", "Current", "Heavy", "Shrinker", "Thief", "Frenzy",
 };
@@ -18081,8 +18164,6 @@ static const char *const k_fish_trait_name[FISH_TRAIT_COUNT] = {
 static const int32_t k_fish_level_xp[FISH_LEVEL_MAX] = { 100, 380, 770, 1300, 2150, 3300, 4800, 6900, 10000, 15000 };
 
 int clock_weekday(void);   // CLOCK section: 0 = Monday
-static int clock_season(void) { return (int)(clock_day() / SEASON_DAYS % 4); }   // 0 spring .. 3 winter
-static int clock_season_day(void) { return (int)(clock_day() % SEASON_DAYS) + 1; }
 
 typedef struct {        // what's on the player's line (kept with the save: world.txt "rig" lines)
     item_id_t bait; uint8_t bait_q, bait_n;   // a bait stack (bait_n 0 = none)
@@ -23889,7 +23970,8 @@ static void clock_tick(void)
 static int32_t clock_key(void)
 {
     int32_t shown = (int32_t)(s_clock_min / CLOCK_STEP_MIN * CLOCK_STEP_MIN);
-    return ((int32_t)clock_weekday() * MIN_PER_DAY + shown) * (NIGHT_STAGES + 1) + s_night_shown;
+    int32_t key = ((int32_t)clock_weekday() * MIN_PER_DAY + shown) * (NIGHT_STAGES + 1) + s_night_shown;
+    return key * (SEASON_DAYS * 4) + clock_season() * SEASON_DAYS + clock_season_day() - 1;   // (SEASONS)
 }
 
 // The dial: sky by the hour, a sun (low at dawn/dusk) or a moon and stars,
@@ -23953,9 +24035,20 @@ static bool clock_render(void)
     fill_rect(30, 9, 1, CLOCK_H - 18, INV_COL_SLOT_DK);   // engraved divider
     fill_rect(31, 9, 1, CLOCK_H - 18, INV_COL_SHINE);
 
-    const char *day = k_weekday_short[clock_weekday()];
+    char day[4];   // "Mon" — the dot made room for the season (SEASONS)
+    snprintf(day, sizeof(day), "%.3s", k_weekday_short[clock_weekday()]);
     draw_text(36, 9, day, 2, INV_COL_SHINE);
     draw_text(35, 8, day, 2, INV_COL_TEXT);
+
+    // SEASONS: the season (in its colour) over its day, right of the weekday
+    static const uint16_t k_season_col[4] = {
+        COLOR_RGB565(56, 140, 48), COLOR_RGB565(196, 116, 16), COLOR_RGB565(170, 66, 20), COLOR_RGB565(40, 104, 186),
+    };
+    char sd[4];
+    int  sx = 35 + text_width(day, 2) + 4;
+    snprintf(sd, sizeof(sd), "%d", clock_season_day());
+    draw_text(sx, 8, k_season_short[clock_season()], 1, k_season_col[clock_season()]);
+    draw_text(sx, 16, sd, 1, INV_COL_TEXT);
 
     char t[8];
     snprintf(t, sizeof(t), "%d:%02d", hour % 12 == 0 ? 12 : hour % 12, minute);

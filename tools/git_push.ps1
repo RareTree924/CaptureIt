@@ -2,7 +2,8 @@
 # - commits every local change (new, edited, deleted files)
 # - force-pushes the current branch, overwriting whatever GitHub had
 # - .gitignore'd files (build/, secrets.h, gemini_key.txt) are never uploaded
-Set-Location (Split-Path $PSScriptRoot)
+param([string]$Repo = (Split-Path $PSScriptRoot))  # project folder; defaults to the one this script sits in
+Set-Location $Repo
 $branch = git rev-parse --abbrev-ref HEAD
 
 git add -A

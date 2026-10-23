@@ -2,7 +2,8 @@
 # - uncommitted local changes are stashed first as a backup (undo with: git stash pop)
 # - the current branch is then reset to GitHub's copy and stray files removed
 # - .gitignore'd files (build/, secrets.h, gemini_key.txt) are left alone
-Set-Location (Split-Path $PSScriptRoot)
+param([string]$Repo = (Split-Path $PSScriptRoot))  # project folder; defaults to the one this script sits in
+Set-Location $Repo
 $branch = git rev-parse --abbrev-ref HEAD
 
 git fetch origin $branch

@@ -2,7 +2,8 @@
 # - files only on GitHub / only on this computer / different on both
 # - edit times on each side, and which side changed the file since you last synced
 # - read-only: changes nothing; .gitignore'd files are skipped
-Set-Location (Split-Path $PSScriptRoot)
+param([string]$Repo = (Split-Path $PSScriptRoot))  # project folder; defaults to the one this script sits in
+Set-Location $Repo
 $branch = git rev-parse --abbrev-ref HEAD
 $remote = "origin/$branch"
 

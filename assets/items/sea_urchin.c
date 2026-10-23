@@ -38,6 +38,7 @@ static const item_attr_t k_sea_urchin_attrs[] = {
     { "fish_tier", 2 },
     { "pot", 8 },
     { "pot_water", 4 },
+    { "fish_seasons", 12 },
 };
 
 const item_asset_t k_item_sea_urchin = {
@@ -47,5 +48,5 @@ const item_asset_t k_item_sea_urchin = {
     .passive = { .w=16, .h=16, .frame_count=1, .interval_ms=150, .loop_count=-1, .pixels=k_sea_urchin_passive_pixels },
     .use = { .frame_count = 0 },
     .attrs = k_sea_urchin_attrs,
-    .attr_count = 9,
+    .attr_count = 10,
 };

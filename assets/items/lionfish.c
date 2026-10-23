@@ -40,6 +40,7 @@ static const item_attr_t k_lionfish_attrs[] = {
     { "fish_max", 15 },
     { "fish_tier", 4 },
     { "mut", 200 },
+    { "fish_seasons", 2 },
 };
 
 const item_asset_t k_item_lionfish = {
@@ -49,5 +50,5 @@ const item_asset_t k_item_lionfish = {
     .passive = { .w=16, .h=16, .frame_count=1, .interval_ms=150, .loop_count=-1, .pixels=k_lionfish_passive_pixels },
     .use = { .frame_count = 0 },
     .attrs = k_lionfish_attrs,
-    .attr_count = 11,
+    .attr_count = 12,
 };

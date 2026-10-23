@@ -35,6 +35,7 @@ static const item_attr_t k_atlantic_cod_attrs[] = {
     { "fish_rarity", 20 },
     { "fish_min", 12 },
     { "fish_max", 40 },
+    { "fish_seasons", 12 },
 };
 
 const item_asset_t k_item_atlantic_cod = {
@@ -44,5 +45,5 @@ const item_asset_t k_item_atlantic_cod = {
     .passive = { .w=16, .h=16, .frame_count=1, .interval_ms=150, .loop_count=-1, .pixels=k_atlantic_cod_passive_pixels },
     .use = { .frame_count = 0 },
     .attrs = k_atlantic_cod_attrs,
-    .attr_count = 6,
+    .attr_count = 7,
 };

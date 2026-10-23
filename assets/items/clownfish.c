@@ -38,6 +38,7 @@ static const item_attr_t k_clownfish_attrs[] = {
     { "fish_min", 2 },
     { "fish_max", 4 },
     { "fish_tier", 2 },
+    { "fish_seasons", 2 },
 };
 
 const item_asset_t k_item_clownfish = {
@@ -47,5 +48,5 @@ const item_asset_t k_item_clownfish = {
     .passive = { .w=16, .h=16, .frame_count=1, .interval_ms=150, .loop_count=-1, .pixels=k_clownfish_passive_pixels },
     .use = { .frame_count = 0 },
     .attrs = k_clownfish_attrs,
-    .attr_count = 9,
+    .attr_count = 10,
 };

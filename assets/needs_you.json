@@ -911,10 +911,12 @@
     {
       "id": "art_lava_fishing",
       "kind": "art",
-      "title": "Lava fishing: make the lava tile, a lava rod and lava fish",
-      "what": "Lava fishing is in (2026-10-23), but nothing uses it yet. Map Editor: on a 16x16 lava tile tick Fishable, then click its Water: button until it says Lava, and export the map. Fishing tab: give a rod 'Can fish in lava' (other rods say they'd burn up), and give some fish Water: Lava only (nothing else bites in lava). The minigame turns orange in lava.",
+      "title": "Lava fishing: make the lava tile and a lava rod",
+      "what": "Lava fishing is in (2026-10-23). Lava Eel already bites in lava (Water: Lava) instead of only on the 'mines' map. Still needed: Map Editor, on a 16x16 lava tile tick Fishable, then click its Water: button until it says Lava, and export the map. Fishing tab: give a rod 'Can fish in lava' (other rods say they'd burn up). Any other fish you want in lava: Water: Lava only (nothing else bites in lava). The minigame turns orange in lava.",
       "added": "2026-10-23",
-      "files": [],
+      "files": [
+        "items/lava_eel.c"
+      ],
       "done": false,
       "reply": ""
     },
@@ -952,6 +954,22 @@
       "what": "Any item with a price is now for sale. Put the new 'General store' action on a map object (Map Editor › Actions…). In the Shop Editor tab, tick a few items, set prices, Save changes, then rebuild. Each shop shows a tab for every counter with stock (up to 5: SEEDS, BUILD, RANCH, FISH, GOODS). With 4 or more tabs, the money moves to the footer; check that it looks right.",
       "added": "2026-10-23",
       "files": [],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "decision_fish_seasons",
+      "kind": "decision",
+      "title": "Your original fish: check Claude's season picks",
+      "what": "35 of your original fish got seasons again (2026-10-23), the same picks as before. Each season has its own legend: Golden Koi in spring, Airplanefish in summer, Humpback Anglerfish in fall, Atlantic Giant Squid in winter. Carp, Catfish, Eel, Pike, Rainbow Trout and Sunfish keep the Stardew seasons the stardew-fish work gave them. Common Starfish, Goldfish, Hermit Crab, Sea Sponge and Progenetica still bite all year. Change any of them in the Fishing tab: the fish's Seasons buttons.",
+      "added": "2026-10-23",
+      "files": [
+        "items/golden_koi.c",
+        "items/airplanefish.c",
+        "items/humpback_anglerfish.c",
+        "items/atlantic_giant_squid.c",
+        "items/bluefin_tuna.c"
+      ],
       "done": false,
       "reply": ""
     }

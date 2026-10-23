@@ -40,6 +40,7 @@ static const item_attr_t k_monkfish_attrs[] = {
     { "fish_max", 40 },
     { "fish_tier", 4 },
     { "mut", 200 },
+    { "fish_seasons", 8 },
 };
 
 const item_asset_t k_item_monkfish = {
@@ -49,5 +50,5 @@ const item_asset_t k_item_monkfish = {
     .passive = { .w=16, .h=16, .frame_count=1, .interval_ms=150, .loop_count=-1, .pixels=k_monkfish_passive_pixels },
     .use = { .frame_count = 0 },
     .attrs = k_monkfish_attrs,
-    .attr_count = 11,
+    .attr_count = 12,
 };

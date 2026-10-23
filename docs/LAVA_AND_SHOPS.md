@@ -14,6 +14,9 @@ Lava is a fourth water kind, alongside Pond / lake, River and Ocean.
    A fish with no Water set means "any water", which never includes lava.
    Junk and crab pot catches follow the same rule.
 
+**Lava Eel** is already a lava fish: it bites in Lava water on any map,
+instead of only on the "mines" map.
+
 In game, the cast stays on lava (it won't fly from water out into lava), the
 bite ripple is orange, and the minigame glows orange with embers.
 

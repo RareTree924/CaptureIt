@@ -37,6 +37,7 @@ static const item_attr_t k_yellow_tang_attrs[] = {
     { "fish_min", 4 },
     { "fish_max", 8 },
     { "fish_tier", 2 },
+    { "fish_seasons", 6 },
 };
 
 const item_asset_t k_item_yellow_tang = {
@@ -46,5 +47,5 @@ const item_asset_t k_item_yellow_tang = {
     .passive = { .w=16, .h=16, .frame_count=1, .interval_ms=150, .loop_count=-1, .pixels=k_yellow_tang_passive_pixels },
     .use = { .frame_count = 0 },
     .attrs = k_yellow_tang_attrs,
-    .attr_count = 8,
+    .attr_count = 9,
 };

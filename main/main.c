@@ -35,6 +35,7 @@
 #include "esp_heap_caps.h"   // heap_caps_get_free_size(): shown on the diagnostics screen   // esp_random(): random drop counts
 #include "esp_attr.h"        // EXT_RAM_BSS_ATTR: rarely used tables kept in PSRAM, off the scarce internal RAM
 #include "esp_timer.h"
+#include "esp_rom_sys.h"      // esp_rom_delay_us(): the ST7701 init's bit-banged clock
 #include "esp_ota_ops.h"        // Dev Tools: the running app partition
 #include "esp_image_format.h"   // Dev Tools: how much of it the app uses
 #include "freertos/FreeRTOS.h"
@@ -135,19 +136,28 @@ static void spi_gpio_init(void)
     gpio_set_level(PIN_TFT_SCK, 0);
 }
 
+// One clock pulse with the data bit set up first. Each half lasts 1 us — far
+// slower than the ST7701 needs, so a bit is never misread (a back-to-back
+// gpio_set_level() pulse is only ~100 ns, close to its limits).
+static void clk9(int bit)
+{
+    gpio_set_level(PIN_TFT_SDA, bit);
+    esp_rom_delay_us(1);
+    gpio_set_level(PIN_TFT_SCK, 1);
+    esp_rom_delay_us(1);
+    gpio_set_level(PIN_TFT_SCK, 0);
+}
+
 // 9-bit word: 1 D/C bit (0=cmd,1=data) + 8 data bits, MSB first.
 static void write9(uint8_t dc, uint8_t val)
 {
     gpio_set_level(PIN_TFT_CS, 0);
-    gpio_set_level(PIN_TFT_SDA, dc);
-    gpio_set_level(PIN_TFT_SCK, 1);
-    gpio_set_level(PIN_TFT_SCK, 0);
-    for (int i = 7; i >= 0; i--) {
-        gpio_set_level(PIN_TFT_SDA, (val >> i) & 0x01);
-        gpio_set_level(PIN_TFT_SCK, 1);
-        gpio_set_level(PIN_TFT_SCK, 0);
-    }
+    esp_rom_delay_us(1);
+    clk9(dc);
+    for (int i = 7; i >= 0; i--) clk9((val >> i) & 0x01);
+    esp_rom_delay_us(1);
     gpio_set_level(PIN_TFT_CS, 1);
+    esp_rom_delay_us(1);
 }
 
 static void cmd(uint8_t c) { write9(0, c); }
@@ -161,6 +171,14 @@ static void cmd_data(uint8_t c, const uint8_t *d, size_t len)
 // ST7701 register sequence (from Arduino_GFX's st7701_type1_init_operations).
 static void st7701_init_sequence(void)
 {
+    // Software reset first. The panel has no reset wire and stays powered
+    // when the ESP32 restarts (flashing, the reset button, a crash), so it
+    // would otherwise take this sequence on top of whatever state it was
+    // left in — which some boots showed as a glitchy screen. 120 ms: the
+    // datasheet's wait after a reset before sleep-out.
+    cmd(0x01);
+    vTaskDelay(pdMS_TO_TICKS(120));
+
     // Page 0x10: gamma
     cmd_data(0xFF, (uint8_t[]){0x77,0x01,0x00,0x00,0x10}, 5);
     cmd_data(0xC0, (uint8_t[]){0x3B,0x00}, 2);
@@ -226,6 +244,7 @@ static void night_before_map_swap(void);      // DAY / NIGHT section — load_ma
 static void night_map_loaded(const char *path, uint32_t total_px, uint32_t day_hash); // then puts the new map in the current night stage
 static uint32_t night_fnv(uint32_t h, const uint16_t *px, uint32_t n);                 // DAY / NIGHT section
 static void night_release_hold(void);         // ...and ui_begin(): the loader lets go of the shared hold buffer
+static const char *season_map_path(const char *path, char *out, size_t n); // SEASONS: load_map()'s <map>.<season>.map when there is one
 #if DEV_LINK_ENABLED
 static bool dev_touch(bool *touched, int *x, int *y);   // DEV LINK section — a tap sent over USB
 static void dev_main_poll(void);                         // ...its commands that touch the game, run between frames
@@ -237,7 +256,7 @@ static void dev_out(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 // ============================================================
 // The panel has no memory of its own: the frame (s_fb, PSRAM) is streamed
 // out the whole time, through two "bounce" buffers in internal RAM that an
-// interrupt on Core 0 refills from PSRAM. Each is this many lines (it must
+// interrupt on Core 1 (game_init()'s core) refills from PSRAM. Each is this many lines (it must
 // divide LCD_V_RES); bigger = fewer, longer refills.
 #define LCD_BOUNCE_LINES 10
 
@@ -2804,7 +2823,7 @@ static bool anim_restamp_current(int x, int y, int w, int h)
 #define HOTBAR_SLOTS 8
 #define INV_ROWS     3                                   // backpack rows above the hotbar row in the inventory screen
 #define INV_SLOTS    (HOTBAR_SLOTS * (INV_ROWS + 1))
-typedef struct { uint8_t item; uint8_t count; uint8_t quality; } inv_slot_t;   // count == 0 means "empty"; quality: item_quality_t
+typedef struct { item_id_t item; uint8_t count; uint8_t quality; } inv_slot_t;   // count == 0 means "empty"; quality: item_quality_t
 static inv_slot_t s_inv[INV_SLOTS];
 static int        s_inv_held = 0;                              // which HOTBAR slot is in the player's hands
 
@@ -2851,7 +2870,7 @@ static int hotbar_slot_at(int x, int y)
 // Adds `count` of `item` at `quality` (item_quality_t): tops up existing
 // stacks of the same item AND quality first, then uses empty slots.
 // Returns how many did NOT fit (0 = everything was stored).
-static int inv_add_q(uint8_t item, uint8_t quality, int count)
+static int inv_add_q(item_id_t item, uint8_t quality, int count)
 {
     if (item == ITEM_NONE || !item_get(item) || count <= 0) return count > 0 ? count : 0;
     int max = item_max_stack(item);
@@ -2876,10 +2895,10 @@ static int inv_add_q(uint8_t item, uint8_t quality, int count)
 }
 
 // inv_add_q() at Standard quality.
-static int inv_add(uint8_t item, int count) { return inv_add_q(item, QUALITY_STANDARD, count); }
+static int inv_add(item_id_t item, int count) { return inv_add_q(item, QUALITY_STANDARD, count); }
 
 // Removes up to `count` of `item`. Returns how many were actually removed.
-static int inv_remove(uint8_t item, int count)
+static int inv_remove(item_id_t item, int count)
 {
     int removed = 0;
     for (int i = 0; i < INV_SLOTS && removed < count; i++) {
@@ -2894,7 +2913,7 @@ static int inv_remove(uint8_t item, int count)
 }
 
 // The item currently in the player's hands (ITEM_NONE = bare hands).
-static uint8_t inv_held_item(void)
+static item_id_t inv_held_item(void)
 {
     return (s_inv[s_inv_held].count > 0) ? s_inv[s_inv_held].item : ITEM_NONE;
 }
@@ -3042,7 +3061,7 @@ static float legendary_demand(const legendary_t *l)
 }
 
 // item_sell_price()'s multiplier (items.h): every legendary trait the item has, times its demand.
-int64_t item_price_bonus_pct(uint8_t item)
+int64_t item_price_bonus_pct(item_id_t item)
 {
     const item_asset_t *a = item_get(item);
     double m = 1.0;
@@ -3083,8 +3102,41 @@ static double trait_combo_mult(int good)
 // — e.g. { "~Crisp Shot", 130 }.
 #define TRAIT_FREE '~'
 
+// ---- Fishing gear's effects (FISHING; items.h "Effects"): on a rod, a bait or a
+// tackle as "rod_" / "bait_" / "tackle_" + the name. kind 'p' = a % (100 = normal,
+// they multiply), 'a' = points added (a rod's "rod_bar" is its whole bar: 64 normal),
+// 'f' = a switch (1 = on).
+enum { FX_BAR, FX_REEL, FX_BITE, FX_LUCK, FX_GRIP, FX_JUNK, FX_TREASURE, FX_DOUBLE, FX_QUALITY, FX_RARE,
+       FX_LEAD, FX_BARBED, FX_SONAR, FX_MAGIC, FX_CHALLENGE, FX_STEADY, FX_COUNT };
+typedef struct { const char *name, *label; int def; char kind; bool lower_better; } fish_fx_def_t;
+static const fish_fx_def_t k_fish_fx[FX_COUNT] = {
+    { "bar", "Bar", 0, 'a', false },          { "reel", "Reel", 100, 'p', false },         { "bite", "Bite", 100, 'p', false },
+    { "luck", "Luck", 0, 'a', false },        { "grip", "Grip", 100, 'p', false },         { "junk", "Junk", 100, 'p', true },
+    { "treasure", "Treasure", 100, 'p', false }, { "double", "Double", 0, 'a', false },     { "quality", "Quality", 0, 'a', false },
+    { "rare", "Rare fish", 100, 'p', false }, { "lead", "Lead bobber", 0, 'f', false },    { "barbed", "Barbed", 0, 'f', false },
+    { "sonar", "Sonar", 0, 'f', false },      { "magic", "Magic", 0, 'f', false },         { "challenge", "Challenge", 0, 'f', false },
+    { "steady", "Steady", 0, 'f', false },
+};
+#define FISH_BAR_H 64   // a rod's catch bar without "rod_bar" (the minigame's water is FISH_WATER_H)
+static const char *const k_fish_role[3] = { "rod", "bait", "tackle" };
+
+// Is `item` gear of role 0 rod, 1 bait, 2 tackle?
+static bool fish_gear_is(item_id_t item, int role)
+{
+    return item != ITEM_NONE && item_attr(item, role == 0 ? ITEM_ATTR_ROD : role == 1 ? ITEM_ATTR_BAIT : ITEM_ATTR_TACKLE, 0) > 0;
+}
+
+// Effect k of gear `item` in role `role`; *def = its normal value.
+static int fish_fx_attr(item_id_t item, int role, int k, int *def)
+{
+    char name[24];
+    snprintf(name, sizeof(name), "%s_%s", k_fish_role[role], k_fish_fx[k].name);
+    *def = role == 0 && k == FX_BAR ? FISH_BAR_H : k_fish_fx[k].def;
+    return (int)item_attr(item, name, *def);
+}
+
 // The item's traits, in its attribute order (up to max). Returns how many it has in all.
-static int item_traits(uint8_t item, trait_t *out, int max)
+static int item_traits(item_id_t item, trait_t *out, int max)
 {
     const item_asset_t *a = item_get(item);
     int n = 0;
@@ -3104,19 +3156,19 @@ static int item_traits(uint8_t item, trait_t *out, int max)
         if (n < max) out[n] = t;
         n++;
     }
-    // A fishing rod's stats (FISHING), each one that isn't normal: green better, red worse.
-    if (a && item_attr(item, ITEM_ATTR_ROD, 0) > 0) {
-        static char lbl[5][16];
-        struct { const char *attr, *name, *unit; int def; } k_rod[5] = {
-            { ITEM_ATTR_ROD_BAR, "Bar ", "px", 64 }, { ITEM_ATTR_ROD_REEL, "Reel ", "%", 100 }, { ITEM_ATTR_ROD_BITE, "Bite ", "%", 100 },
-            { ITEM_ATTR_ROD_LUCK, "Luck ", "", 0 }, { ITEM_ATTR_ROD_GRIP, "Grip ", "%", 100 },
-        };
-        for (int s = 0; s < 5; s++) {
-            int v = (int)item_attr(item, k_rod[s].attr, k_rod[s].def);
-            if (v == k_rod[s].def) continue;
-            int diff = k_rod[s].def ? (s == 0 ? v - k_rod[s].def : v - 100) : v;   // bar: px more; luck: points; the rest: % over normal
-            snprintf(lbl[s], sizeof(lbl[s]), "%s%+d%s", k_rod[s].name, diff, k_rod[s].unit);
-            if (n < max) out[n] = (trait_t){ k_rod[s].attr, lbl[s], (int16_t)(diff > 0 ? 101 : 99) };
+    // Fishing gear's effects (FISHING): a rod's, a bait's, a tackle's — each one that isn't normal: green better, red worse.
+    for (int role = 0; a && role < 3; role++) {
+        if (!fish_gear_is(item, role)) continue;
+        static char lbl[FX_COUNT][20];
+        for (int k = 0; k < FX_COUNT; k++) {
+            int def, v = fish_fx_attr(item, role, k, &def);
+            if (v == def) continue;
+            const fish_fx_def_t *d = &k_fish_fx[k];
+            int diff = d->kind == 'p' ? v - 100 : v - def;   // %: over normal; bar: px more; the rest: points
+            if (d->kind == 'f') snprintf(lbl[k], sizeof(lbl[k]), "%s", d->label);
+            else                snprintf(lbl[k], sizeof(lbl[k]), "%s %+d%s", d->label, diff, d->kind == 'p' ? "%" : k == FX_BAR ? "px" : "");
+            bool good = d->kind == 'f' || (d->lower_better ? diff < 0 : diff > 0);
+            if (n < max) out[n] = (trait_t){ d->name, lbl[k], (int16_t)(good ? 101 : 99) };
             n++;
         }
     }
@@ -3125,7 +3177,7 @@ static int item_traits(uint8_t item, trait_t *out, int max)
 
 // "Sunflower - Razor sharp, Vivid, Tiny..." — the name and up to `shown`
 // traits, "..." when it has more. Just the name when it has none.
-static void item_summary(uint8_t item, int shown, char *out, size_t n)
+static void item_summary(item_id_t item, int shown, char *out, size_t n)
 {
     trait_t t[4];
     if (shown > 4) shown = 4;
@@ -3257,14 +3309,14 @@ static void item_summary(uint8_t item, int shown, char *out, size_t n)
 #define BRK_REACH         6    // px past the player's feet, in the facing direction, that a hit can reach
 
 typedef struct {
-    uint8_t item;              // resolved s_items index; ITEM_NONE = unknown id in this build, skipped
+    item_id_t item;              // resolved s_items index; ITEM_NONE = unknown id in this build, skipped
     uint8_t min, max;          // count, inclusive
     uint8_t chance;            // 0..100 %
 } brk_drop_t;
 
 typedef struct {
     uint8_t   hits, drop_count;
-    uint8_t   need_item;               // item the player must hold; ITEM_NONE = anything
+    item_id_t   need_item;               // item the player must hold; ITEM_NONE = anything
     bool      need_missing;            // needs an item this build doesn't have: can't be hit
     brk_drop_t drops[BRK_MAX_DROPS];
     bool      solid_any;               // false = walkable object (bush): whole sub-rect counts as hittable
@@ -3352,9 +3404,9 @@ static const char *const k_brk_legacy_tool_ids[] = { NULL, "axe", "pickaxe" };
 // Item id string -> this build's s_items index. An id with no matching
 // assets/items/<id>.c is logged and comes back as ITEM_NONE, which
 // brk_finish_level() skips — the map still loads.
-static uint8_t brk_resolve_item_id(const char *id)
+static item_id_t brk_resolve_item_id(const char *id)
 {
-    uint8_t item = item_find(id);
+    item_id_t item = item_find(id);
     if (item == ITEM_NONE)
         ESP_LOGW(TAG, "brk: map uses item \"%s\" but assets/items/%s.c isn't in this build — "
                       "drops of it are skipped, levels needing it can't be hit", id, id);
@@ -3362,7 +3414,7 @@ static uint8_t brk_resolve_item_id(const char *id)
 }
 
 // Reads a MAP7 drop item-id table into refs[] as resolved s_items indices.
-static bool brk_read_item_refs(FILE *f, uint8_t refs[256], int *ref_count)
+static bool brk_read_item_refs(FILE *f, item_id_t refs[256], int *ref_count)
 {
     uint8_t n;
     if (fread(&n, 1, 1, f) != 1) return false;
@@ -3389,7 +3441,7 @@ static bool brk_bank_read(FILE *f, int map_w, int map_h, const bundle_bank_t *bu
     bool legacy_map6 = (version == 6);          // numeric drop, no item-id table
     bool legacy_tool = (version <= 7);          // numeric tool kind instead of need_ref
 
-    static uint8_t item_refs[256];   // static: load_map() runs on the 3.5 KB main task stack
+    static item_id_t item_refs[256];   // static: load_map() runs on the 3.5 KB main task stack
     int     item_ref_count = 0;
     if (!legacy_map6 && !brk_read_item_refs(f, item_refs, &item_ref_count)) {
         ESP_LOGE(TAG, "brk: item-id table is invalid or truncated");
@@ -3714,6 +3766,10 @@ static bool tp_bank_read(FILE *f, tp_bank_t *out)
 #define TILE_FLAG_TILLABLE     0x01
 #define TILE_FLAG_BUILDABLE    0x02  // the editor's "Buildable": buildings may stand on it (PLACEMENT)
 #define TILE_FLAG_FISHABLE     0x04  // the editor's "Fishable": water a fishing rod casts into (FISHING)
+#define TILE_FLAG_GRASSY       0x08  // the editor's "Grassy": wild grass grows here by itself, and grows back (FARMING)
+#define TILE_FLAG_RIVER        0x10  // the editor's water kind "River" on Fishable water (FISHING: "fish_water" 2)
+#define TILE_FLAG_OCEAN        0x20  // ...and "Ocean" (FISHING: "fish_water" 4); neither = a pond or lake ("fish_water" 1)
+#define TILE_FLAG_LAVA         0x40  // ...and "Lava" (FISHING: "fish_water" 8): only a "rod_lava" rod casts into it, only lava fish bite
 #define TILE_CELL_COVERED      0x80
 #define TILE_NONE              0     // no tile type here (see above), off the map, or a map from before MAP11
 #define TILE_FARMLAND          254   // tilled with a hoe (FARMING) — the same on every map
@@ -3827,6 +3883,22 @@ bool tile_fishable(int tx, int ty)
     return t != TILE_NONE && (s_tiles->types[t].flags & TILE_FLAG_FISHABLE);
 }
 
+// Fishable water's kind (FISHING, "fish_water" bits): 1 pond / lake, 2 river, 4 ocean, 8 lava; 0 = not water.
+static int tile_water_kind(int tx, int ty)
+{
+    uint8_t t = read_map_tile(tx, ty);
+    if (t == TILE_NONE || !(s_tiles->types[t].flags & TILE_FLAG_FISHABLE)) return 0;
+    uint8_t f = s_tiles->types[t].flags;
+    return (f & TILE_FLAG_LAVA) ? 8 : (f & TILE_FLAG_OCEAN) ? 4 : (f & TILE_FLAG_RIVER) ? 2 : 1;
+}
+
+// Ground ticked "Grassy" in the editor, with nothing on it: wild grass grows on it (FARMING).
+bool tile_grassy(int tx, int ty)
+{
+    uint8_t t = read_map_tile(tx, ty);
+    return t != TILE_NONE && (s_tiles->types[t].flags & TILE_FLAG_GRASSY) && !tile_covered(tx, ty);
+}
+
 // ---- Action triggers (MAP12 section) ---------------------------------------
 //  Objects that run ASSET ACTIONS (actions.h) when tapped — every placed copy
 //  of a library asset that has actions ticked in the editor. MAP12 = MAP11, then:
@@ -3900,23 +3972,40 @@ static void npc_paint_rect(int x, int y, int w, int h);      // NPC SHOPPERS: dr
 static void fish_paint_rect(int x, int y, int w, int h);     // FISHING: the line and bobber, ditto
 static void ranch_paint_rect(int x, int y, int w, int h);    // ANIMALS: the farm animals, ditto
 static void machine_paint_rect(int x, int y, int w, int h);  // MACHINES: a ready machine's output icon, ditto
-static bool ranch_on_action(void);                            // ...update_player(): feed / milk / shear / pet, let one out, grass
+static void farmfx_paint_rect(int x, int y, int w, int h);   // SPRINKLERS + SCARECROWS: the crows, a held one's square, ditto
+static bool ranch_on_action(void);                           // ...update_player(): feed / milk / shear / pet, let one out, grass
 static bool ranch_tap_target(int tap_x, int tap_y, int *gx, int *gy);   // ...nav_plan(): a tap on an animal (or grass, holding a scythe...)
 static void ranch_clear(void);                                // ...the old map's animals and grass go when another map loads
+static void trough_paint_rect(int x, int y, int w, int h);    // FARM: the hay in a barn's troughs, drawn with the animals
+static void farm_map_leaving(void);                           // ...the map is about to go: what its farm buildings' animals can reach
+static void farm_map_loaded_late(void);                       // ...a map loaded and baked: the herd catches up, the animals on it get bodies
 static bool fish_on_action(void);                             // ...update_player(): cast, facing water with a rod
 static bool fish_tap_target(int tx, int ty);                  // ...nav_plan(): a tap on water with a rod in hand
+static bool fish_rig_attach(inv_slot_t *carry, item_id_t rod);   // ...the bag: bait / tackle dropped on a rod goes on the line
+static bool fish_rig_take(int k, inv_slot_t *carry);           // ...the rod's card: the line's bait (0) / tackle (1, 2) off
+static void fish_rig_reset(void);                             // ...a new game / loading one: no bait, no tackle, no xp
+static void fish_rig_write(FILE *f, char *line, size_t n);    // ...world.txt: the line and the fishing xp
+static void fish_rig_load(int k, const char *id, int n, int q); // ...a "rig" line back: bait (0) / tackle (1, 2)
+static void fish_rig_load_xp(int xp);                         // ...the "fishxp" line
+static void fish_gear_text(item_id_t item, char *out, size_t n); // ...what a rod, bait or tackle does, in words
+static item_id_t fish_rig_item(int k);                          // ...the line's bait (0) / tackle (1, 2), ITEM_NONE = none
+static int     fish_rig_count(int k);                         // ...how many baits / catches that tackle has left
 static void fish_reset(void);                                 // ...gone when another map loads
 static bool rain_now(void);                                   // WEATHER section
 static void npc_clear(void);                                  // ...gone when another map loads
 static void market_map_loaded(void);                          // MARKET: a map just loaded (bodies for its visitors)
 static void market_list_dirty(void);                          // ...a shelf's stock changed
 static bool place_on_action(void);       // ...update_player(): put down / pick up on the action press
+static bool bed_fronts_update(void);     // ...BEDS, update_player(): each bed's sheet over the player or not
+static int  bed_player_in(int *settle_x);   // ...the walk-in bed the player lies in (-1 = none), and where they settle
+static void bed_after_move(bool walking);   // ...lying down in one asks "Go to bed?"
 static void place_write_props(FILE *f, char *line, size_t n);   // ...MAP SAVES: the props' lines
 static int  place_props_count(void);
 static bool place_props_any(void);
 static bool place_restore_prop(const char *id, int tx, int ty);
 static bool place_restore_stock(const int *v, const char *id, bool photo);
 static bool place_restore_machine(const int *v, const char *id);   // ...a machine's "machine" line (MACHINES)
+static bool place_restore_gate(int tx, int ty);                    // ...a "gate ... open" line (FENCES)
 static void place_bake_unbaked(void);
 static bool map_path_for(const char *name, char *out, size_t n);   // TELEPORTERS section
 static void mapsave_mark_dirty(void);   // MAP SAVES section: the loaded map changed, write its save soon
@@ -3947,10 +4036,13 @@ static void brk_reach_box(int px, int py, direction_t facing, int *rx0, int *ry0
 // go through tp_travel(). current_map_name() follows the new map.
 static uint32_t s_load_read_ms = 0, s_load_ms = 0;   // the last load_map(): reading + setting up, and in all (dev link "state")
 
-bool load_map(const char *path)
+bool load_map(const char *map_file)
 {
+    static char season_file[MAP_PATH_MAX];
+    const char *path = season_map_path(map_file, season_file, sizeof(season_file));   // SEASONS: this season's art, if the map has it
     int64_t t_load = esp_timer_get_time();
     mapsave_flush();              // the loaded map's last changes, before it can go away (MAP SAVES)
+    farm_map_leaving();           // ...and what its farm buildings' animals can reach from their doors (FARM)
     uint16_t inst = s_load_inst_next;   // a building's inside (PLACEMENT): only for this one load
     s_load_inst_next = 0;
     FILE *f = fopen(path, "rb");
@@ -4181,6 +4273,7 @@ bool load_map(const char *path)
     night_map_loaded(path, night_px, s_load_hash);   // at night, fades in already dark (and reads the animations' first frames)
     if (s_night_shown == 0) anim_frames_reload();       // in daylight: read them here
     mapsave_show();                                     // the restored changes, in that tint
+    farm_map_loaded_late();                             // the animals that are on this map now (FARM)
 
     fade_in_from_black(s_map_pixels, pixel_count); // shows frame 1 of every animation
     anim_reset_timers();                            // animations start moving now
@@ -4887,12 +4980,10 @@ static direction_t s_player_facing = DIR_DOWN; // last direction walked (or turn
 static int  s_player_anim_frame   = 0;
 static int  s_player_anim_counter = 0;
 
-// SPRITE REGISTRY — [direction][frame] -> PLAYER_W*PLAYER_H RGB565 pixels,
-// row-major (same layout draw_image() expects), pointing straight at the
-// converted sprites in flash. Direction order must match player_dir_t
+// SPRITE REGISTRY — [direction][frame] -> CHAR_SW x CHAR_SH RGB565 pixels,
+// row-major (same layout draw_image() expects): the player's outfit,
+// composed (WARDROBE, below). Direction order must match player_dir_t
 // above: 0=down, 1=up, 2=left, 3=right. Filled by build_player_frames().
-static const uint16_t  s_player_placeholder[PLAYER_W * PLAYER_H] =           // a near-black box until art exists
-    { [0 ... PLAYER_W * PLAYER_H - 1] = 0x0841 };                            // (not 0x0000, which is transparent)
 static const uint16_t *s_player_frames[PDIR_COUNT][PLAYER_ANIM_FRAMES];       // empty-handed
 static const uint16_t *s_player_held_frames[PDIR_COUNT][PLAYER_ANIM_FRAMES];  // holding an item
 
@@ -4918,75 +5009,325 @@ static const sprite_asset_t *sprite_asset_find(const char *name)
     return NULL;
 }
 
-// ---- Characters -----------------------------------------------------------
-//  Every folder in assets/characters/ is one playable character, named
-//  after the folder, holding its 16x32 PNGs:
-//    char_<dir>_<frame>.png        e.g. char_up_1.png       (empty-handed)
-//    char_held_<dir>_<frame>.png   e.g. char_held_up_1.png  (holding an item)
-//  with <dir> = down/up/left/right and <frame> = 1..4 (1 = idle pose).
-//  Add a folder and rebuild — it shows up in the title screen's Customize,
-//  where the player picks one (kept in NVS, see character_load_choice()).
-//  A missing empty-handed frame is a black box; a missing held frame falls
-//  back to the matching empty-handed one. Pure black (0x0000) and
-//  transparent PNG pixels are both see-through.
-static int s_character = 0;   // k_character_assets index being played
+// ============================================================
+//  WARDROBE — everyone (the player and the market's visitors) is put
+//  together from layers, the way Stardew Valley draws its farmer:
+//    body   (assets/wardrobe/bodies/)  16x32 frames, 4 a direction: the
+//           body, its arms, and its arms raised (carrying something)
+//    pants  16x32, one per body frame      shirts       8x8, one a direction
+//    hair   16x32: down, right, up (+ left) accessories 16x16: down, side
+//    hats   20x20, one a direction
+//  stacked body, pants, shirt, accessory, hair, arms, hat into a
+//  WARD_CANVAS_W x WARD_CANVAS_H frame (CHAR_SW x CHAR_SH: a hat's brim
+//  sticks out of the 16x32 body box, which sits at WARD_BOX_X/Y in it). The
+//  hair, shirt, accessory and hat move with the frame's head (the body's bob).
+//  An OUTFIT is which item of each, and four colours — skin, hair (beards
+//  too), shirt (its sleeves too), pants — each any colour, or the art's own:
+//  every shade of a part is moved from the part's middle shade onto the
+//  colour in OKLab (ward_shade_565()), so the shading and outlines stay put.
+//  tools/wardrobe.py makes the tables (wardrobe_gen.h) and, with --preview,
+//  draws the same people as here from the same seeds — keep the two in step.
+// ============================================================
+#define CHAR_SW        WARD_CANVAS_W
+#define CHAR_SH        WARD_CANVAS_H
+#define CHAR_FRAME_PX  (CHAR_SW * CHAR_SH)
+_Static_assert(WARD_BOX_X * 2 == CHAR_SW - PLAYER_W && WARD_BOX_Y == CHAR_SH - PLAYER_H,
+               "the body box is centred, feet at the bottom: player_sprite_rect() puts it on the player's");
+#define WARD_PI        3.14159265f
+#define WARD_QF        ((float)WARD_Q)
+#define WARD_N(pal)    ((int)(sizeof(pal) / sizeof((pal)[0])))
 
-static int character_count(void)
+enum { WC_SKIN, WC_HAIR, WC_SHIRT, WC_PANTS, WC_COUNT };   // an outfit's colours
+
+typedef struct {
+    int16_t body, hair, shirt, pants;   // k_ward_* indexes
+    int16_t acc, hat;                   // -1: none
+    int16_t col[WC_COUNT][3];           // OKLab x WARD_Q; col[k][0] < 0: the art's own colours
+    int8_t  gender;                     // a visitor's (WARD_G_MALE / WARD_G_FEMALE, ward_random()); the player wears anything
+} outfit_t;
+
+static outfit_t  s_outfit;               // the player's (OUTFIT in NVS, see outfit_load())
+static uint16_t *s_player_px = NULL;     // PSRAM: the player's 16 walking then 16 carrying frames
+
+static uint32_t ward_rand(uint32_t *s) { *s = *s * 1664525u + 1013904223u; return *s >> 8; }
+
+static float ward_srgb(float x)   // linear -> sRGB 0..1
 {
-    int n = 0;
-    while (k_character_assets[n].name) n++;
-    return n;
+    x = x < 0 ? 0 : x > 1 ? 1 : x;
+    return x <= 0.0031308f ? 12.92f * x : 1.055f * powf(x, 1 / 2.4f) - 0.055f;
 }
 
-static const char *character_name(int ci)
+static float ward_lin(float c)    // sRGB 0..1 -> linear
 {
-    return (ci >= 0 && ci < character_count()) ? k_character_assets[ci].name : "none";
+    return c <= 0.04045f ? c / 12.92f : powf((c + 0.055f) / 1.055f, 2.4f);
 }
 
-// Character ci's frame by PNG name, if it's PLAYER_W x PLAYER_H; else a
-// top-level assets/ sprite of that name (older projects kept them there).
-static const uint16_t *character_sprite(int ci, const char *name)
+// 8-bit sRGB -> OKLab x WARD_Q (the Customize colour picker's colours).
+static void ward_rgb_lab(int r8, int g8, int b8, int16_t out[3])
 {
-    const sprite_asset_t *s = NULL;
-    if (ci >= 0 && ci < character_count())
-        for (const sprite_asset_t *c = k_character_assets[ci].frames; c->name && !s; c++)
-            if (strcmp(c->name, name) == 0) s = c;
-    if (!s) s = sprite_asset_find(name);
-    if (!s) return NULL;
-    if (s->w != PLAYER_W || s->h != PLAYER_H) {
-        ESP_LOGE(TAG, "character %s: %s is %dx%d, must be %dx%d - ignored", character_name(ci), name,
-                 (int)s->w, (int)s->h, PLAYER_W, PLAYER_H);
-        return NULL;
+    float r = ward_lin(r8 / 255.0f), g = ward_lin(g8 / 255.0f), b = ward_lin(b8 / 255.0f);
+    float l = cbrtf(0.4122214708f * r + 0.5363325363f * g + 0.0514459929f * b);
+    float m = cbrtf(0.2119034982f * r + 0.6806995451f * g + 0.1073969566f * b);
+    float s = cbrtf(0.0883024619f * r + 0.2817188376f * g + 0.6299787005f * b);
+    out[0] = (int16_t)lroundf((0.2104542553f * l + 0.7936177850f * m - 0.0040720468f * s) * WARD_QF);
+    out[1] = (int16_t)lroundf((1.9779984951f * l - 2.4285922050f * m + 0.4505937099f * s) * WARD_QF);
+    out[2] = (int16_t)lroundf((0.0259040371f * l + 0.7827717662f * m - 0.8086757660f * s) * WARD_QF);
+}
+
+// OKLab -> RGB565; a colour outside sRGB loses chroma (not lightness) till it fits.
+static uint16_t ward_oklab_565(float L, float a, float b)
+{
+    float r = 0, g = 0, bl = 0, k = 1;
+    bool fit = false;
+    L = L < 0 ? 0 : L > 1 ? 1 : L;
+    for (int i = 0; i < 13 && !fit; i++, k *= 0.82f) {
+        if (i == 12) k = 0;   // never fitted: grey
+        float l = L + 0.3963377774f * a * k + 0.2158037573f * b * k;
+        float m = L - 0.1055613458f * a * k - 0.0638541728f * b * k;
+        float s = L - 0.0894841775f * a * k - 1.2914855480f * b * k;
+        l = l * l * l, m = m * m * m, s = s * s * s;
+        r  =  4.0767416621f * l - 3.3077115913f * m + 0.2309699292f * s;
+        g  = -1.2684380046f * l + 2.6097574011f * m - 0.3413193965f * s;
+        bl = -0.0041960863f * l - 0.7034186147f * m + 1.7076147010f * s;
+        fit = k == 0 || (fminf(r, fminf(g, bl)) >= -0.0005f && fmaxf(r, fmaxf(g, bl)) <= 1.0005f);
     }
-    return s->pixels;
+    int R = (int)lroundf(ward_srgb(r) * 255), G = (int)lroundf(ward_srgb(g) * 255), B = (int)lroundf(ward_srgb(bl) * 255);
+    uint16_t px = COLOR_RGB565(R, G, B);
+    return px ? px : 0x0841;   // (0x0000 is see-through)
 }
 
-// One walking (held = false) or holding frame of character ci, never NULL.
-static const uint16_t *character_frame(int ci, bool held, player_dir_t d, int f)
+// Shade sh of a part (its middle shade ref) in colour t: the middle becomes
+// t; darker shades keep their darkness as a ratio of it (so outlines stay
+// dark), lighter ones their step up (squeezed under white); chroma keeps its
+// ratio to the middle's; shadows lean red-purple (warm colours) or blue,
+// highlights yellow, as pixel art does.
+static uint16_t ward_shade_565(const ward_shade_t *sh, const ward_ref_t *ref, const int16_t t[3])
 {
-    static const char *const dir_names[PDIR_COUNT] = { "down", "up", "left", "right" };
-    char name[32];
-    const uint16_t *px = NULL;
-    if (held) {
-        snprintf(name, sizeof(name), "char_held_%s_%d", dir_names[d], f + 1);
-        px = character_sprite(ci, name);
+    float L  = sh->L / WARD_QF,  a  = sh->a / WARD_QF,  b  = sh->b / WARD_QF;
+    float Lr = ref->L / WARD_QF, ar = ref->a / WARD_QF, br = ref->b / WARD_QF, hi = ref->hi / WARD_QF;
+    float Lt = t[0] / WARD_QF,   at = t[1] / WARD_QF,   bt = t[2] / WARD_QF, L2, w, anchor;
+    Lt = fminf(fmaxf(Lt, 0.08f), 0.96f);
+    if (L <= Lr) L2 = Lt * L / fmaxf(Lr, 0.02f);
+    else         L2 = fminf(0.98f, Lt + (L - Lr) * fmaxf(fminf(1, (0.97f - Lt) / fmaxf(hi - Lr, 0.02f)), 0.3f));
+    float f  = fminf(1.6f, fmaxf(0.25f, (hypotf(a, b) + 0.02f) / (hypotf(ar, br) + 0.02f)));
+    float C2 = hypotf(at, bt) * f, ht = atan2f(bt, at);
+    if (L2 < Lt) {
+        float hd = fmodf(ht * (180 / WARD_PI) + 360, 360);
+        w = (Lt - L2) / fmaxf(Lt, 0.05f);
+        anchor = (hd <= 110 || hd >= 330 ? 350 : 265) * (WARD_PI / 180);
+    } else {
+        w = (L2 - Lt) / fmaxf(1 - Lt, 0.05f);
+        anchor = 100 * (WARD_PI / 180);
     }
-    if (!px) {
-        snprintf(name, sizeof(name), "char_%s_%d", dir_names[d], f + 1);
-        px = character_sprite(ci, name);
-    }
-    return px ? px : s_player_placeholder;
+    float d = fmodf(anchor - ht, 2 * WARD_PI), lim = 20 * (WARD_PI / 180);   // the short way round
+    if (d > WARD_PI)  d -= 2 * WARD_PI;
+    if (d < -WARD_PI) d += 2 * WARD_PI;
+    d = d < -lim ? -lim : d > lim ? lim : d;
+    float h2 = ht + d * fminf(1, w);
+    return ward_oklab_565(L2, C2 * cosf(h2), C2 * sinf(h2));
 }
 
-// Hooks the player's animation up to character s_character's frames.
-static void build_player_frames(void)
+// A colour from a palette (weighted), a little different each time: OKLab x WARD_Q.
+static void ward_pick(uint32_t *s, const ward_swatch_t *pal, int n, int16_t out[3])
 {
-    for (int d = 0; d < PDIR_COUNT; d++) {
-        for (int f = 0; f < PLAYER_ANIM_FRAMES; f++) {
-            s_player_frames[d][f]      = character_frame(s_character, false, (player_dir_t)d, f);
-            s_player_held_frames[d][f] = character_frame(s_character, true, (player_dir_t)d, f);
+    uint32_t tot = 0, r;
+    for (int i = 0; i < n; i++) tot += pal[i].w;
+    r = ward_rand(s) % tot;
+    int i = 0;
+    while (i < n - 1 && r >= pal[i].w) r -= pal[i++].w;
+    int   dl = (int)(ward_rand(s) % 61) - 30, dc = 90 + (int)(ward_rand(s) % 21);   // lightness +-0.03, chroma 90..110%,
+    float dh = ((int)(ward_rand(s) % 13) - 6) * (WARD_PI / 180), ca = cosf(dh), sa = sinf(dh);   // hue +-6 degrees
+    out[0] = (int16_t)(pal[i].L + dl * WARD_Q / 1000);
+    out[1] = (int16_t)((pal[i].a * ca - pal[i].b * sa) * dc / 100);
+    out[2] = (int16_t)((pal[i].a * sa + pal[i].b * ca) * dc / 100);
+}
+
+static float ward_dist(const int16_t *c1, const int16_t *c2)
+{
+    float dL = c1[0] - c2[0], da = c1[1] - c2[1], db = c1[2] - c2[2];
+    return sqrtf(dL * dL + da * da + db * db) / WARD_QF;
+}
+
+// ward_pick(), again (6 more tries at most) while it's within d of colour away (NULL: anything goes).
+static void ward_pick_away(uint32_t *s, const ward_swatch_t *pal, int n, int16_t out[3], const int16_t *away, float d)
+{
+    ward_pick(s, pal, n, out);
+    for (int i = 0; i < 6 && away && ward_dist(out, away) < d; i++) ward_pick(s, pal, n, out);
+}
+
+// Item r of a table's items for gender g: one of g's or a neutral one (any,
+// if none is); -1 = the table's empty. (item() in random_outfit().)
+static int16_t ward_item_for(uint32_t r, const ward_item_t *t, int n, int g)
+{
+    int ok = 0;
+    for (int i = 0; i < n; i++) ok += t[i].gender == g || t[i].gender == WARD_G_NEUTRAL;
+    if (!ok) return n ? (int16_t)(r % (uint32_t)n) : -1;
+    int k = (int)(r % (uint32_t)ok);
+    for (int i = 0; i < n; i++)
+        if ((t[i].gender == g || t[i].gender == WARD_G_NEUTRAL) && k-- == 0) return (int16_t)i;
+    return -1;
+}
+
+// A visitor's outfit from their seed (random_outfit() in tools/wardrobe.py):
+// male or female first, then what someone of that gender wears.
+static void ward_random(uint32_t seed, outfit_t *o)
+{
+    uint32_t s = seed;   // stirred first: seeds close together look nothing alike
+    s ^= s >> 16; s *= 0x7FEB352Du; s ^= s >> 15; s *= 0x846CA68Bu; s ^= s >> 16;
+    int g = ward_rand(&s) % 2 == 0 ? WARD_G_MALE : WARD_G_FEMALE;
+    o->gender = (int8_t)g;
+#define WARD_ITEM(tbl, cnt) ward_item_for(ward_rand(&s), tbl, cnt, g)
+    o->body  = WARD_ITEM(k_ward_bodies, WARD_N_BODIES);
+    o->hair  = WARD_ITEM(k_ward_hair, WARD_N_HAIR);
+    o->shirt = WARD_ITEM(k_ward_shirts, WARD_N_SHIRTS);
+    o->pants = WARD_ITEM(k_ward_pants, WARD_N_PANTS);
+#undef WARD_ITEM
+    if (o->body < 0)  o->body = 0;
+    if (o->hair < 0)  o->hair = 0;
+    if (o->shirt < 0) o->shirt = 0;
+    if (o->pants < 0) o->pants = 0;
+    uint32_t pick = ward_rand(&s), chance = ward_rand(&s);   // (always both: the same numbers follow, worn or not)
+    o->acc   = chance % 1000 < WARD_ACC_PER_MILLE ? ward_item_for(pick, k_ward_accessories, WARD_N_ACCESSORIES, g) : -1;
+    pick     = ward_rand(&s);
+    chance   = ward_rand(&s);
+    o->hat   = chance % 1000 < WARD_HAT_PER_MILLE ? ward_item_for(pick, k_ward_hats, WARD_N_HATS, g) : -1;
+    ward_pick_away(&s, k_ward_pal_skin,    WARD_N(k_ward_pal_skin),    o->col[WC_SKIN],  NULL, 0);
+    ward_pick_away(&s, k_ward_pal_hair,    WARD_N(k_ward_pal_hair),    o->col[WC_HAIR],  NULL, 0);
+    ward_pick_away(&s, k_ward_pal_tops,    WARD_N(k_ward_pal_tops),    o->col[WC_SHIRT], o->col[WC_HAIR], 0.08f);
+    ward_pick_away(&s, k_ward_pal_bottoms, WARD_N(k_ward_pal_bottoms), o->col[WC_PANTS], o->col[WC_SHIRT], 0.12f);
+    if (WARD_N_SHIRTS && !k_ward_shirts[o->shirt].grey) o->col[WC_SHIRT][0] = -1;   // a coloured shirt: worn as drawn
+}
+
+// An item's shades in an outfit's colours: lut[shade + 1] (lut[0] = see-through).
+// tint / skin / sleeve: the colour of those parts (NULL or [0] < 0: as drawn).
+static void ward_lut(const ward_item_t *it, const int16_t *tint, const int16_t *skin, const int16_t *sleeve, uint16_t lut[256])
+{
+    lut[0] = FB_TRANSPARENT_COLOR;
+    for (int i = 0; i < it->nshades; i++) {
+        const ward_shade_t *sh = &it->shades[i];
+        const int16_t *t = sh->part == WARD_P_TINT ? tint : sh->part == WARD_P_SKIN ? skin : sh->part == WARD_P_SLEEVE ? sleeve : NULL;
+        lut[i + 1] = t && t[0] >= 0 ? ward_shade_565(sh, &it->refs[sh->part], t) : sh->rgb;
+    }
+}
+
+// Cell (cx, cy) of an item onto a canvas at (x0, y0), flipped left-right if mirror.
+static void ward_blit(uint16_t *cv, const ward_item_t *it, const uint16_t *lut, int cx, int cy, int x0, int y0, bool mirror)
+{
+    if (!it || !it->map || (cy + 1) * it->ch > it->h) return;
+    for (int y = 0; y < it->ch; y++) {
+        int Y = y0 + y;
+        if (Y < 0 || Y >= CHAR_SH) continue;
+        const uint8_t *row = it->map + (size_t)(cy * it->ch + y) * it->w + cx * it->cw;
+        for (int x = 0; x < it->cw; x++) {
+            int X = x0 + x;
+            uint8_t v = row[mirror ? it->cw - 1 - x : x];
+            if (v && X >= 0 && X < CHAR_SW) cv[Y * CHAR_SW + X] = lut[v];
         }
     }
+}
+
+static int ward_cells(const ward_item_t *it) { return it && it->ch ? it->h / it->ch : 0; }
+
+// An outfit, ready to draw: its items and their look-up tables (ward_prepare(); game task only).
+static struct {
+    const ward_item_t *body, *pants, *shirt, *acc, *hair, *hat;
+    int                fit;        // the pants' rows: 0, or 4 (their second fit, for this body)
+    uint16_t           lut[6][256];   // body, pants, shirt, accessory, hair, hat
+} s_ward;
+
+static void ward_prepare(const outfit_t *o)
+{
+    s_ward.body  = WARD_N_BODIES ? &k_ward_bodies[o->body % WARD_N_BODIES] : NULL;
+    s_ward.pants = WARD_N_PANTS ? &k_ward_pants[o->pants % WARD_N_PANTS] : NULL;
+    s_ward.shirt = WARD_N_SHIRTS ? &k_ward_shirts[o->shirt % WARD_N_SHIRTS] : NULL;
+    s_ward.hair  = WARD_N_HAIR ? &k_ward_hair[o->hair % WARD_N_HAIR] : NULL;
+    s_ward.acc   = o->acc >= 0 && o->acc < WARD_N_ACCESSORIES ? &k_ward_accessories[o->acc] : NULL;
+    s_ward.hat   = o->hat >= 0 && o->hat < WARD_N_HATS ? &k_ward_hats[o->hat] : NULL;
+    const ward_item_t *shirt = s_ward.shirt;
+    int16_t sleeve[3];   // the sleeves: the shirt's colour, or its own middle shade
+    if (o->col[WC_SHIRT][0] >= 0 || !shirt) memcpy(sleeve, o->col[WC_SHIRT], sizeof(sleeve));
+    else { sleeve[0] = shirt->refs[WARD_P_TINT].L; sleeve[1] = shirt->refs[WARD_P_TINT].a; sleeve[2] = shirt->refs[WARD_P_TINT].b; }
+    if (s_ward.body)  ward_lut(s_ward.body,  NULL, o->col[WC_SKIN], sleeve, s_ward.lut[0]);
+    if (s_ward.pants) ward_lut(s_ward.pants, o->col[WC_PANTS], NULL, NULL, s_ward.lut[1]);
+    if (shirt)        ward_lut(shirt,        o->col[WC_SHIRT], NULL, NULL, s_ward.lut[2]);
+    if (s_ward.acc)   ward_lut(s_ward.acc,   o->col[WC_HAIR],  NULL, NULL, s_ward.lut[3]);
+    if (s_ward.hair)  ward_lut(s_ward.hair,  o->col[WC_HAIR],  NULL, NULL, s_ward.lut[4]);
+    if (s_ward.hat)   ward_lut(s_ward.hat,   NULL, NULL, NULL, s_ward.lut[5]);
+    s_ward.fit = s_ward.body && s_ward.body->fit2 && s_ward.pants && ward_cells(s_ward.pants) == 8 ? 4 : 0;
+}
+
+// One frame of the prepared outfit (direction d, walking frame f, carrying or not) into cv (CHAR_FRAME_PX).
+static void ward_frame(int d, int f, bool held, uint16_t *cv)
+{
+    static const uint8_t k_row[PDIR_COUNT] = { 0, 3, 2, 1 };   // down, up, left, right -> the strips' rows (down, right, left, up)
+    const ward_item_t *body = s_ward.body, *acc = s_ward.acc, *hair = s_ward.hair;
+    int r = k_row[d], bx = WARD_BOX_X, by = WARD_BOX_Y, dy = body && body->bob ? body->bob[r * 4 + f] : 0;
+    memset(cv, 0, CHAR_FRAME_PX * sizeof(uint16_t));
+    if (!body) {   // no bodies at all: a box where the person would be
+        for (int y = 0; y < PLAYER_H; y++) for (int x = 0; x < PLAYER_W; x++) cv[(by + y) * CHAR_SW + bx + x] = 0x0841;
+        return;
+    }
+    ward_blit(cv, body, s_ward.lut[0], f, r, bx, by, false);
+    ward_blit(cv, s_ward.pants, s_ward.lut[1], f, s_ward.fit + r, bx, by, false);
+    ward_blit(cv, s_ward.shirt, s_ward.lut[2], 0, r, bx + WARD_SHIRT_X, by + WARD_SHIRT_Y + dy, false);
+    if (acc && d != PDIR_UP && (d == PDIR_DOWN || ward_cells(acc) > 1))
+        ward_blit(cv, acc, s_ward.lut[3], 0, d == PDIR_DOWN ? 0 : 1, bx, by + WARD_ACC_Y + dy, d == PDIR_LEFT);
+    if (hair) {
+        bool own_left = d == PDIR_LEFT && ward_cells(hair) > 3;
+        int  cell     = own_left ? 3 : d == PDIR_DOWN ? 0 : d == PDIR_UP ? 2 : 1;
+        ward_blit(cv, hair, s_ward.lut[4], 0, cell, bx, by + dy, d == PDIR_LEFT && !own_left);
+    }
+    ward_blit(cv, body, s_ward.lut[0], f, (held ? 8 : 4) + r, bx, by, false);   // the arms, over the shirt
+    ward_blit(cv, s_ward.hat, s_ward.lut[5], 0, r, bx + WARD_HAT_X, by + WARD_HAT_Y + dy, false);
+}
+
+// An outfit's 16 frames [dir * 4 + frame] (player_dir_t order) into walk,
+// and the same carrying something (arms up) into held (NULL: not wanted),
+// CHAR_FRAME_PX each (compose() in tools/wardrobe.py).
+static void ward_compose(const outfit_t *o, uint16_t *walk, uint16_t *held)
+{
+    ward_prepare(o);
+    for (int k = 0; k < 2; k++) {
+        uint16_t *out = k ? held : walk;
+        if (!out) continue;
+        for (int d = 0; d < PDIR_COUNT; d++)
+            for (int f = 0; f < PLAYER_ANIM_FRAMES; f++)
+                ward_frame(d, f, k, out + (size_t)(d * PLAYER_ANIM_FRAMES + f) * CHAR_FRAME_PX);
+    }
+}
+
+// An item by file name in a table (-1: none of that name).
+static int ward_find(const ward_item_t *t, int n, const char *name)
+{
+    for (int i = 0; i < n; i++) if (strcmp(t[i].name, name) == 0) return i;
+    return -1;
+}
+
+// The player's outfit until one's picked in Customize.
+static void outfit_default(outfit_t *o)
+{
+    memset(o, 0, sizeof(*o));
+    int b = ward_find(k_ward_bodies, WARD_N_BODIES, "male");
+    o->body = (int16_t)(b < 0 ? 0 : b);
+    o->acc  = o->hat = -1;
+    o->col[WC_SKIN][0] = -1;                       // the body's own
+    ward_rgb_lab(106, 66, 40, o->col[WC_HAIR]);    // brown
+    o->col[WC_SHIRT][0] = -1;                      // the shirt as drawn
+    ward_rgb_lab(62, 92, 150, o->col[WC_PANTS]);   // denim
+}
+
+// Points the player's animation at their outfit, (re)composed.
+static void build_player_frames(void)
+{
+    static const uint16_t k_none[CHAR_FRAME_PX] = { [0 ... CHAR_FRAME_PX - 1] = 0x0841 };   // no PSRAM: a box
+    if (!s_player_px) s_player_px = heap_caps_malloc((size_t)2 * PDIR_COUNT * PLAYER_ANIM_FRAMES * CHAR_FRAME_PX * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
+    if (s_player_px) ward_compose(&s_outfit, s_player_px, s_player_px + (size_t)PDIR_COUNT * PLAYER_ANIM_FRAMES * CHAR_FRAME_PX);
+    for (int d = 0; d < PDIR_COUNT; d++)
+        for (int f = 0; f < PLAYER_ANIM_FRAMES; f++) {
+            size_t at = (size_t)(d * PLAYER_ANIM_FRAMES + f) * CHAR_FRAME_PX;
+            s_player_frames[d][f]      = s_player_px ? s_player_px + at : k_none;
+            s_player_held_frames[d][f] = s_player_px ? s_player_px + (size_t)PDIR_COUNT * PLAYER_ANIM_FRAMES * CHAR_FRAME_PX + at : k_none;
+        }
 }
 
 // ============================================================
@@ -5115,7 +5456,7 @@ static uint16_t rgb565_clamp(int r, int g, int b)
 // (1 = normal) multiplies the item's "mut" — fishing's bonuses. Each one is
 // tried rarest first, at its base odds x mult^(1 + 0.06 a step rarer), so a
 // big multiplier helps the rare ones most.
-static uint8_t mut_roll(uint8_t item, float boost)
+static uint8_t mut_roll(item_id_t item, float boost)
 {
     if (item == ITEM_NONE || !item_get(item)) return MUT_NONE;
     float m = (float)item_attr(item, ITEM_ATTR_MUT, 100) / 100.0f * boost;
@@ -5209,7 +5550,7 @@ static const struct { const char *name; uint16_t col; } k_fish_tier[FISH_TIER_CO
     { "Legendary", COLOR_RGB565(255, 196,  40) },
     { "Mythic",    COLOR_RGB565(255,  70,  90) },
 };
-static int fish_tier_of(uint8_t item)
+static int fish_tier_of(item_id_t item)
 {
     int t = (int)item_attr(item, ITEM_ATTR_FISH_TIER, 1) - 1;
     return t < 0 ? 0 : t >= FISH_TIER_COUNT ? FISH_TIER_COUNT - 1 : t;
@@ -5273,8 +5614,8 @@ static const char *quality_label(uint8_t quality, char *buf, size_t n)
 typedef struct {
     int             x, y;         // player top-left (the normal PLAYER_W x PLAYER_H box)
     const uint16_t *sprite;
-    int             sw, sh;       // sprite size: PLAYER_W x PLAYER_H, or an override animation's frame size
-    uint8_t         item;         // ITEM_NONE = empty-handed (or hidden by an override animation)
+    int             sw, sh;       // sprite size: CHAR_SW x CHAR_SH (WARDROBE), or an override animation's frame size
+    item_id_t         item;         // ITEM_NONE = empty-handed (or hidden by an override animation)
     uint16_t        item_frame;   // frame of the item's passive (held) animation
     uint8_t         item_q;       // the held stack's quality byte — its mutation (MUTATIONS) recolours it
     uint8_t         mfx;          // the mutation's animation frame (mut_frame())
@@ -5285,7 +5626,7 @@ typedef struct {
 } player_look_t;
 
 // Where a look's sprite goes: centred on the player, bottom on the feet
-// line — the same spot as the normal sprite when it's PLAYER_W x PLAYER_H.
+// line (a CHAR_SW x CHAR_SH outfit frame: its body box on the player's).
 // Squashed (a Heavy item), it's that much shorter and wider.
 static rect_t player_sprite_rect(const player_look_t *l)
 {
@@ -5293,7 +5634,7 @@ static rect_t player_sprite_rect(const player_look_t *l)
     return (rect_t){ l->x + (PLAYER_W - w) / 2, l->y + PLAYER_H - h, w, h };
 }
 
-static uint8_t  s_held_anim_item  = ITEM_NONE;   // the held animation restarts whenever this changes...
+static item_id_t  s_held_anim_item  = ITEM_NONE;   // the held animation restarts whenever this changes...
 static uint8_t  s_held_anim_q     = 0;           // ...or this (another stack of it, mutated differently)
 static uint32_t s_held_anim_start = 0;
 
@@ -5301,7 +5642,7 @@ static uint32_t s_held_anim_start = 0;
 // art (frame 0's non-transparent pixels — art often has empty margins) scaled
 // to fill HELD_GIANT_MAX. That part, or w == 0 if the item isn't giant.
 // Worked out once per item art (the last one asked about is kept).
-static rect_t held_giant_box(uint8_t item)
+static rect_t held_giant_box(item_id_t item)
 {
     static const uint16_t *s_px = NULL;
     static rect_t          s_box;
@@ -5322,7 +5663,7 @@ static rect_t held_giant_box(uint8_t item)
     return s_box;
 }
 
-static void held_item_size(uint8_t item, int *w, int *h)
+static void held_item_size(item_id_t item, int *w, int *h)
 {
     const item_asset_t *a = item_get(item);
     if (!a || a->passive.frame_count == 0) { *w = 16; *h = 16; return; }   // gray placeholder, as in draw_item_icon()
@@ -5368,8 +5709,8 @@ static player_look_t player_look_now(void)
     }
 
     l.item = inv_held_item();
-    l.sw   = PLAYER_W;
-    l.sh   = PLAYER_H;
+    l.sw   = CHAR_SW;
+    l.sh   = CHAR_SH;
     player_dir_t row = player_dir_from_facing(s_player_facing);
     l.sprite = (l.item != ITEM_NONE ? s_player_held_frames : s_player_frames)[row][s_player_anim_frame];
     if (l.item != ITEM_NONE) {
@@ -5668,6 +6009,14 @@ void update_player(void)
         }
         dir1 = nav_delta_to_dir(dx, dy);
     }
+    // Just got into a bed (BEDS): slide over to its middle.
+    bool settling = false;
+    if (!nav_on && bed_player_in(&nav_wx) >= 0 && nav_wx != s_player_x) {
+        settling = true;
+        nav_wy   = s_player_y;
+        dx       = (nav_wx > s_player_x) - (nav_wx < s_player_x);
+        dir1     = nav_delta_to_dir(dx, 0);
+    }
 
     if (dir1 != DIR_CENTER) {
         s_player_facing = dir1;
@@ -5701,7 +6050,7 @@ void update_player(void)
         if (new_y < PLAYER_MIN_Y) new_y = PLAYER_MIN_Y;
         if (new_x > LCD_H_RES - PLAYER_W) new_x = LCD_H_RES - PLAYER_W;
         if (new_y > LCD_V_RES - PLAYER_H) new_y = LCD_V_RES - PLAYER_H;
-        if (nav_on) {   // stop exactly on the waypoint instead of stepping past it
+        if (nav_on || settling) {   // stop exactly on the waypoint instead of stepping past it
             if ((dx > 0 && new_x > nav_wx) || (dx < 0 && new_x < nav_wx)) new_x = nav_wx;
             if ((dy > 0 && new_y > nav_wy) || (dy < 0 && new_y < nav_wy)) new_y = nav_wy;
         }
@@ -5736,8 +6085,11 @@ void update_player(void)
     // Only touch the framebuffer when the look actually changed (moved,
     // turned, walk frame, held item or its animation frame) — this is what
     // stops the constant-redraw flicker.
+    // A bed's sheet goes in front of the player or behind them by where their feet are now (BEDS).
+    bool bed_changed = bed_fronts_update();
+
     player_look_t look = player_look_now();
-    if (moved || (s_player_bg_valid && !player_look_equal(&look, &s_player_drawn))) {
+    if (moved || (s_player_bg_valid && (bed_changed || !player_look_equal(&look, &s_player_drawn)))) {
         player_redraw(&look);
     }
 
@@ -5787,6 +6139,7 @@ void update_player(void)
             farm_on_action();  // plant the held seeds / harvest the crop on the faced tile
         }
     }
+    bed_after_move(nav_on || settling);   // lying still in a bed: "Go to bed?" (BEDS)
 }
 
 // ============================================================
@@ -5907,8 +6260,10 @@ static void anim_paint_instance(const anim_instance_t *a)
     //     same order map_repaint_rect() draws them (otherwise each new frame
     //     wipes them until they next move — the bobber on animated water blinked).
     nav_trail_paint_rect(a->x, a->y, a->w, a->h);
+    trough_paint_rect(a->x, a->y, a->w, a->h);
     ranch_paint_rect(a->x, a->y, a->w, a->h);
     machine_paint_rect(a->x, a->y, a->w, a->h);
+    farmfx_paint_rect(a->x, a->y, a->w, a->h);
     npc_paint_rect(a->x, a->y, a->w, a->h);
     fish_paint_rect(a->x, a->y, a->w, a->h);
 
@@ -6151,7 +6506,7 @@ static void draw_item_art_fit(int cx, int cy, const item_asset_t *a, uint8_t q)
 // Item icon CENTRED on (cx,cy): frame 0 of the item's own passive (held)
 // sprite, colorkeyed so it sits cleanly on the slot, or a gray placeholder
 // square for an item authored without one yet.
-static void draw_item_icon(int cx, int cy, uint8_t item)
+static void draw_item_icon(int cx, int cy, item_id_t item)
 {
     if (item == ITEM_NONE) return;
     const item_asset_t *a = item_get(item);
@@ -6201,7 +6556,7 @@ static void draw_quality_star(int x, int y, uint8_t quality)
 
 // An item's art centred on (cx,cy), as this stack shows it — a mutated one
 // recoloured (MUTATIONS), still.
-static void draw_item_icon_q(int cx, int cy, uint8_t item, uint8_t quality)
+static void draw_item_icon_q(int cx, int cy, item_id_t item, uint8_t quality)
 {
     uint8_t mut = QUALITY_MUT(quality);
     const item_asset_t *a = item_get(item);
@@ -6249,6 +6604,8 @@ static void inv_draw_slot_well(int x, int y, int size)
 
 // What's in the slot. An icon bigger than the slot spills over its edges, so
 // a row of slots draws every well first and then every slot's contents.
+static int can_max(item_id_t item);     // FARMING: a watering can's size (0 = never runs dry)...
+static int can_level(item_id_t item);   // ...and the water in it
 static void inv_draw_slot_contents(int x, int y, int size, const inv_slot_t *s)
 {
     if (s->count > 0) {
@@ -6257,6 +6614,12 @@ static void inv_draw_slot_contents(int x, int y, int size, const inv_slot_t *s)
         draw_quality_star(x + 3, y + size - 10, s->quality);
         draw_mutation_badge(x + size - 9, y + 3, s->quality);   // MUTATIONS
         draw_wet_badge(x + 3, y + 3, s->quality);               // WET ITEMS
+        int m = can_max(s->item);                                // a watering can: how full (FARMING)
+        if (m) {
+            int bw = size - 8, fill = bw * can_level(s->item) / m;
+            fill_rect(x + 4, y + size - 5, bw, 3, COLOR_RGB565(30, 30, 40));
+            if (fill) fill_rect(x + 4, y + size - 5, fill, 3, COLOR_RGB565(70, 150, 255));
+        }
     }
 }
 
@@ -6283,8 +6646,10 @@ static void map_repaint_rect_ex(int x, int y, int w, int h, void (*overlay)(void
     restore_map_rect(x, y, w, h);
     if (anim_restamp_current(x, y, w, h)) redraw_foreground_over_rect(x, y, w, h);
     nav_trail_paint_rect(x, y, w, h);   // a drawn path's dots, under the shoppers
+    trough_paint_rect(x, y, w, h);      // hay in a barn's troughs (FARM)
     ranch_paint_rect(x, y, w, h);       // the farm animals (ANIMALS)
     machine_paint_rect(x, y, w, h);     // a ready machine's icon (MACHINES)
+    farmfx_paint_rect(x, y, w, h);      // crows, a held sprinkler's square (SPRINKLERS + SCARECROWS)
     npc_paint_rect(x, y, w, h);
     fish_paint_rect(x, y, w, h);   // a fishing line out (FISHING)
     if (overlay) overlay();
@@ -7117,7 +7482,7 @@ static void brk_on_action(void)
         const brk_level_t *L = &b->levels[b->level];
 
         // 1) right item in the player's hands? (any item can be the "tool")
-        uint8_t held = inv_held_item();
+        item_id_t held = inv_held_item();
         if (L->need_missing) {
             ESP_LOGI(TAG, "brk: this needs an item that isn't in this build — can't be hit");
             return;
@@ -7219,7 +7584,7 @@ static void update_breakables(void)
 #define GROUND_PICKUP_COOLDOWN_MS 3000   // after a drop, nothing is picked up for this long (counted from the game screen coming back)
 
 typedef struct {
-    uint8_t item, count;    // count == 0: free slot
+    item_id_t item; uint8_t count;    // count == 0: free slot
     uint8_t quality;        // item_quality_t: the stack keeps it on the ground
     int8_t  tx, ty;         // tile it lies on
     bool    baked;          // in s_map_pixels and on screen; false = waits for the game screen (dropped from the inventory)
@@ -7234,7 +7599,7 @@ static uint16_t     *s_ground_under = NULL;   // PSRAM, GROUND_MAX * GROUND_TILE
 // The item as it lies on the ground: frame 0 of its held art, fitted into
 // one tile (centred; bigger art scaled down, nearest pixel, keeping its shape),
 // recoloured if it's mutated (MUTATIONS; still — it's baked into the map).
-static void ground_sprite(uint8_t item, uint8_t quality, uint16_t out[GROUND_TILE_PX])
+static void ground_sprite(item_id_t item, uint8_t quality, uint16_t out[GROUND_TILE_PX])
 {
     memset(out, 0, GROUND_TILE_PX * sizeof(uint16_t));
     const item_asset_t *a = item_get(item);
@@ -7348,7 +7713,7 @@ static bool ground_tile_ok(int tx, int ty)
 
 // Tile (tx,ty) can take `count` of `item`: a free spot, or the same item
 // (and quality) already lying there with room for them.
-static bool ground_tile_takes(int tx, int ty, uint8_t item, uint8_t quality, int count)
+static bool ground_tile_takes(int tx, int ty, item_id_t item, uint8_t quality, int count)
 {
     int i = ground_at(tx, ty);
     if (i >= 0) return s_ground[i].item == item && s_ground[i].quality == quality && s_ground[i].count + count <= 255;
@@ -7369,9 +7734,9 @@ static bool ground_under_ok(void)
     return true;
 }
 
-static bool ground_drop_near(uint8_t item, uint8_t quality, int count, int ptx, int pty, int fdx, int fdy, bool here_first, bool cooldown);
+static bool ground_drop_near(item_id_t item, uint8_t quality, int count, int ptx, int pty, int fdx, int fdy, bool here_first, bool cooldown);
 
-static bool ground_drop(uint8_t item, uint8_t quality, int count)
+static bool ground_drop(item_id_t item, uint8_t quality, int count)
 {
     int fdx, fdy;
     direction_to_delta(s_player_facing, &fdx, &fdy);
@@ -7383,7 +7748,7 @@ static bool ground_drop(uint8_t item, uint8_t quality, int count)
 // are 0), or (ptx,pty) itself first when here_first (an animal laying where
 // it stands — ANIMALS). cooldown: the player just dropped it — nothing's
 // picked up for a moment (GROUND_PICKUP_COOLDOWN_MS).
-static bool ground_drop_near(uint8_t item, uint8_t quality, int count, int ptx, int pty, int fdx, int fdy, bool here_first, bool cooldown)
+static bool ground_drop_near(item_id_t item, uint8_t quality, int count, int ptx, int pty, int fdx, int fdy, bool here_first, bool cooldown)
 {
     if (!s_map_loaded || item == ITEM_NONE || count <= 0 || count > 255) return false;
     if (!ground_under_ok()) return false;
@@ -7518,6 +7883,11 @@ static void ground_tick(void)
 //  first one with the farmland as it was, the rest dry — except a day it
 //  rained on that map, which the weather can tell for any day (rain_fell()).
 //  So crops on maps the player isn't on keep growing, and nothing runs for them.
+//  Each day's MORNING (6:00) is played once per map too: sprinklers water
+//  their squares and crows eat crops no scarecrow guards (SPRINKLERS +
+//  SCARECROWS — farm_morning(); a missed one is played by farm_catch_up()).
+//  A crop picked less than SOIL_WET_MIN game minutes after its farmland was
+//  watered (the can, a sprinkler from 6:00, rain) comes out Wet (s_soil_wet_at).
 //
 //  Memory: the plot table is FARM_MAX small entries; what the crops cover is
 //  one PSRAM block, taken the first time something is planted. The crop art
@@ -7535,6 +7905,10 @@ static void ground_tick(void)
 #define FARM_PX      (CROP_W * CROP_H)
 #define FARM_MASK    (FARM_PX / 8)
 #define FARM_DAY_MIN (24 * 60)       // game minutes in a day (MIN_PER_DAY, CLOCK section)
+#define FARM_MORNING_MIN (6 * 60)    // the morning: sprinklers water, crows come (SPRINKLERS + SCARECROWS)
+#define SPRINKLE_END_MIN (7 * 60)    // ...the sprinklers spray until then
+#define CROW_PCT         4           // % odds each crop no scarecrow guards is eaten, every morning
+#define SOIL_WET_MIN     60          // a crop picked this soon (game minutes) after its farmland was watered comes out Wet
 _Static_assert(CROP_W == TILE_SIZE && CROP_H == 2 * TILE_SIZE, "a crop is one tile wide and two tall");
 
 typedef struct {
@@ -7557,10 +7931,36 @@ static uint8_t       s_farm_order[FARM_MAX];  // plots baked right now, in the o
 static int           s_farm_baked   = 0;
 static int           s_farm_seen_min = -1;    // the game minute farm_tick() last looked at
 static int32_t       s_farm_day      = 0;     // the game day the loaded map's crops and farmland are up to
+static int32_t       s_morning_day   = -1;    // the last game day whose morning (6:00) was played on the loaded map
+EXT_RAM_BSS_ATTR static int32_t s_soil_wet_at[TILE_ROWS][TILE_COLS];   // game minute (farm_now_min()) each tile was last watered
+EXT_RAM_BSS_ATTR static uint8_t s_sprinkled[TILE_ROWS][TILE_COLS];     // a sprinkler waters this tile (farm_guards_update())
+EXT_RAM_BSS_ATTR static uint8_t s_scared[TILE_ROWS][TILE_COLS];        // a scarecrow guards this tile (...)
 
 static uint32_t clock_day(void);              // CLOCK section
 int             clock_minute_of_day(void);
 static bool     rain_fell(int32_t day, int upto_min);   // WEATHER section
+static void     farm_guards_update(void);     // SPRINKLERS + SCARECROWS: s_sprinkled / s_scared from what's placed now
+static int      crows_eat(int pct, bool land);   // ...the crows take some crops (land: and wait where they were)
+static void     crows_ate_repaint(void);      // ...shows where they were taken
+static bool     crows_come_here(void);        // ...outdoors
+static void     crow_clear(void);             // ...the old map's crows (and sprinkler spray) go
+static bool     farm_morning(bool baked, bool repaint, bool force, int crow_pct);   // ...today's 6:00 on the loaded map
+static void     sprinkler_resume(void);       // ...a map loaded in the sprinkling hour, its morning already played
+
+static int32_t farm_now_min(void) { return (int32_t)clock_day() * FARM_DAY_MIN + clock_minute_of_day(); }
+
+static void soil_wet_forget(void)
+{
+    for (int ty = 0; ty < TILE_ROWS; ty++)
+        for (int tx = 0; tx < TILE_COLS; tx++) s_soil_wet_at[ty][tx] = INT32_MIN / 2;
+}
+
+// Was tile (tx,ty)'s farmland watered less than SOIL_WET_MIN game minutes ago? (Its crop comes out Wet.)
+static bool soil_just_watered(int tx, int ty)
+{
+    int32_t ago = farm_now_min() - s_soil_wet_at[ty][tx];
+    return ago >= 0 && ago < SOIL_WET_MIN;
+}
 
 static bool farm_under_ok(void)
 {
@@ -7572,7 +7972,7 @@ static bool farm_under_ok(void)
 }
 
 // The crop planted from seed item `item` (its id is "<crop id>_seeds"), or -1.
-static int crop_of_seed(uint8_t item)
+static int crop_of_seed(item_id_t item)
 {
     const item_asset_t *a = item == ITEM_NONE ? NULL : item_get(item);
     if (!a) return -1;
@@ -7588,6 +7988,77 @@ static int crop_find(const char *id)
     for (int c = 0; c < crop_count; c++)
         if (strcmp(s_crops[c]->id, id) == 0) return c;
     return -1;
+}
+
+// ============================================================
+//  SEASONS — every SEASON_DAYS game days the next one: Spring, Summer,
+//  Fall, Winter, then Spring again. Day 0 is Spring 1, Year 1. A set of
+//  seasons is a bit mask (1 spring, 2 summer, 4 fall, 8 winter; 0 = all year),
+//  as in the fish's "fish_seasons" (FISHING) and a seed packet's "season":
+//   - a crop is only planted in its seasons (farm_on_action()), the seed
+//     shop only sells it then (shop_stock()), and the first day of a season
+//     it doesn't grow in, it withers (farm_catch_up()). Inside a building
+//     (a greenhouse) anything grows any time.
+//   - a map can have art for a season: <map>.<season>.map (season_map_path()).
+// ============================================================
+#define SEASON_DAYS       28       // a season is this many game days: spring, summer, fall, winter, spring...
+static const char *const k_season_name[4] = { "Spring", "Summer", "Fall", "Winter" };
+static const char *const k_season_short[4] = { "Spr", "Sum", "Fall", "Win" };
+static int clock_season(void) { return (int)(clock_day() / SEASON_DAYS % 4); }   // 0 spring .. 3 winter
+static int clock_season_day(void) { return (int)(clock_day() % SEASON_DAYS) + 1; }
+static int clock_year(void) { return (int)(clock_day() / (SEASON_DAYS * 4)) + 1; }
+static int season_of_day(int32_t day) { return day < 0 ? 0 : (int)(day / SEASON_DAYS % 4); }
+
+// Does season bit set `mask` (0 = all year) have `season`?
+static bool season_fits(int32_t mask, int season)
+{
+    mask &= SEASON_ALL;
+    return mask == 0 || ((mask >> season) & 1);
+}
+
+// "Spring & Fall", "Spring, Summer & Fall" (brief: "Spr/Sum/Fall"); "all year" for none or all.
+static void season_list(int32_t mask, char *out, size_t n, bool brief)
+{
+    mask &= SEASON_ALL;
+    int count = 0, len = 0;
+    for (int k = 0; k < 4; k++) if ((mask >> k) & 1) count++;
+    if (count == 0 || count == 4) { snprintf(out, n, "all year"); return; }
+    out[0] = '\0';
+    for (int k = 0, i = 0; k < 4 && len >= 0 && (size_t)len < n; k++) {
+        if (!((mask >> k) & 1)) continue;
+        const char *sep = i == 0 ? "" : brief ? "/" : i == count - 1 ? " & " : ", ";
+        len += snprintf(out + len, n - (size_t)len, "%s%s", sep, brief ? k_season_short[k] : k_season_name[k]);
+        i++;
+    }
+}
+
+// Crop c's seasons: its seed packet's "season" bits (0 = all year).
+static int32_t crop_seasons(int c)
+{
+    char id[48];
+    snprintf(id, sizeof(id), "%s_seeds", s_crops[c]->id);
+    return item_attr(item_find(id), ITEM_ATTR_SEASON, 0) & SEASON_ALL;
+}
+
+// Can crop c grow on the loaded map in `season`? Inside a building (a greenhouse) always.
+static bool crop_grows_in(int c, int season)
+{
+    return s_map_inst || season_fits(crop_seasons(c), season);
+}
+
+// The file load_map() should open for map file `path` in this season:
+// "<dir>/meadows.winter.map" when it's there (the Map Editor's seasonal art,
+// with its own night files), else `path` itself. The map's name — and so its
+// save — stays "meadows" (everything after the first '.' is dropped).
+static const char *season_map_path(const char *path, char *out, size_t n)
+{
+    static const char *const k_file[4] = { "spring", "summer", "fall", "winter" };
+    const char *dot = strrchr(path, '.'), *slash = strrchr(path, '/');
+    if (!dot || (slash && dot < slash)) return path;
+    int w = snprintf(out, n, "%.*s.%s%s", (int)(dot - path), path, k_file[clock_season()], dot);
+    struct stat st;
+    if (w <= 0 || (size_t)w >= n || stat(out, &st) != 0) return path;
+    return out;
 }
 
 // How many one harvest of crop c gives: 1, or extra_min..extra_max with extra_chance% odds.
@@ -7778,6 +8249,9 @@ static void farm_clear(void)
     s_farm_baked    = 0;
     s_farm_seen_min = -1;
     s_farm_day      = (int32_t)clock_day();   // a map with no save is up to date (mapsave_load() reads the save's)
+    s_morning_day   = clock_minute_of_day() >= FARM_MORNING_MIN ? s_farm_day : s_farm_day - 1;   // ...and so is its morning
+    soil_wet_forget();
+    crow_clear();
 }
 
 // ---- Farmland ----
@@ -7799,9 +8273,15 @@ static bool soil_any(void)
 
 // Could tile (tx,ty) be farmland at all — leaving out what's on it right now
 // (farmland, a crop, a dropped stack)? See the section comment.
+static bool ground_spot_free(int tx, int ty);
 static bool soil_spot_ok(int tx, int ty)
 {
-    if (!tile_on_map(tx, ty) || !tile_tillable(tx, ty)) return false;
+    return tile_on_map(tx, ty) && tile_tillable(tx, ty) && ground_spot_free(tx, ty);
+}
+
+// soil_spot_ok() but the Tillable flag: nothing in the way on tile (tx,ty) (it's on the map).
+static bool ground_spot_free(int tx, int ty)
+{
     int x = tx * TILE_SIZE, y = ty * TILE_SIZE;
     if (ty < 1) return false;                          // a crop's top half would be off the map (farm_tile_ok())
     if (place_covers_rect(x, y, TILE_SIZE, TILE_SIZE)) return false;   // under a prop or building
@@ -7917,11 +8397,15 @@ static void soil_show_changes(bool repaint)
 // rains; waking up after rain in the night). repaint: as in soil_show_changes().
 static void soil_rain(bool repaint)
 {
-    bool any = false;
+    bool any = false, falling = rain_now();
+    int32_t now = farm_now_min();
     memcpy(s_soil_was, s_soil, sizeof(s_soil_was));
     for (int ty = 0; ty < TILE_ROWS; ty++)
-        for (int tx = 0; tx < TILE_COLS; tx++)
+        for (int tx = 0; tx < TILE_COLS; tx++) {
+            if (s_soil[ty][tx] == SOIL_NONE) continue;
+            if (falling) s_soil_wet_at[ty][tx] = now;   // still raining on it: a crop picked within the hour after comes out Wet
             if (s_soil[ty][tx] == SOIL_DRY) { s_soil[ty][tx] = SOIL_WATERED; any = true; }
+        }
     if (!any) return;
     soil_show_changes(repaint);
     mapsave_mark_dirty();
@@ -7944,9 +8428,17 @@ static void soil_rain(bool repaint)
 // first time there's grass) to put back. A grass tile something got put down
 // on later (a prop, a building) stays as it is until that's picked up again.
 // Saved with the map (MAP SAVES): "grass at tile <x> <y> tufts <n>".
+// Wild grass: ground ticked "Grassy" in the Map Editor (TILE_FLAG_GRASSY —
+// Tillable or not) grows grass by itself. The first time the player comes
+// to a map (no save yet), every Grassy tile is full of it; after that, every
+// night each bare Grassy tile sprouts a tuft GRASS_REGROW_PCT % of the time,
+// so grass that was eaten, cut or dug up grows back there — and spreads
+// from there like planted grass. A map with Grassy tiles always keeps a save
+// (with its "farm day"), so it isn't seeded full again on the next visit.
 #define GRASS_TUFTS      4
 #define GRASS_MAX        300   // grass tiles on one map
 #define GRASS_SPREAD_PCT 65    // Stardew's odds a grass tile seeds a neighbour overnight
+#define GRASS_REGROW_PCT 30    // a bare Grassy tile's odds of a new tuft overnight
 _Static_assert(GRASS_W == GRASS_TUFTS * TILE_SIZE && GRASS_H == TILE_SIZE,
                "assets/grass.png must be 4 tiles side by side (64x16): 1 tuft, 2, 3, full");
 
@@ -7973,10 +8465,19 @@ static bool grass_under_ok(void)
     return s_grass_under != NULL;
 }
 
-// Could grass grow on tile (tx,ty) — Tillable ground with nothing on it, not farmland?
+// Could grass grow on tile (tx,ty) — Tillable or Grassy ground with nothing on it, not farmland?
 static bool grass_spot_ok(int tx, int ty)
 {
-    return soil_spot_ok(tx, ty) && s_soil[ty][tx] == SOIL_NONE;
+    return tile_on_map(tx, ty) && (tile_tillable(tx, ty) || tile_grassy(tx, ty)) && ground_spot_free(tx, ty) && s_soil[ty][tx] == SOIL_NONE;
+}
+
+// Does the loaded map have Grassy ground (wild grass grows back on it)?
+static bool grassy_any(void)
+{
+    for (int ty = 0; ty < TILE_ROWS; ty++)
+        for (int tx = 0; tx < TILE_COLS; tx++)
+            if (tile_grassy(tx, ty)) return true;
+    return false;
 }
 
 // A prop or building stands over tile (tx,ty): its grass stays as it is.
@@ -8101,6 +8602,29 @@ static void grass_night(void)
             s_grass[ny][nx] = (uint8_t)(1 + esp_random() % 2);
             count++;
         }
+    for (int ty = 0; ty < TILE_ROWS && count < GRASS_MAX; ty++)   // wild grass grows back on bare Grassy ground
+        for (int tx = 0; tx < TILE_COLS && count < GRASS_MAX; tx++) {
+            if (had[ty][tx] || s_grass[ty][tx] || !tile_grassy(tx, ty) || (int)(esp_random() % 100) >= GRASS_REGROW_PCT) continue;
+            if (ground_at(tx, ty) >= 0 || farm_at(tx, ty) >= 0 || !grass_spot_ok(tx, ty)) continue;
+            s_grass[ty][tx] = 1;
+            count++;
+        }
+}
+
+// A map the player has never changed (no save): its Grassy ground is full of
+// grass to start with. Baked by mapsave_show(). true = there was some.
+static bool grass_seed_wild(void)
+{
+    int count = grass_count(), seeded = 0;
+    for (int ty = 0; ty < TILE_ROWS && count < GRASS_MAX; ty++)
+        for (int tx = 0; tx < TILE_COLS && count < GRASS_MAX; tx++) {
+            if (s_grass[ty][tx] || !tile_grassy(tx, ty) || !grass_spot_ok(tx, ty) || !grass_under_ok()) continue;
+            s_grass[ty][tx] = GRASS_TUFTS;
+            count++;
+            seeded++;
+        }
+    if (seeded) ESP_LOGI(TAG, "farm: %s — %d Grassy tiles start full of grass", current_map_name(), seeded);
+    return seeded > 0;
 }
 
 // A "grass" line from the map's save (MAP SAVES). false = skipped (logged).
@@ -8125,6 +8649,7 @@ static bool grass_restore(int tx, int ty, int tufts)
 static bool ranch_any(void);              // ANIMALS section: any animals or grass on the loaded map
 static bool ranch_graze_away(void);       // ...a day nobody saw: the hungry ones ate what grass there was
 static bool ranch_new_day(void);          // ...midnight: the fed ones make their products, everyone's hungry again
+static bool herd_catch_up(bool baked, bool repaint);   // ...FARM: the midnights for the animals with a home, wherever they are
 static int  ranch_animal_count(void);     // ...MAP SAVES: how many animals, their lines, one read back
 static void ranch_write(FILE *f, char *line, size_t n);
 static bool ranch_restore(const char *id, int tx, int ty, int fed, int days, int ready, int pending, int variant, int age);
@@ -8133,23 +8658,47 @@ static bool farm_catch_up(bool baked, bool repaint)
     int32_t today = (int32_t)clock_day();
     if (s_farm_day >= today || (!soil_any() && !farm_covers_any() && !ranch_any())) {   // up to date (or the clock went back: Dev Tools), or no farm here
         s_farm_day = today;
+        if (s_morning_day < today - 1) s_morning_day = today - 1;   // (nothing for a morning to do: today's still plays at 6:00)
         return false;
     }
     bool changed = false;
     int32_t from = today - s_farm_day > FARM_CATCHUP_MAX ? today - FARM_CATCHUP_MAX : s_farm_day;
+    int eaten = 0;
+    int8_t withered[FARM_MAX][2];   // SEASONS: the tiles of crops a new season killed
+    int    n_withered = 0;
     memcpy(s_grass_was, s_grass, sizeof(s_grass_was));
+    farm_guards_update();   // the sprinklers' and scarecrows' squares (SPRINKLERS + SCARECROWS)
     for (int32_t d = from; d < today; d++) {
-        bool rained = rain_fell(d, FARM_DAY_MIN);
+        bool rained  = rain_fell(d, FARM_DAY_MIN);
+        bool morning = d > s_morning_day;   // that day's 6:00 wasn't played here: the sprinklers came on, the crows came
+        if (morning && farm_covers_any()) {
+            changed = true;                 // (so the save keeps that it's been played: the crows don't get another go)
+            if (crows_come_here()) eaten += crows_eat(CROW_PCT, false);
+        }
         for (int i = 0; i < FARM_MAX; i++) {
             farm_plot_t *p = &s_farm[i];
             if (!p->used || p->grown >= farm_need(p)) continue;   // ripe: it waits to be picked
-            if (rained || (d == s_farm_day && s_soil[p->ty][p->tx] == SOIL_WATERED)) { p->grown++; changed = true; }
+            if (rained || (d == s_farm_day && s_soil[p->ty][p->tx] == SOIL_WATERED) || (morning && s_sprinkled[p->ty][p->tx])) {
+                p->grown++;
+                changed = true;
+            }
         }
         // The animals (ANIMALS): the day the player saw played out as it was; one the
         // map wasn't on screen for (or the rest of the day it was left on), they grazed.
         if ((!baked || d != s_farm_day) && ranch_graze_away()) changed = true;
         if (ranch_new_day()) changed = true;
         grass_night();
+        int next = season_of_day(d + 1);   // SEASONS: a new season tomorrow — what can't grow in it withers
+        if (next != season_of_day(d))
+            for (int i = 0; i < FARM_MAX; i++) {
+                farm_plot_t *p = &s_farm[i];
+                if (!p->used || crop_grows_in(p->crop, next)) continue;
+                p->used = false;
+                withered[n_withered][0] = p->tx;
+                withered[n_withered][1] = p->ty;
+                n_withered++;
+                changed = true;
+            }
     }
     if (memcmp(s_grass_was, s_grass, sizeof(s_grass_was)) != 0) {
         changed = true;
@@ -8160,10 +8709,20 @@ static bool farm_catch_up(bool baked, bool repaint)
     for (int ty = 0; ty < TILE_ROWS; ty++)
         for (int tx = 0; tx < TILE_COLS; tx++)
             if (s_soil[ty][tx] != SOIL_NONE && s_soil[ty][tx] != now) { s_soil[ty][tx] = now; changed = true; }
-    ESP_LOGI(TAG, "farm: %s caught up from day %ld to day %ld%s", current_map_name(), (long)s_farm_day, (long)today,
-             changed ? "" : " (nothing grew)");
+    ESP_LOGI(TAG, "farm: %s caught up from day %ld to day %ld%s (%d crop%s lost to crows)", current_map_name(), (long)s_farm_day, (long)today,
+             changed ? "" : " (nothing grew)", eaten, eaten == 1 ? "" : "s");
     s_farm_day = today;
+    if (s_morning_day < today - 1) s_morning_day = today - 1;
     if (changed && baked) soil_show_changes(repaint);
+    if (eaten && baked && repaint) crows_ate_repaint();   // (they're not baked again: where they were is shown)
+    if (eaten) message(3500, "Crows ate %d of the crops here while you were away", eaten);
+    if (n_withered) {   // SEASONS: take the dead ones out of the map
+        if (baked) farm_rebuild(-1, -1);
+        for (int k = 0; k < n_withered && baked && repaint; k++) farm_repaint(withered[k][0], withered[k][1]);
+        message(4000, "%d crop%s withered - %s doesn't suit %s", n_withered, n_withered == 1 ? "" : "s",
+                k_season_name[clock_season()], n_withered == 1 ? "it" : "them");
+        ESP_LOGI(TAG, "farm: %d crop%s on %s withered with the season", n_withered, n_withered == 1 ? "" : "s", current_map_name());
+    }
     return changed;
 }
 
@@ -8200,18 +8759,60 @@ static bool farm_tap_target(int *gx, int *gy)
 {
     if (farm_at(*gx, *gy) >= 0) return true;
     if (farm_at(*gx, *gy + 1) >= 0) { (*gy)++; return true; }
-    uint8_t held = inv_held_item();
+    item_id_t held = inv_held_item();
     if (ITEM_TILLS(held)) return soil_tile_ok(*gx, *gy);
-    if (ITEM_WATERS(held)) return tile_on_map(*gx, *gy) && s_soil[*gy][*gx] != SOIL_NONE;
+    if (ITEM_WATERS(held)) return tile_on_map(*gx, *gy) && (s_soil[*gy][*gx] != SOIL_NONE || (tile_fishable(*gx, *gy) && can_max(held)));   // (water: fills it)
     return crop_of_seed(held) >= 0 && farm_tile_ok(*gx, *gy, false);
+}
+
+// ---- The watering can's water ----
+// A can with "water_max N" (the Item Editor's "holds N water") holds that
+// much: one tile of farmland takes one, and it's filled again at a well (a
+// building with water_source — buildings.h) or at water (Fishable tiles):
+// hold it and tap one. Without water_max it never runs dry. One can's worth
+// is kept (the player has one can): saved in world.txt as "can water N".
+// The hotbar shows how full it is (a blue bar under it — inv_draw_slot_contents()).
+static int16_t s_can_water = -1;   // water left in the can; -1 = full (a new game, a save from before cans ran dry)
+
+static int can_max(item_id_t item) { return ITEM_WATERS(item) ? (int)item_attr(item, ITEM_ATTR_WATER_MAX, 0) : 0; }
+
+// The can's water is now n (-1 = full): its bar on the hotbar follows (the bar's image only redraws when told).
+static void can_set(int n)
+{
+    s_can_water = (int16_t)n;
+    s_hotbar_img_valid = false;
+    hud_refresh();
+}
+static int can_level(item_id_t item)
+{
+    int m = can_max(item);
+    return !m ? 0 : s_can_water < 0 || s_can_water > m ? m : s_can_water;
+}
+
+// Fills the held watering can (at `from`: "Well", "water").
+static void can_fill(const char *from)
+{
+    item_id_t held = inv_held_item();
+    if (!ITEM_WATERS(held)) { message(2000, "Hold a watering can to fill it here"); return; }
+    int m = can_max(held);
+    if (!m)                     { message(2000, "The %s never runs dry", item_name(held)); return; }
+    if (can_level(held) >= m)   { message(1500, "The %s is full", item_name(held)); return; }
+    can_set(m);
+    message(2000, "Filled the %s at the %s (%d)", item_name(held), from, m);
 }
 
 // The watering can on tile (tx,ty) (farm_on_action()).
 static void soil_on_can(int tx, int ty)
 {
+    if (tile_fishable(tx, ty)) { can_fill("water"); return; }
     if (!tile_on_map(tx, ty) || s_soil[ty][tx] == SOIL_NONE) { message(1500, "Only farmland needs water"); return; }
     if (s_soil[ty][tx] == SOIL_WATERED)                      { message(1500, "Already watered today"); return; }
+    item_id_t held = inv_held_item();
+    int m = can_max(held), left = can_level(held);
+    if (m && !left) { message(2500, "The %s is empty - fill it at a well or water", item_name(held)); return; }
     soil_water(tx, ty, true);
+    s_soil_wet_at[ty][tx] = farm_now_min();   // picked within the hour, its crop comes out Wet
+    if (m) can_set(left - 1);
 }
 
 // update_player(), when a walk arrives and presses action: till, plant,
@@ -8224,7 +8825,7 @@ static void farm_on_action(void)
     if (i >= 0) {
         farm_plot_t *p = &s_farm[i];
         const crop_def_t *c = s_crops[p->crop];
-        uint8_t item = item_find(c->id);
+        item_id_t item = item_find(c->id);
         bool ripe;
         int left;
         farm_stage(p, &ripe, &left);
@@ -8235,6 +8836,7 @@ static void farm_on_action(void)
             return;
         }
         uint8_t q = wet_if_raining(QUALITY_MAKE(item_roll_quality(item, esp_random()), mut_roll(item, 1.0f)));   // MUTATIONS, WET ITEMS
+        if (soil_just_watered(tx, ty)) q |= QUALITY_WET;   // its farmland was watered less than an hour ago
         int n = farm_yield(c), spill = item == ITEM_NONE ? n : inv_add_q(item, q, n);
         if (spill == n) {          // not even one fit: the crop stays
             message(2000, "No room for %s", item_name(item));
@@ -8265,6 +8867,12 @@ static void farm_on_action(void)
     if (can) { soil_on_can(tx, ty); return; }
     int crop = crop_of_seed(inv_held_item());
     if (crop < 0) return;                                  // not holding seeds: nothing to do here
+    if (!crop_grows_in(crop, clock_season())) {            // SEASONS: out of season (it would only wither)
+        char when[40];
+        season_list(crop_seasons(crop), when, sizeof(when), false);
+        message(2500, "%s only grow in %s", item_name(inv_held_item()), when);
+        return;
+    }
     if (!farm_tile_ok(tx, ty, true)) {
         message(2000, tile_on_map(tx, ty) && s_soil[ty][tx] == SOIL_NONE ? "Till the ground first" : "Can't plant there");
         return;
@@ -8290,7 +8898,9 @@ static void farm_tick(void)
     int minute = clock_minute_of_day();
     if (minute == s_farm_seen_min) return;
     s_farm_seen_min = minute;
+    herd_catch_up(true, true);   // the barn animals' midnight (FARM) — before the grass grows in the night
     if (farm_catch_up(true, true)) mapsave_mark_dirty();
+    farm_morning(true, true, false, CROW_PCT);   // 6:00: the sprinklers come on, the crows come (SPRINKLERS + SCARECROWS)
     if (rain_now()) soil_rain(true);
 }
 
@@ -8344,6 +8954,7 @@ static bool farm_restore(const char *id, int tx, int ty, int grown, int day, boo
 //    broken 3 at 120 64 size 48 64 level 1 of 2 hits 0
 //    dropped 5 wood at tile 12 7       (+ "quality 2" when it isn't standard)
 //    farm day 31                       the game day the farmland and crops are up to (FARMING)
+//    morning day 31                    the last day whose 6:00 (sprinklers, crows) was played here (SPRINKLERS + SCARECROWS)
 //    soil at tile 9 14                 (+ "watered" — farmland the hoe made, FARMING)
 //    crop tomato at tile 9 14 grown 3  watered days grown (+ "picked" while a regrowing crop grows back)
 //    prop shelf at tile 12 7           a prop the player put down, its footprint's top-left (PLACEMENT)
@@ -8390,7 +9001,7 @@ static bool farm_restore(const char *id, int tx, int ty, int grown, int day, boo
 #define MAPSAVE_DELAY_MS 2000   // written this long after the last change
 #define MAPSAVE_PATH_MAX 128
 #define MAPSAVE_LINE_MAX 192
-#define MAPSAVE_WORDS    20   // (an "animal" line has 18)
+#define MAPSAVE_WORDS    26   // (a map save's "animal" line has 18, farm.txt's 22)
 
 // ---- Regrowth registry: which maps grow back, and after how many game days ----
 // Same idea as the SELECTED AREA REGISTRY: add a row per map.
@@ -8487,7 +9098,8 @@ static bool mapsave_write(void)
     for (int i = 0; i < FARM_MAX; i++)    planted += s_farm[i].used;
     for (int ty = 0; ty < TILE_ROWS; ty++)
         for (int tx = 0; tx < TILE_COLS; tx++) tilled += s_soil[ty][tx] != SOIL_NONE;
-    if (broken == 0 && dropped == 0 && planted == 0 && tilled == 0 && props == 0 && animals == 0 && grassed == 0) {   // back to as exported: no save, and the regrowth timer stops
+    if (broken == 0 && dropped == 0 && planted == 0 && tilled == 0 && props == 0 && animals == 0 && grassed == 0 && !grassy_any()) {   // back to as exported: no save, and the regrowth timer stops
+        // (a map with Grassy ground keeps one: without it, its wild grass would start full again — FARMING)
         mapsave_delete();
         s_save_since_day = -1;
         ESP_LOGI(TAG, "save: %s is as exported again — no save kept", s_map_path);
@@ -8524,6 +9136,10 @@ static bool mapsave_write(void)
     }
     if (soil_any() || farm_covers_any() || ranch_any()) {   // the day the farmland, crops, animals and grass below are up to (FARMING)
         snprintf(line, sizeof(line), "farm day %ld\n", (long)s_farm_day);
+        fputs(line, f);
+    }
+    if (soil_any() || farm_covers_any() || place_props_any()) {   // the last morning played here (SPRINKLERS + SCARECROWS)
+        snprintf(line, sizeof(line), "morning day %ld\n", (long)s_morning_day);
         fputs(line, f);
     }
     for (int ty = 0; ty < TILE_ROWS; ty++) {   // before the crops: they're planted in it
@@ -8645,7 +9261,7 @@ static bool mapsave_restore_brk(const int *v)
 // One "dropped" line. false = skipped (logged).
 static bool mapsave_restore_ground(const char *id, int count, int tx, int ty, int quality)
 {
-    uint8_t item = item_find(id);
+    item_id_t item = item_find(id);
     if (item == ITEM_NONE) {
         ESP_LOGW(TAG, "save: dropped \"%s\" isn't an item in this build — skipped", id);
         return false;
@@ -8679,7 +9295,10 @@ static void mapsave_load(void)
     FILE *f = fopen(path, "r");
     if (!f) {                          // a power cut between removing the old save and renaming the new one?
         mapsave_path(s_map_path, ".tmp", path, sizeof(path));
-        if (!(f = fopen(path, "r"))) return;
+        if (!(f = fopen(path, "r"))) {
+            if (grass_seed_wild()) mapsave_mark_dirty();   // never changed yet: its Grassy ground starts full of grass (FARMING)
+            return;
+        }
     }
     if (!fgets(line, sizeof(line), f) || strncmp(line, "CAPTUREIT SAVE 1", 16) != 0) {
         ESP_LOGW(TAG, "save: %s isn't a CaptureIt save (version 1) — ignored", path);
@@ -8706,6 +9325,7 @@ static void mapsave_load(void)
     // Pass 2: apply it.
     int  broken = 0, dropped = 0, tilled = 0, planted = 0, props = 0, animals = 0, grassed = 0, skipped = 0, saved_count = -1;
     int  farm_day = -1;                // no "farm day" line (an older save): the crops count as up to date
+    int  morning_day = -1;             // no "morning day" line (an older save): the farm day's morning counts as played
     bool other_export = false;
     while (fgets(line, sizeof(line), f)) {
         int nw = mapsave_words(line, word), v[8];
@@ -8720,6 +9340,8 @@ static void mapsave_load(void)
             if (soil_restore(v[0], v[1], nw > 5)) tilled++; else skipped++;
         } else if (mapsave_match(word, nw, "farm day #", v, &any)) {
             farm_day = v[0];
+        } else if (mapsave_match(word, nw, "morning day #", v, &any)) {
+            morning_day = v[0];
         } else if (mapsave_match(word, nw, "crop * at tile # # grown #", v, &any) ||
                    mapsave_match(word, nw, "crop * at tile # # grown # picked", v, &any)) {
             if (farm_restore(any, v[0], v[1], v[2], -1, nw > 8)) planted++; else skipped++;
@@ -8733,6 +9355,8 @@ static void mapsave_load(void)
             if (!place_restore_stock(v, any, strcmp(word[7], "photo") == 0)) skipped++;
         } else if (mapsave_match(word, nw, "machine at tile # # item * count # quality # done #", v, &any)) {   // (MACHINES)
             if (!place_restore_machine(v, any)) skipped++;
+        } else if (mapsave_match(word, nw, "gate at tile # # open", v, &any)) {   // a gate left open (FENCES)
+            if (!place_restore_gate(v[0], v[1])) skipped++;
         } else if (mapsave_match(word, nw, "grass at tile # # tufts #", v, &any)) {   // the player's too (ANIMALS)
             if (grass_restore(v[0], v[1], v[2])) grassed++; else skipped++;
         } else if (mapsave_match(word, nw, "animal * at tile # # fed # days # ready # pending #", v, &any) ||
@@ -8757,7 +9381,11 @@ static void mapsave_load(void)
     // The days that passed while the player was away: crops grow on the
     // ones it rained, the farmland dries (FARMING). Baked by mapsave_show().
     if (farm_day >= 0 && farm_day <= today) s_farm_day = farm_day;
+    if (morning_day >= 0 && morning_day <= today) s_morning_day = morning_day;
+    else if (farm_day >= 0 && farm_day <= today) s_morning_day = farm_day;   // an older save: its farm day's morning counts as played
     if (farm_catch_up(false, false)) mapsave_mark_dirty();
+    farm_morning(false, false, false, CROW_PCT);   // today's 6:00, if it's past and wasn't played here: the crows are waiting (SPRINKLERS + SCARECROWS)
+    sprinkler_resume();                            // ...or it was, and it's not 7:00 yet: the sprinklers spray on
 
     // The timer carries on from the save. A save from before regrowth, or
     // one "from the future" (world.txt was deleted, so the clock started
@@ -8915,12 +9543,24 @@ static void mapsave_regen_tick(void)
 //  ...and the map a building stands on finds its lines when it loads. A
 //  line whose building is no longer in this build, or that doesn't fit the
 //  map any more, is kept but not shown (logged).
+//
+//  Fences, gates and pipes (fences.h — FENCES below) are props that join up:
+//  each shows the look for the sides it has a neighbour of its own kind on
+//  (a pipe also joins the farm buildings it touches). Their tops may overlap
+//  the tile above, so they only keep off each other's tiles, and are always
+//  baked together, top row first (place_links_rebake()) — never one at a time.
+//  A gate opens and shuts when tapped holding anything; open, it's walked
+//  through. Saved after its prop line: "gate at tile <x> <y> open".
+//
+//  Beds with a sheet layer are walked into (BEDS, after place_on_action()):
+//  only their frame blocks, and the sheet covers the player lying in them.
 // ============================================================
 #include "buildings.h"
 #include "machines.h"
+#include "fences.h"
 
-#define PLACE_MAX           48     // props + buildings on one map
-#define PROP_ART_MAX        48     // a prop's art is at most this each side (held, it's shrunk to HELD_ITEM_MAX)
+#define PLACE_MAX           160    // props + buildings on one map (a pen's fences are one each)
+#define PROP_ART_MAX        64     // a prop's art is at most this each side (held, it's shrunk to HELD_ITEM_MAX)
 #define PLACE_HOLO_FRAME_MS 120    // the hologram's pulse — and how often it's redrawn
 #define BREC_MAX            48     // buildings in a whole save
 #define BREC_ID_MAX         31
@@ -8929,20 +9569,22 @@ enum { PLACE_NONE = 0, PLACE_PROP, PLACE_BUILDING };
 
 typedef struct {        // one prop / building at one spot
     uint8_t  kind;      // PLACE_PROP / PLACE_BUILDING
-    uint8_t  what;      // prop: its item; building: s_buildings[] index
+    uint16_t what;      // prop: its item (item_id_t); building: s_buildings[] index
     int8_t   tx, ty;    // footprint: top-left tile...
     uint8_t  fw, fh;    // ...and size, in tiles
     int16_t  ax, ay;    // art: top-left pixel (bottom-aligned on the footprint, centred across it)...
     int16_t  aw, ah;    // ...and size
-    bool     solid;     // the footprint blocks the player (a rug's doesn't)
+    bool     solid;     // the footprint blocks the player (a rug's doesn't; an open gate's doesn't)
     int8_t   door_tx;   // building: the door's tile column (in the footprint's bottom row); -1 = none
+    int8_t   fence;     // a fence, gate or pipe: its s_fences[] index (FENCES); -1 = not one
+    bool     bed;       // a walk-in bed (BEDS): its whole art is footprint, only its frame blocks, its sheet goes over the player
 } place_geom_t;
 
 #define SHELF_SLOTS_MAX     4      // stacks one shelf holds (items.h ITEM_ATTR_SHELF)
 #define SHELF_ICON          14     // px: what stands on a shelf is shrunk to fit this square (and its slot's width)
 
 typedef struct {        // one stack on a shelf, for sale (SHELVES)
-    uint8_t  item, count, quality;   // count 0 = empty
+    item_id_t item; uint8_t count, quality;   // count 0 = empty
     uint32_t price;                  // what one of it sells for
 } shelf_slot_t;
 
@@ -8952,9 +9594,13 @@ typedef struct {
     bool         baked; // in s_map_pixels now
     uint16_t    *under; // PSRAM: what it covers (geom_rect()): its pixels, then the solid bits, then the layer bits
     shelf_slot_t shelf[SHELF_SLOTS_MAX];   // a shelf's stock (shelf_slots() of them are used); an aquarium's fish (AQUARIUMS)
-    uint8_t      mk_item, mk_count, mk_quality;   // a machine: what it's making (mk_count 0 = nothing) (MACHINES)...
+    item_id_t    mk_item; uint8_t mk_count, mk_quality;   // a machine: what it's making (mk_count 0 = nothing) (MACHINES)...
     int32_t      mk_done;                         // ...ready at this game minute (clock_day() * FARM_DAY_MIN + minute)
     bool         mk_ready_shown;                  // its ready icon is on show (and its idle art baked)
+    bool         open;                            // a gate: open (walked through) (FENCES)
+    uint8_t      look;                            // a fence, gate or pipe: the look baked (255 = none yet)
+    int32_t      sprayed_day;                     // a sprinkler: the game day it last watered (-1 = never) (SPRINKLERS + SCARECROWS)
+    bool         front_on;                        // a walk-in bed: its sheet is in front of the player now (BEDS)
 } placed_t;
 
 #define AQUA_FISH_MAX       3      // fish one aquarium holds (items.h ITEM_ATTR_AQUARIUM)
@@ -8962,7 +9608,7 @@ typedef struct {
 _Static_assert(AQUA_FISH_MAX <= SHELF_SLOTS_MAX, "an aquarium's fish live in its shelf slots");
 
 typedef struct {        // one fish swimming in one aquarium (AQUARIUMS)
-    uint8_t  item, quality;    // the fish it was made for: made again when its slot holds another
+    item_id_t item; uint8_t quality;    // the fish it was made for: made again when its slot holds another
     uint8_t  w, h;             // its shrunk size (0 = nothing to draw)
     bool     right;            // swimming right: the art (facing left) mirrored
     bool     drawn_right;      // ...as it's drawn in the map pixels now
@@ -8982,7 +9628,7 @@ typedef struct {        // a line of buildings.txt
     char     map[TP_NAME_MAX + 1];   // the map it stands on (current_map_name())
 } brec_t;
 
-static placed_t     s_place[PLACE_MAX];
+EXT_RAM_BSS_ATTR static placed_t s_place[PLACE_MAX];   // PSRAM: ~16 KB of them, and they're only looked through a few times a frame
 EXT_RAM_BSS_ATTR static aqua_fish_t s_aqua[PLACE_MAX][AQUA_FISH_MAX];   // PSRAM: the fish in s_place[i], if it's an aquarium
 EXT_RAM_BSS_ATTR static brec_t s_brec[BREC_MAX];   // PSRAM: only read / written with buildings.txt
 static uint16_t     s_brec_next = 1;
@@ -8994,6 +9640,10 @@ static int          s_holo_frame = -1;      // its pulse frame on screen
 static bool         s_place_pend = false;   // the hologram was tapped: put it down at s_place_pend_g when the walk arrives
 static place_geom_t s_place_pend_g;
 
+static bool pot_of(const place_geom_t *g);   // CRAB POTS (after FISHING): a crab pot, which goes in the water
+static void pot_on_action(int i);            // ...tapped: take the catch, bait it, pick it up
+static void pot_placed(int i);               // ...just put down
+
 // ---- what can be placed ----
 static int building_find(const char *id)
 {
@@ -9003,21 +9653,41 @@ static int building_find(const char *id)
 }
 
 // The building `item` places (they share the id), or -1.
-static int building_of_item(uint8_t item)
+static int building_of_item(item_id_t item)
 {
     const item_asset_t *a = item == ITEM_NONE ? NULL : item_get(item);
     return a ? building_find(a->id) : -1;
 }
 
-static bool prop_art_ok(uint8_t item)
+static bool prop_art_ok(item_id_t item)
 {
     const item_asset_t *a = item_get(item);
     return a && a->passive.frame_count > 0 && a->passive.pixels && a->passive.w > 0 && a->passive.h > 0 &&
            a->passive.w <= PROP_ART_MAX && a->passive.h <= PROP_ART_MAX;
 }
 
+// The fence, gate or pipe `item` places (they share the id — FENCES), or -1.
+static int fence_find(const char *id)
+{
+    for (int k = 0; k < fence_count; k++)
+        if (strcmp(s_fences[k]->id, id) == 0) return k;
+    return -1;
+}
+
+// 0 = not a fence, gate or pipe; 1 = a fence or a gate (they join each other); 2 = a pipe.
+static int link_group(const place_geom_t *g)
+{
+    if (g->kind != PLACE_PROP || g->fence < 0) return 0;
+    return s_fences[g->fence]->kind == FENCE_KIND_PIPE ? 2 : 1;
+}
+
+static bool geom_is_gate(const place_geom_t *g)
+{
+    return g->kind == PLACE_PROP && g->fence >= 0 && s_fences[g->fence]->kind == FENCE_KIND_GATE;
+}
+
 // PLACE_PROP / PLACE_BUILDING if `item` can be put on the map, else PLACE_NONE.
-static int place_item_kind(uint8_t item)
+static int place_item_kind(item_id_t item)
 {
     if (item == ITEM_NONE) return PLACE_NONE;
     if (building_of_item(item) >= 0) return PLACE_BUILDING;
@@ -9028,17 +9698,37 @@ static int place_item_kind(uint8_t item)
 // Its shape with the footprint's top-left at tile (tx,ty). false = bad art (logged once per call site).
 static bool place_geom(int kind, int what, int tx, int ty, place_geom_t *g)
 {
-    int aw, ah, rows, door = -1;
-    bool solid = true;
+    int aw, ah, rows, door = -1, fence = -1;
+    bool solid = true, bed = false;
     if (kind == PLACE_PROP) {
-        if (what <= ITEM_NONE || what > 255 || !prop_art_ok((uint8_t)what)) return false;
-        const item_asset_t *a = item_get((uint8_t)what);
+        if (what <= ITEM_NONE || what > ITEM_ID_MAX || !prop_art_ok((item_id_t)what)) return false;
+        const item_asset_t *a = item_get((item_id_t)what);
         aw = a->passive.w;
         ah = a->passive.h;
         int art_rows = (ah + TILE_SIZE - 1) / TILE_SIZE;
-        rows  = (int)item_attr((uint8_t)what, ITEM_ATTR_PROP_ROWS, art_rows);
+        rows  = (int)item_attr((item_id_t)what, ITEM_ATTR_PROP_ROWS, art_rows);
         rows  = rows < 1 ? 1 : rows > art_rows ? art_rows : rows;
-        solid = item_attr((uint8_t)what, ITEM_ATTR_PROP_SOLID, 1) != 0;
+        solid = item_attr((item_id_t)what, ITEM_ATTR_PROP_SOLID, 1) != 0;
+        fence = fence_count ? fence_find(a->id) : -1;   // a fence, gate or pipe: one tile, its looks the same size as its item's art
+        if (fence >= 0) {
+            const fence_def_t *fd = s_fences[fence];
+            if (fd->w != aw || fd->h != ah || aw != TILE_SIZE || (ah != TILE_SIZE && ah != 2 * TILE_SIZE) || !fd->looks) {
+                ESP_LOGW(TAG, "place: fence \"%s\" has looks of %dx%d but its item is %dx%d — re-export it", fd->id, fd->w, fd->h, aw, ah);
+                fence = -1;
+            } else {
+                rows = 1;
+            }
+        }
+        // A bed with its sheet as a front layer the size of its art: walked into (BEDS).
+        if (fence < 0 && item_attr((item_id_t)what, ITEM_ATTR_BED, 0) > 0 && a->front.frame_count > 0 && a->front.pixels) {
+            if (a->front.w == aw && a->front.h == ah && ah >= 2 * TILE_SIZE) {
+                bed   = true;
+                rows  = art_rows;   // the whole bed stands on the floor...
+                solid = false;      // ...but only its frame blocks (baked into the collision pixels)
+            } else {
+                ESP_LOGW(TAG, "place: bed \"%s\" has a %dx%d sheet layer for %dx%d art (at least 32 high) — re-export it", a->id, a->front.w, a->front.h, aw, ah);
+            }
+        }
     } else if (kind == PLACE_BUILDING && what >= 0 && what < building_count) {
         const building_def_t *b = s_buildings[what];
         aw = b->w;
@@ -9055,9 +9745,10 @@ static bool place_geom(int kind, int what, int tx, int ty, place_geom_t *g)
     if (tx < -TILE_COLS || tx > TILE_COLS || ty < -TILE_ROWS || ty > TILE_ROWS) return false;
     int fw = (aw + TILE_SIZE - 1) / TILE_SIZE;
     *g = (place_geom_t){
-        .kind = (uint8_t)kind, .what = (uint8_t)what, .tx = (int8_t)tx, .ty = (int8_t)ty, .fw = (uint8_t)fw, .fh = (uint8_t)rows,
+        .kind = (uint8_t)kind, .what = (uint16_t)what, .tx = (int8_t)tx, .ty = (int8_t)ty, .fw = (uint8_t)fw, .fh = (uint8_t)rows,
         .ax = (int16_t)(tx * TILE_SIZE + (fw * TILE_SIZE - aw) / 2), .ay = (int16_t)((ty + rows) * TILE_SIZE - ah),
         .aw = (int16_t)aw, .ah = (int16_t)ah, .solid = solid, .door_tx = (int8_t)(door >= 0 ? tx + door : -1),
+        .fence = (int8_t)fence, .bed = bed,
     };
     return true;
 }
@@ -9075,7 +9766,7 @@ static const uint16_t *place_art(const place_geom_t *g)
 static const char *place_name(const place_geom_t *g)
 {
     if (g->kind == PLACE_PROP) return item_name(g->what);
-    uint8_t item = item_find(s_buildings[g->what]->id);
+    item_id_t item = item_find(s_buildings[g->what]->id);
     return item != ITEM_NONE ? item_name(item) : s_buildings[g->what]->id;
 }
 
@@ -9116,10 +9807,12 @@ static bool place_covers_rect(int x, int y, int w, int h)
 static int place_at_tile(int tx, int ty)
 {
     int cx = tx * TILE_SIZE + TILE_SIZE / 2, cy = ty * TILE_SIZE + TILE_SIZE / 2;
+    for (int i = 0; i < PLACE_MAX; i++)   // a footprint first (a fence's top may stand over a building's wall)
+        if (s_place[i].g.kind != PLACE_NONE && geom_has_tile(&s_place[i].g, tx, ty)) return i;
     for (int i = 0; i < PLACE_MAX; i++) {
         const place_geom_t *g = &s_place[i].g;
-        if (g->kind == PLACE_NONE) continue;
-        if (geom_has_tile(g, tx, ty) || (cx >= g->ax && cx < g->ax + g->aw && cy >= g->ay && cy < g->ay + g->ah)) return i;
+        if (g->kind == PLACE_NONE || link_group(g)) continue;   // (a fence's top over the tile above isn't it: an animal there is tapped instead)
+        if (cx >= g->ax && cx < g->ax + g->aw && cy >= g->ay && cy < g->ay + g->ah) return i;
     }
     return -1;
 }
@@ -9130,6 +9823,8 @@ static bool place_props_any(void)
         if (s_place[i].g.kind == PLACE_PROP) return true;
     return false;
 }
+
+static int ra_at(int tx, int ty);   // ANIMALS section: the animal on a tile, or -1
 
 // Can g go where it says, now? See the section comment. *why (optional) says why not, for a message.
 static bool place_ok(const place_geom_t *g, bool check_player, const char **why)
@@ -9146,6 +9841,12 @@ static bool place_ok(const place_geom_t *g, bool check_player, const char **why)
         for (int ty = g->ty; ty < g->ty + g->fh; ty++)
             for (int tx = g->tx; tx < g->tx + g->fw; tx++)
                 if (!tile_buildable(tx, ty)) { *why = "Buildings need Buildable ground"; return false; }
+    }
+    bool pot = pot_of(g);              // a crab pot (CRAB POTS): only in the water, whose collision it ignores
+    if (pot) {
+        for (int ty = g->ty; ty < g->ty + g->fh; ty++)
+            for (int tx = g->tx; tx < g->tx + g->fw; tx++)
+                if (!tile_fishable(tx, ty)) { *why = "Crab pots go in the water"; return false; }
     }
     if (anim_rects_overlap(r.x, r.y, r.w, r.h, CLOCK_X, CLOCK_Y, CLOCK_W, CLOCK_H)) return false;
     if (anim_rects_overlap(r.x, r.y, r.w, r.h, TOUCH_BTN_X, TOUCH_BTN_Y, TOUCH_BTN_SIZE, TOUCH_BTN_SIZE)) return false;
@@ -9166,10 +9867,26 @@ static bool place_ok(const place_geom_t *g, bool check_player, const char **why)
         const tp_t *t = &s_tp.items[n];
         if (anim_rects_overlap(r.x, r.y, r.w, r.h, t->tx * TILE_SIZE, t->ty * TILE_SIZE, t->tw * TILE_SIZE, t->th * TILE_SIZE)) return false;
     }
+    bool link = link_group(g) != 0;
+    static int16_t near_links[PLACE_MAX];   // fences, gates and pipes whose tops overhang into r: their foreground isn't scenery
+    int near_n = 0;
     for (int i = 0; i < PLACE_MAX; i++) {
-        if (s_place[i].g.kind == PLACE_NONE) continue;
-        rect_t o = geom_rect(&s_place[i].g);
-        if (anim_rects_overlap(r.x, r.y, r.w, r.h, o.x, o.y, o.w, o.h)) return false;
+        const place_geom_t *og = &s_place[i].g;
+        if (og->kind == PLACE_NONE) continue;
+        rect_t o = geom_rect(og);
+        if (!anim_rects_overlap(r.x, r.y, r.w, r.h, o.x, o.y, o.w, o.h)) continue;
+        bool olink = link_group(og) != 0;
+        if (link && olink) {                                  // pieces only keep off each other's tile (all one tile)
+            if (geom_has_tile(og, g->tx, g->ty)) return false;
+        } else if (link && og->kind == PLACE_BUILDING) {      // a fence's top may stand over a building's wall...
+            if (rect_has_tile(o, g->tx, g->ty)) return false;
+            continue;
+        } else if (olink && g->kind == PLACE_BUILDING) {      // ...and a building may go up behind a fence
+            if (rect_has_tile(r, og->tx, og->ty)) return false;
+        } else {
+            return false;
+        }
+        near_links[near_n++] = (int16_t)i;
     }
     for (int i = 0; i < FARM_MAX; i++)
         if (s_farm[i].used && anim_rects_overlap(r.x, r.y, r.w, r.h, s_farm[i].tx * TILE_SIZE, (s_farm[i].ty - 1) * TILE_SIZE, CROP_W, CROP_H)) return false;
@@ -9181,16 +9898,26 @@ static bool place_ok(const place_geom_t *g, bool check_player, const char **why)
     for (int y = r.y; y < r.y + r.h; y++) {
         for (int x = r.x; x < r.x + r.w; x++) {
             int mi = y * s_map_w + x;
-            if (bit_get(s_map_fgmask, mi)) return false;   // under a tree's canopy or the like
-            if (geom_has_tile(g, x / TILE_SIZE, y / TILE_SIZE) && bit_get(s_map_hitbox, mi)) return false;   // the floor must be clear
+            if (bit_get(s_map_fgmask, mi)) {               // under a tree's canopy or the like...
+                bool piece = false;                        // ...unless it's a neighbouring fence's top
+                for (int k = 0; k < near_n && !piece; k++) {
+                    rect_t o = geom_rect(&s_place[near_links[k]].g);
+                    piece = x >= o.x && x < o.x + o.w && y >= o.y && y < o.y + o.h;
+                }
+                if (!piece) return false;
+            }
+            if (!pot && geom_has_tile(g, x / TILE_SIZE, y / TILE_SIZE) && bit_get(s_map_hitbox, mi)) return false;   // the floor must be clear
         }
     }
-    if (check_player && g->solid) {
+    if (check_player && (g->solid || g->bed) && !pot) {
         int fy = s_player_y + PLAYER_H - PLAYER_FEET_H;
         if (anim_rects_overlap(g->tx * TILE_SIZE, g->ty * TILE_SIZE, g->fw * TILE_SIZE, g->fh * TILE_SIZE, s_player_x, fy, PLAYER_W, PLAYER_FEET_H)) {
             *why = "You're standing there";
             return false;
         }
+        for (int ty = g->ty; ty < g->ty + g->fh; ty++)   // nor on an animal (ANIMALS)
+            for (int tx = g->tx; tx < g->tx + g->fw; tx++)
+                if (geom_tile_solid(g, tx, ty) && ra_at(tx, ty) >= 0) { *why = "An animal is in the way"; return false; }
     }
     return true;
 }
@@ -9216,6 +9943,22 @@ static int shelf_slots(const place_geom_t *g)
 static bool place_is_bed(const place_geom_t *g)
 {
     return g->kind == PLACE_PROP && item_attr(g->what, ITEM_ATTR_BED, 0) > 0;
+}
+
+// A walk-in bed's frame (BEDS): its art rows above bed_head_row() (the
+// headboard) and from bed_foot_row() down (the footboard) block; the player lies between.
+static int bed_head_row(const place_geom_t *g)
+{
+    int v = (int)item_attr(g->what, ITEM_ATTR_BED_HEAD, g->ah - TILE_SIZE - PLAYER_FEET_H);
+    return v < 0 ? 0 : v > g->ah ? g->ah : v;
+}
+
+static int s_bed_asked = -2;   // BEDS: the bed "Go to bed?" was asked in (-1 = none yet; -2 = not until they're out of bed)
+
+static int bed_foot_row(const place_geom_t *g)
+{
+    int head = bed_head_row(g), v = (int)item_attr(g->what, ITEM_ATTR_BED_FOOT, g->ah - TILE_SIZE);
+    return v < head ? head : v > g->ah ? g->ah : v;
 }
 
 static bool shelf_empty(const placed_t *p)
@@ -9314,7 +10057,7 @@ static int place_slots(const place_geom_t *g)
     return n ? n : aqua_slots(g);
 }
 
-static bool aqua_is_fish(uint8_t item)
+static bool aqua_is_fish(item_id_t item)
 {
     return item != ITEM_NONE && item < item_count && item_attr(item, ITEM_ATTR_FISH, 0) > 0;
 }
@@ -9480,18 +10223,63 @@ static void aqua_tick(void)
     }
 }
 
+// Is placed thing g a barn, a coop or a silo (buildings.h — FARM)?
+static bool building_is_farm(const place_geom_t *g)
+{
+    if (g->kind != PLACE_BUILDING) return false;
+    const building_def_t *b = s_buildings[g->what];
+    return (b->houses && b->houses[0]) || b->hay_capacity > 0;
+}
+
+// Which sides piece g joins on (fences.h: +1 up, +2 right, +4 down, +8 left):
+// a piece of its own kind is next to it there — or, for a pipe, a farm building.
+static int link_mask(const place_geom_t *g)
+{
+    static const int8_t k_dx[4] = { 0, 1, 0, -1 }, k_dy[4] = { -1, 0, 1, 0 };
+    int grp = link_group(g), m = 0;
+    for (int k = 0; k < 4; k++) {
+        int nx = g->tx + k_dx[k], ny = g->ty + k_dy[k];
+        for (int i = 0; i < PLACE_MAX; i++) {
+            const place_geom_t *o = &s_place[i].g;
+            if (o->kind == PLACE_NONE || o == g || !geom_has_tile(o, nx, ny)) continue;
+            if (link_group(o) == grp || (grp == 2 && building_is_farm(o))) m |= 1 << k;
+            break;   // (one thing to a tile)
+        }
+    }
+    return m;
+}
+
+// Piece g's look standing where it is (open: a gate's open looks).
+static int link_look(const place_geom_t *g, bool open)
+{
+    return link_mask(g) + (open && geom_is_gate(g) ? FENCE_LOOKS : 0);
+}
+
+static const uint16_t *link_look_art(const place_geom_t *g, int look)
+{
+    const fence_def_t *f = s_fences[g->fence];
+    return f->looks + (size_t)look * f->w * f->h;
+}
+
 // Writes s_place[i] into the map (and its collision / layer), keeping what it covers. Screen untouched.
 static const uint16_t *place_bake_art(int i);   // MACHINES: a working machine's working art
+static void house_bake_door(int i);             // FARM: an open animal door, over the building's art
+static void farm_pipes_changed(void);           // ...a pipe or a farm building came or went: which barns a silo feeds
+static void place_rebake_piped(int tx, int ty); // ...a pipe on that tile came or went: the farm building it runs into, baked again
 
 static void place_bake(int i)
 {
     placed_t           *p   = &s_place[i];
     const place_geom_t *g   = &p->g;
-    const uint16_t     *art = place_bake_art(i);
+    if (link_group(g)) p->look = (uint8_t)link_look(g, p->open);   // a fence, gate or pipe: as it joins its neighbours now
+    const uint16_t     *art = link_group(g) ? link_look_art(g, p->look) : place_bake_art(i);
     rect_t   r  = geom_rect(g);
     size_t   n  = (size_t)r.w * r.h;
     uint8_t *us = (uint8_t *)(p->under + n), *ul = us + (n + 7) / 8;
     int foot_y = g->ty * TILE_SIZE;   // art above this overhangs: in front of the player
+    // A walk-in bed (BEDS): its frame blocks, its sheet is in front of the player while they're in it.
+    const uint16_t *sheet = g->bed ? item_get(g->what)->front.pixels : NULL;
+    int bed_head = g->bed ? bed_head_row(g) : 0, bed_foot = g->bed ? bed_foot_row(g) : 0;
     for (int row = 0; row < r.h; row++) {
         int y = r.y + row;
         for (int col = 0; col < r.w; col++) {
@@ -9505,6 +10293,10 @@ static void place_bake(int i)
                 if (c != FB_TRANSPARENT_COLOR) {
                     s_map_pixels[mi] = s_night_shown ? night_px(&s_night_lut, c) : c;
                     if (y < foot_y) bit_put(s_map_fgmask, mi, true);
+                    if (sheet) {
+                        if (ayy < bed_head || ayy >= bed_foot) bit_put(s_map_hitbox, mi, true);
+                        if (p->front_on && sheet[ayy * g->aw + axx] != FB_TRANSPARENT_COLOR) bit_put(s_map_fgmask, mi, true);
+                    }
                 }
             }
             if (geom_tile_solid(g, x / TILE_SIZE, y / TILE_SIZE)) bit_put(s_map_hitbox, mi, true);
@@ -9512,6 +10304,7 @@ static void place_bake(int i)
     }
     shelf_bake_stock(i);
     aqua_bake_fish(i);
+    if (g->kind == PLACE_BUILDING) house_bake_door(i);
     p->baked = true;
 }
 
@@ -9534,18 +10327,101 @@ static void place_unbake(int i, bool pixels)
     p->baked = false;
 }
 
+// The order placed things are baked in (into order[], returns how many):
+// everything else first (none of it overlaps anything), then the fences,
+// gates and pipes, the top row first — a lower one's top overhangs the one
+// above it. Unbaking goes the other way round.
+static int place_bake_order(int16_t *order)
+{
+    int n = 0;
+    for (int i = 0; i < PLACE_MAX; i++)
+        if (s_place[i].g.kind != PLACE_NONE && !link_group(&s_place[i].g)) order[n++] = (int16_t)i;
+    int first = n;
+    for (int i = 0; i < PLACE_MAX; i++) {
+        const place_geom_t *g = &s_place[i].g;
+        if (g->kind == PLACE_NONE || !link_group(g)) continue;
+        int k = n++;
+        while (k > first) {
+            const place_geom_t *o = &s_place[order[k - 1]].g;
+            if (o->ty < g->ty || (o->ty == g->ty && o->tx < g->tx)) break;
+            order[k] = order[k - 1];
+            k--;
+        }
+        order[k] = (int16_t)i;
+    }
+    return n;
+}
+
 // Bakes every placed thing that isn't (a map loading: mapsave_show(); a night stage). Screen untouched.
 static void place_bake_unbaked(void)
 {
-    for (int i = 0; i < PLACE_MAX; i++)
-        if (s_place[i].g.kind != PLACE_NONE && !s_place[i].baked) place_bake(i);
+    static int16_t order[PLACE_MAX];
+    int n = place_bake_order(order);
+    for (int k = 0; k < n; k++)
+        if (!s_place[order[k]].baked) place_bake(order[k]);
 }
 
 // A night stage replaced the map pixels: their art went with them, so only put the masks back.
 static void place_unbake_masks(void)
 {
-    for (int i = 0; i < PLACE_MAX; i++)
-        if (s_place[i].g.kind != PLACE_NONE) place_unbake(i, false);
+    static int16_t order[PLACE_MAX];
+    for (int k = place_bake_order(order) - 1; k >= 0; k--) place_unbake(order[k], false);
+}
+
+static uint8_t s_link_was[PLACE_MAX];   // place_links_lift(): each piece's look as it was baked (255 = it wasn't)
+
+// Every fence, gate and pipe off the map (the other way round from how
+// they're baked: their tops overlap), so something under their tops — a
+// building's wall — can be baked again, or they can change. place_links_lay() puts them back.
+static void place_links_lift(void)
+{
+    static int16_t order[PLACE_MAX];
+    int n = place_bake_order(order);
+    memset(s_link_was, 255, sizeof(s_link_was));
+    for (int k = n - 1; k >= 0 && link_group(&s_place[order[k]].g); k--) {
+        placed_t *p = &s_place[order[k]];
+        if (p->baked) s_link_was[order[k]] = p->look;
+        place_unbake(order[k], true);
+    }
+}
+
+// ...back on, top row first, each with the look its neighbours give it now
+// (and a gate's open or shut); the ones whose look changed are repainted.
+static void place_links_lay(void)
+{
+    static int16_t order[PLACE_MAX];
+    int n = place_bake_order(order);
+    for (int k = 0; k < n; k++) {
+        int i = order[k];
+        if (!link_group(&s_place[i].g) || s_place[i].baked) continue;
+        place_bake(i);
+        if (s_place[i].look == s_link_was[i]) continue;
+        rect_t r = geom_rect(&s_place[i].g);
+        map_repaint_rect(r.x, r.y, r.w, r.h, NULL);
+    }
+}
+
+// Every fence, gate and pipe off the map and back on, joined up as they are
+// now. drop >= 0: that one is taken away meanwhile (its slot freed — the caller repaints where it was).
+static void place_links_rebake(int drop)
+{
+    place_links_lift();
+    if (drop >= 0) {
+        heap_caps_free(s_place[drop].under);
+        memset(&s_place[drop], 0, sizeof(s_place[drop]));
+    }
+    place_links_lay();
+}
+
+// Does a fence, gate or pipe's art reach into rect r (a building's: a fence's top over its wall)?
+static bool place_links_over(rect_t r)
+{
+    for (int i = 0; i < PLACE_MAX; i++) {
+        if (!link_group(&s_place[i].g)) continue;
+        rect_t o = geom_rect(&s_place[i].g);
+        if (anim_rects_overlap(r.x, r.y, r.w, r.h, o.x, o.y, o.w, o.h)) return true;
+    }
+    return false;
 }
 
 // A new map is replacing the old one (and its pixels): forget what was placed on it (it's in its save).
@@ -9553,6 +10429,7 @@ static void place_clear(void)
 {
     for (int i = 0; i < PLACE_MAX; i++) heap_caps_free(s_place[i].under);
     memset(s_place, 0, sizeof(s_place));
+    s_bed_asked = -2;   // (arriving in a bed doesn't ask)
 }
 
 // A new slot for g (not baked yet). -1 = no room, or out of PSRAM.
@@ -9563,7 +10440,7 @@ static int place_add(const place_geom_t *g, uint16_t inst)
     if (i == PLACE_MAX) return -1;
     uint16_t *under = heap_caps_malloc(place_under_bytes(g), MALLOC_CAP_SPIRAM);
     if (!under) { ESP_LOGE(TAG, "place: out of PSRAM"); return -1; }
-    s_place[i] = (placed_t){ .g = *g, .inst = inst, .baked = false, .under = under };
+    s_place[i] = (placed_t){ .g = *g, .inst = inst, .baked = false, .under = under, .sprayed_day = -1 };
     memset(s_aqua[i], 0, sizeof(s_aqua[i]));   // an aquarium starts empty
     return i;
 }
@@ -9703,6 +10580,10 @@ static void place_write_props(FILE *f, char *line, size_t n)
         snprintf(line, n, "prop %s at tile %d %d\n", item_get(g->what)->id, g->tx, g->ty);
         fputs(line, f);
         const placed_t *pm = &s_place[i];
+        if (pm->open && geom_is_gate(g)) {   // a gate left open (FENCES)
+            snprintf(line, n, "gate at tile %d %d open\n", g->tx, g->ty);
+            fputs(line, f);
+        }
         if (pm->mk_count && pm->mk_item < item_count) {   // a machine at work, or ready (MACHINES)
             snprintf(line, n, "machine at tile %d %d item %s count %d quality %d done %ld\n", g->tx, g->ty,
                      item_get(pm->mk_item)->id, pm->mk_count, pm->mk_quality, (long)pm->mk_done);
@@ -9730,7 +10611,7 @@ static bool place_restore_stock(const int *v, const char *id, bool photo)
     placed_t *p = NULL;
     for (int i = 0; i < PLACE_MAX && !p; i++)
         if (s_place[i].g.kind == PLACE_PROP && s_place[i].g.tx == v[0] && s_place[i].g.ty == v[1]) p = &s_place[i];
-    uint8_t item = photo ? item_find_photo((uint32_t)strtoul(id, NULL, 16)) : item_find(id);
+    item_id_t item = photo ? item_find_photo((uint32_t)strtoul(id, NULL, 16)) : item_find(id);
     if (!p || v[2] < 0 || v[2] >= place_slots(&p->g) || p->shelf[v[2]].count) {
         ESP_LOGW(TAG, "save: no shelf slot %d at tile (%d,%d) for its stock — skipped", v[2], v[0], v[1]);
         return false;
@@ -9761,13 +10642,18 @@ static int place_props_count(void)
 // A "prop" line. false = skipped (logged). Baked by mapsave_show().
 static bool place_restore_prop(const char *id, int tx, int ty)
 {
-    uint8_t item = item_find(id);
+    item_id_t item = item_find(id);
     if (item == ITEM_NONE || place_item_kind(item) != PLACE_PROP) {
         ESP_LOGW(TAG, "save: prop \"%s\" isn't a prop in this build — skipped", id);
         return false;
     }
     place_geom_t g;
     const char *why = "";
+    // A bed saved before beds got taller (2 tiles): its new art reaches further down — keep its foot where it was.
+    if (tile_on_map(tx, ty) && place_geom(PLACE_PROP, item, tx, ty, &g) && g.bed && !place_ok(&g, false, NULL)) {
+        place_geom_t up;
+        if (ty - (g.fh - 2) >= 0 && place_geom(PLACE_PROP, item, tx, ty - (g.fh - 2), &up) && place_ok(&up, false, NULL)) ty = up.ty;
+    }
     if (!tile_on_map(tx, ty) || !place_geom(PLACE_PROP, item, tx, ty, &g) || !place_ok(&g, false, &why)) {
         ESP_LOGW(TAG, "save: the %s at tile (%d,%d) doesn't fit there any more (%s) — skipped", id, tx, ty, why);
         return false;
@@ -9793,11 +10679,21 @@ static void place_put(const place_geom_t *g)
     inv_slot_t *s = &s_inv[s_inv_held];
     if (--s->count == 0) *s = (inv_slot_t){ ITEM_NONE, 0, QUALITY_STANDARD };
     hud_refresh();
-    place_bake(i);
+    if (link_group(g)) {                   // a fence, gate or pipe: it and its neighbours join up (FENCES)
+        place_links_rebake(-1);
+    } else if (g->kind == PLACE_BUILDING && place_links_over(geom_rect(g))) {   // behind a fence: the fence stays in front
+        place_links_lift();
+        place_bake(i);
+        place_links_lay();
+    } else {
+        place_bake(i);
+    }
     place_repaint(g);
     if (g->kind == PLACE_PROP) {
+        if (link_group(g) == 2) { place_rebake_piped(g->tx, g->ty); farm_pipes_changed(); }   // a pipe may join a barn to a silo now (FARM): it runs up to the wall
         mapsave_mark_dirty();
         message(1500, "Placed %s", place_name(g));
+        pot_placed(i);                     // a crab pot that needs no bait starts fishing (CRAB POTS)
         return;
     }
     s_brec_next++;
@@ -9808,6 +10704,10 @@ static void place_put(const place_geom_t *g)
     buildings_save();
     world_save();                          // the bag lost the building's item: keep the two in step
     message(2500, "Built %s!", place_name(g));
+    if (building_is_farm(g)) {             // a barn, coop or silo (FARM): pipes next to it join it
+        place_links_rebake(-1);
+        farm_pipes_changed();
+    }
 }
 
 // Prop i back into the bag (a shelf only once it's empty).
@@ -9817,10 +10717,15 @@ static void place_pick_up(int i)
     if (s_place[i].mk_count) { message(2000, "Take what's in the %s out first", place_name(&g)); return; }   // (MACHINES)
     if (!shelf_empty(&s_place[i])) { message(2000, aqua_slots(&g) ? "Take the fish out of the %s first" : "Take everything off the %s first", place_name(&g)); return; }
     if (inv_add(g.what, 1) != 0) { message(2000, "No room in your bag"); return; }
-    place_unbake(i, true);
-    heap_caps_free(s_place[i].under);
-    memset(&s_place[i], 0, sizeof(s_place[i]));
+    if (link_group(&g)) {                  // a fence, gate or pipe: its neighbours join up without it (FENCES)
+        place_links_rebake(i);
+    } else {
+        place_unbake(i, true);
+        heap_caps_free(s_place[i].under);
+        memset(&s_place[i], 0, sizeof(s_place[i]));
+    }
     place_repaint(&g);
+    if (link_group(&g) == 2) { place_rebake_piped(g.tx, g.ty); farm_pipes_changed(); }   // (FARM: its end at the wall goes too)
     hud_refresh();
     mapsave_mark_dirty();
     market_list_dirty();
@@ -9833,7 +10738,7 @@ static void aqua_on_action(int i)
 {
     placed_t *p = &s_place[i];
     int n = aqua_slots(&p->g);
-    uint8_t held = inv_held_item();
+    item_id_t held = inv_held_item();
     if (held != ITEM_NONE) {
         if (!aqua_is_fish(held)) { message(2000, "Hold a fish to put it in the %s", place_name(&p->g)); return; }
         int k = 0;
@@ -9863,6 +10768,42 @@ static void aqua_on_action(int i)
     hud_refresh();
     mapsave_mark_dirty();
     message(1500, "Took the %s out", item_name(s.item));
+}
+
+// ---- FENCES: gates (fences.h — see the section comment for how pieces join) ----
+
+// Gate s_place[i] was tapped holding something: it opens, or shuts (if nobody's standing in it).
+static void gate_toggle(int i)
+{
+    placed_t   *p    = &s_place[i];
+    const char *name = place_name(&p->g);
+    if (p->open) {
+        int fy = s_player_y + PLAYER_H - PLAYER_FEET_H;
+        if (anim_rects_overlap(p->g.tx * TILE_SIZE, p->g.ty * TILE_SIZE, TILE_SIZE, TILE_SIZE, s_player_x, fy, PLAYER_W, PLAYER_FEET_H)) {
+            message(1500, "You're standing in the %s", name);
+            return;
+        }
+        if (ra_at(p->g.tx, p->g.ty) >= 0) { message(1500, "An animal is in the way"); return; }
+    }
+    p->open    = !p->open;
+    p->g.solid = !p->open;                 // open: walked through, by the player and the animals
+    place_links_rebake(-1);                // its open look, and its collision
+    mapsave_mark_dirty();
+    message(1500, p->open ? "Opened the %s" : "Shut the %s", name);
+}
+
+// A "gate at tile <x> <y> open" line (after its prop line). false = skipped (logged). Baked by mapsave_show().
+static bool place_restore_gate(int tx, int ty)
+{
+    for (int i = 0; i < PLACE_MAX; i++) {
+        placed_t *p = &s_place[i];
+        if (!geom_is_gate(&p->g) || p->g.tx != tx || p->g.ty != ty) continue;
+        p->open    = true;
+        p->g.solid = false;
+        return true;
+    }
+    ESP_LOGW(TAG, "save: no gate at tile (%d,%d) to leave open — skipped", tx, ty);
+    return false;
 }
 
 // ---- MACHINES: put something in, take something else out days later ----
@@ -9961,7 +10902,7 @@ static void machine_paint_rect(int x, int y, int w, int h)
 }
 
 // Machine s_place[i] now makes `count` of item (0 = nothing), ready at game minute `done`: its art and icon follow.
-static void machine_set(int i, uint8_t item, int count, uint8_t quality, int32_t done)
+static void machine_set(int i, item_id_t item, int count, uint8_t quality, int32_t done)
 {
     placed_t *p = &s_place[i];
     bool was_shown = p->mk_ready_shown;
@@ -10005,7 +10946,7 @@ static void machine_on_action(int i)
             message(2500, "%s: %s ready in %s", name, item_name(p->mk_item), t);
             return;
         }
-        uint8_t item = p->mk_item, q = p->mk_quality;
+        item_id_t item = p->mk_item; uint8_t q = p->mk_quality;
         int n = p->mk_count, spill = inv_add_q(item, q, n);
         if (spill == n) { message(2000, "No room for %s", item_name(item)); return; }
         if (spill > 0 && !ground_drop(item, q, spill)) ESP_LOGW(TAG, "machine: %d x %s didn't fit anywhere — lost", spill, item_name(item));
@@ -10017,7 +10958,7 @@ static void machine_on_action(int i)
         else       message(2500, "Got %s%s%s!", q != QUALITY_STANDARD ? ql : "", q != QUALITY_STANDARD ? " " : "", item_name(item));
         return;
     }
-    uint8_t held = inv_held_item();
+    item_id_t held = inv_held_item();
     const machine_recipe_t *r = NULL;
     for (int k = 0; held != ITEM_NONE && held < item_count && k < m->recipe_count && !r; k++)
         if (strcmp(item_get(held)->id, m->recipes[k].input) == 0) r = &m->recipes[k];
@@ -10027,7 +10968,7 @@ static void machine_on_action(int i)
         for (int k = 0; k < m->recipe_count; k++) {   // what it does take (each once)
             bool seen = false;
             for (int j = 0; j < k && !seen; j++) seen = strcmp(m->recipes[j].input, m->recipes[k].input) == 0;
-            uint8_t in = item_find(m->recipes[k].input);
+            item_id_t in = item_find(m->recipes[k].input);
             if (seen || in == ITEM_NONE) continue;
             snprintf(list + strlen(list), sizeof(list) - strlen(list), "%s%s", list[0] ? ", " : "", item_name(in));
         }
@@ -10037,7 +10978,7 @@ static void machine_on_action(int i)
     int need = r->in_count ? r->in_count : 1, have = 0;
     for (int k = 0; k < INV_SLOTS; k++) if (s_inv[k].count && s_inv[k].item == held) have += s_inv[k].count;
     if (have < need) { message(2000, "The %s needs %d %s", name, need, item_name(held)); return; }
-    uint8_t out = item_find(r->output);
+    item_id_t out = item_find(r->output);
     if (out == ITEM_NONE) { message(2000, "It makes \"%s\", which isn't in this game", r->output); return; }
     for (int k = -1, left = need; k < INV_SLOTS && left > 0; k++) {   // the held stack first, then the rest of the bag
         inv_slot_t *s = &s_inv[k < 0 ? s_inv_held : k];
@@ -10083,8 +11024,9 @@ static bool place_restore_machine(const int *v, const char *id)
 {
     placed_t *p = NULL;
     for (int i = 0; i < PLACE_MAX && !p; i++)
-        if (s_place[i].g.kind == PLACE_PROP && s_place[i].g.tx == v[0] && s_place[i].g.ty == v[1] && machine_of(&s_place[i].g) >= 0) p = &s_place[i];
-    uint8_t item = item_find(id);
+        if (s_place[i].g.kind == PLACE_PROP && s_place[i].g.tx == v[0] && s_place[i].g.ty == v[1] &&
+            (machine_of(&s_place[i].g) >= 0 || pot_of(&s_place[i].g))) p = &s_place[i];   // (a crab pot's catch: CRAB POTS)
+    item_id_t item = item_find(id);
     if (!p || item == ITEM_NONE) {
         ESP_LOGW(TAG, "save: no machine at tile (%d,%d) for its %s (or it isn't an item in this build) — skipped", v[0], v[1], id);
         return false;
@@ -10117,7 +11059,8 @@ static int place_tap_target(int gx, int gy)
     }
     int i = place_at_tile(gx, gy);
     if (i >= 0 && s_place[i].g.kind == PLACE_PROP &&
-        (place_slots(&s_place[i].g) || place_is_bed(&s_place[i].g) || machine_of(&s_place[i].g) >= 0 || inv_held_item() == ITEM_NONE)) return 2;
+        (place_slots(&s_place[i].g) || place_is_bed(&s_place[i].g) || machine_of(&s_place[i].g) >= 0 || geom_is_gate(&s_place[i].g) ||
+         pot_of(&s_place[i].g) || inv_held_item() == ITEM_NONE)) return 2;
     return 0;
 }
 
@@ -10132,7 +11075,7 @@ static bool place_on_action(void)
     if (!s_map_loaded) return false;
     if (s_place_pend) {
         s_place_pend = false;
-        uint8_t held = inv_held_item();
+        item_id_t held = inv_held_item();
         int     kind = place_item_kind(held);
         int     what = kind == PLACE_PROP ? held : building_of_item(held);
         if (kind == s_place_pend_g.kind && what == s_place_pend_g.what) place_put(&s_place_pend_g);   // still holding it
@@ -10144,6 +11087,8 @@ static bool place_on_action(void)
         if (shelf_slots(&s_place[i].g))        shelf_open(i);   // stock it, price it (its PICK UP button takes it when empty)
         else if (aqua_slots(&s_place[i].g))    aqua_on_action(i);   // a fish in, or out (picked up when empty)
         else if (machine_of(&s_place[i].g) >= 0) machine_on_action(i);   // take what's ready, or put something in (MACHINES)
+        else if (pot_of(&s_place[i].g))        pot_on_action(i);   // the catch, bait, or pick it up (CRAB POTS)
+        else if (geom_is_gate(&s_place[i].g) && inv_held_item() != ITEM_NONE) gate_toggle(i);   // open / shut it (FENCES)
         else if (place_is_bed(&s_place[i].g))  sleep_open(i);   // sleep (its PICK UP button takes it)
         else if (inv_held_item() != ITEM_NONE) message(2000, "Empty your hands to pick up %s", place_name(&s_place[i].g));
         else                                   place_pick_up(i);
@@ -10151,12 +11096,112 @@ static bool place_on_action(void)
     return true;   // a building: nothing to do to its walls (its door is walked into)
 }
 
+// ---- BEDS: beds walked into, Stardew style ----
+// A bed prop with a front layer (items.h ITEM_ATTR_BED, item_asset_t.front)
+// stands on a footprint as big as its art, which isn't solid: only its frame
+// is, as collision pixels (place_bake()) — the headboard down to
+// bed_head_row(), the footboard from bed_foot_row(). The player gets in from
+// either side, onto the tile row between them (the footprint's second-to-last
+// row), and slides to its middle. The sheet (the front layer) is foreground
+// while the player's feet are above the footboard's floor line — in the bed,
+// or behind it — and plain map art once they're in front of the bed, so
+// walking past its foot never goes under it. Lying in it asks "Go to bed?"
+// once (SLEEP); a tap on the bed walks into it, or asks again from in it.
+
+// Turns s_place[i]'s sheet into foreground or back into plain art (the bits
+// it covered come back). Screen untouched: the caller redraws the player.
+static void bed_front_set(int i, bool on)
+{
+    placed_t *p = &s_place[i];
+    p->front_on = on;
+    if (!p->baked) return;
+    const place_geom_t *g     = &p->g;
+    const uint16_t     *art   = item_get(g->what)->passive.pixels;
+    const uint16_t     *sheet = item_get(g->what)->front.pixels;
+    rect_t r = geom_rect(g);
+    size_t n = (size_t)r.w * r.h;
+    const uint8_t *ul = (const uint8_t *)(p->under + n) + (n + 7) / 8;
+    for (int ayy = 0; ayy < g->ah; ayy++) {
+        int y = g->ay + ayy;
+        for (int axx = 0; axx < g->aw; axx++) {
+            int a = ayy * g->aw + axx;
+            if (art[a] == FB_TRANSPARENT_COLOR || sheet[a] == FB_TRANSPARENT_COLOR) continue;
+            int x = g->ax + axx;
+            bit_put(s_map_fgmask, y * s_map_w + x, on || bit_get(ul, (y - r.y) * r.w + (x - r.x)));
+        }
+    }
+}
+
+// update_player(), after a move: each bed's sheet in front of the player or
+// not, by where their feet are. true = one changed where the player is drawn.
+static bool bed_fronts_update(void)
+{
+    int  feet = s_player_y + PLAYER_H;
+    bool over = false;
+    for (int i = 0; i < PLACE_MAX; i++) {
+        placed_t *p = &s_place[i];
+        if (p->g.kind != PLACE_PROP || !p->g.bed || !p->baked) continue;
+        bool on = feet <= p->g.ay + bed_foot_row(&p->g);
+        if (on == p->front_on) continue;
+        bed_front_set(i, on);
+        if (s_player_bg_valid && anim_rects_overlap(p->g.ax, p->g.ay, p->g.aw, p->g.ah, s_player_bg_rect.x, s_player_bg_rect.y,
+                                                    s_player_bg_rect.w, s_player_bg_rect.h)) over = true;
+    }
+    return over;
+}
+
+// The walk-in bed the player is lying in (feet between its headboard and
+// footboard, their middle over it), or -1. *settle_x (optional) = where they
+// end up: in its middle.
+static int bed_player_in(int *settle_x)
+{
+    if (!s_map_loaded) return -1;
+    int feet = s_player_y + PLAYER_H, cx = s_player_x + PLAYER_W / 2;
+    for (int i = 0; i < PLACE_MAX; i++) {
+        const place_geom_t *g = &s_place[i].g;
+        if (g->kind != PLACE_PROP || !g->bed || !s_place[i].baked) continue;
+        if (cx < g->ax || cx >= g->ax + g->aw) continue;
+        if (feet - PLAYER_FEET_H < g->ay + bed_head_row(g) || feet > g->ay + bed_foot_row(g)) continue;
+        if (settle_x) *settle_x = g->ax + (g->aw - PLAYER_W) / 2;
+        return i;
+    }
+    return -1;
+}
+
+// update_player(), at the end: lying still in the middle of a bed asks "Go to
+// bed?" — once until they get out (or tap it). -2 = don't ask until they're
+// out of it (a map just loaded with the player in bed). walking = on a tap-to-walk.
+static void bed_after_move(bool walking)
+{
+    int sx, i = bed_player_in(&sx);
+    if (i < 0) { s_bed_asked = -1; return; }
+    if (s_bed_asked != -1 || walking || s_player_x != sx) return;
+    s_bed_asked = i;
+    s_player_facing = DIR_DOWN;
+    sleep_open(i);
+}
+
+// TAP-TO-WALK: a tap on tile (gx,gy) hit placed thing i. If it's a walk-in
+// bed: true, and *bx,*by = the tile to walk to in it (the player then
+// settles in the middle and is asked). Already in it: asks straight away
+// (*bx = -1).
+static bool bed_tap_target(int i, int *bx, int *by)
+{
+    if (i < 0 || s_place[i].g.kind != PLACE_PROP || !s_place[i].g.bed) return false;
+    const place_geom_t *g = &s_place[i].g;
+    if (bed_player_in(NULL) == i) { *bx = -1; return true; }
+    *bx = g->tx + (g->fw - 1) / 2;
+    *by = (g->ay + bed_foot_row(g) - 1) / TILE_SIZE;
+    s_bed_asked = -1;   // ask on arrival, even when it was asked before
+    return true;
+}
+
 // ---- the hologram ----
 // Where the held item would go now: the pending tap's spot, else reaching
 // away from the player from the faced tile, centred across it. false = none.
 static bool place_holo_target(place_geom_t *out)
 {
-    uint8_t held = inv_held_item();
+    item_id_t held = inv_held_item();
     int     kind = place_item_kind(held);
     if (!s_map_loaded || kind == PLACE_NONE) { s_place_pend = false; return false; }
     int what = kind == PLACE_PROP ? held : building_of_item(held);
@@ -10174,12 +11219,14 @@ static bool place_holo_target(place_geom_t *out)
     return place_geom(kind, what, fx, fy, out);
 }
 
+static void farm_range_repaint(const place_geom_t *g);   // SPRINKLERS + SCARECROWS: the square a held one would cover
+
 // map_repaint_rect() overlay: the hologram, over the map pixels just restored.
 static void place_holo_paint(void)
 {
     static const uint8_t k_pulse[] = { 130, 150, 170, 185, 170, 150 };
     const place_geom_t *g   = &s_holo;
-    const uint16_t     *art = place_art(g);
+    const uint16_t     *art = link_group(g) ? link_look_art(g, link_look(g, false)) : place_art(g);   // a fence: joined up as it would be
     uint16_t tint  = s_holo_ok ? COLOR_RGB565(90, 255, 150) : COLOR_RGB565(255, 80, 80);
     uint8_t  alpha = k_pulse[(unsigned)s_holo_frame % sizeof(k_pulse)];
     for (int row = 0; row < g->ah; row++) {
@@ -10227,6 +11274,7 @@ static void place_holo_tick(void)
     if (s_holo_shown && !same) {           // moved, or not wanted: take the old one off
         s_holo_shown = false;
         place_repaint(&s_holo);
+        farm_range_repaint(&s_holo);       // (a sprinkler's or scarecrow's square with it — SPRINKLERS + SCARECROWS)
     }
     if (!want) return;
     s_holo       = g;
@@ -10235,6 +11283,7 @@ static void place_holo_tick(void)
     s_holo_shown = true;
     rect_t r = geom_rect(&g);
     map_repaint_rect(r.x, r.y, r.w, r.h, place_holo_paint);
+    if (!same) farm_range_repaint(&g);     // its square: drawn by farmfx_paint_rect(), it doesn't pulse
 }
 
 // ---- going in and out of buildings (tp_travel()) ----
@@ -10295,6 +11344,377 @@ static bool place_go_out(void)
     if (t.dest_ty >= TILE_ROWS) t.dest_ty = TILE_ROWS - 1;
     tp_place_player(&t);
     return true;
+}
+
+// ============================================================
+//  SPRINKLERS + SCARECROWS — farm props (PLACEMENT: items with "sprinkler N"
+//  or "scarecrow N" — items.h), and the crows the scarecrows keep off.
+//
+//  Every game day's MORNING is 6:00 (FARM_MORNING_MIN), played once on each
+//  map with a farm — farm_morning(). s_morning_day (FARMING) is the last day
+//  it was played on the loaded map, saved as "morning day <d>" (MAP SAVES).
+//   - Sprinklers water every bit of farmland within N tiles of their
+//     footprint — the (2N+1)x(2N+1) square around a one-tile sprinkler:
+//     bronze 1 (3x3), silver 2 (5x5), gold 3 (7x7), emerald 4 (9x9). (Their
+//     own tile is never farmland: props keep off it.) Then each one that
+//     watered this morning (placed_t.sprayed_day — not one put down after
+//     6:00) sprays until 7:00 (SPRINKLE_END_MIN): drops arc out from its
+//     nozzle to the tiles around it and splash there. WEATHER draws them
+//     with the rain (spray_move()), last in the frame.
+//   - Crows: each crop no scarecrow guards is eaten CROW_PCT % of the time —
+//     gone, its farmland left. A scarecrow guards every tile within N of it
+//     (7: the 15x15 square). On the map on screen a crow is then waiting on
+//     the tile where the crop was, pecking, until the player comes within
+//     CROW_SPOOK_TILES of it (or it's noon): it caws (sfx "crow" —
+//     sounds/sound effects/crow.wav on the card) and flies off, away from
+//     the player, off the screen. Only outdoors (where it can rain:
+//     map_gets_rain()), never inside a building.
+//  A morning the loaded map wasn't on screen for is played by
+//  farm_catch_up() with its day: the crows come (nobody sees them) and the
+//  sprinklers' squares count as watered that day. Today's, if the map loads
+//  after 6:00 without it, plays as it loads (mapsave_load()): the crows are
+//  there, waiting. A sprinkler's water counts from 6:00 for a Wet harvest (FARMING).
+//
+//  Holding a sprinkler or a scarecrow shows its square around the hologram
+//  as a dashed outline (farmfx_paint_rect(), with the crows).
+//  Crow art: assets/crow_sheet.png — 32x32 frames side by side, facing left
+//  (mirrored to face right): CROW_SIT_FRAMES on the ground, then
+//  CROW_FLY_FRAMES flying. Crows are drawn over the map like the animals:
+//  behind foreground scenery on the ground, over everything flying.
+// ============================================================
+#define SPRINKLER_RANGE_MAX 6
+#define SCARECROW_RANGE_MAX 15
+#define CROW_MAX            12          // crows on screen at once (more crops eaten: the rest just aren't seen)
+#define CROW_SPOOK_TILES    3           // the player this close (tiles, any way) scares one off...
+#define CROW_SIT_MIN_MS     1500        // ...once it's been on screen this long
+#define CROW_LEAVE_MIN      (12 * 60)   // one nobody came near flies off at noon
+#define CROW_SIT_MS         150         // a frame of its pecking...
+#define CROW_FLAP_MS        70          // ...and of its flapping
+#define CROW_FLY_PX_S       150
+#define CROW_SIT_FRAMES     6
+#define CROW_FLY_FRAMES     5
+#define CROW_PX             32
+#define RANGE_COL_SPRINKLER COLOR_RGB565(120, 200, 255)
+#define RANGE_COL_SCARECROW COLOR_RGB565(255, 205, 90)
+_Static_assert(CROW_SHEET_W == (CROW_SIT_FRAMES + CROW_FLY_FRAMES) * CROW_PX && CROW_SHEET_H == CROW_PX,
+               "assets/crow_sheet.png must be 11 frames of 32x32 side by side: 6 on the ground, then 5 flying");
+
+static bool map_gets_rain(void);        // WEATHER section
+static void spray_clear(void);          // ...the sprinklers' drops in the air
+static void npc_dirty_add(rect_t r);    // MARKET: repainted at the end of the frame (market_tick())
+
+typedef struct {
+    bool     used, flying, flip;   // flip: facing right (the art faces left)
+    float    x, y;                 // the frame's top-left, px
+    float    vx, vy;               // flying: px/s
+    uint32_t t0;                   // ms: when it was first on screen / took off
+    uint16_t phase;                // ms into its pecking it starts (so they don't all peck together)
+    int8_t   frame;                // the sheet frame drawn (-1 = not on screen yet)
+    rect_t   drawn;                // where it's drawn (w 0 = nowhere)
+} crow_t;
+
+static crow_t   s_crows[CROW_MAX];
+static uint32_t s_crow_ms;                  // crow_tick()'s last step
+static int8_t   s_crow_ate[FARM_MAX][2];    // tiles crows_eat() took crops from, for crows_ate_repaint()
+static int      s_crow_ate_n;
+
+// The pecking: frames (of the ones on the ground) one after another, CROW_SIT_MS each.
+static const uint8_t k_crow_sit[] = { 0, 0, 0, 0, 0, 1, 1, 0, 0, 2, 3, 4, 3, 4, 2, 0, 0, 0, 5, 5, 5, 0 };
+
+// ---- what they reach ----
+static int place_prop_range(const place_geom_t *g, const char *attr, int max)
+{
+    if (g->kind != PLACE_PROP) return 0;
+    int n = (int)item_attr(g->what, attr, 0);
+    return n < 0 ? 0 : n > max ? max : n;
+}
+static int sprinkler_range(const place_geom_t *g) { return place_prop_range(g, ITEM_ATTR_SPRINKLER, SPRINKLER_RANGE_MAX); }
+static int scarecrow_range(const place_geom_t *g) { return place_prop_range(g, ITEM_ATTR_SCARECROW, SCARECROW_RANGE_MAX); }
+
+// The square r tiles out all round from g's footprint, in px.
+static rect_t farm_range_rect(const place_geom_t *g, int r)
+{
+    return (rect_t){ (g->tx - r) * TILE_SIZE, (g->ty - r) * TILE_SIZE, (g->fw + 2 * r) * TILE_SIZE, (g->fh + 2 * r) * TILE_SIZE };
+}
+
+// s_sprinkled / s_scared (FARMING): the tiles a sprinkler waters and a scarecrow guards, from what's placed now.
+static void farm_guards_update(void)
+{
+    memset(s_sprinkled, 0, sizeof(s_sprinkled));
+    memset(s_scared, 0, sizeof(s_scared));
+    for (int i = 0; i < PLACE_MAX; i++) {
+        const place_geom_t *g = &s_place[i].g;
+        int rs = sprinkler_range(g), rc = scarecrow_range(g), r = rs > rc ? rs : rc;
+        if (!r) continue;
+        for (int ty = g->ty - r; ty < g->ty + g->fh + r; ty++)
+            for (int tx = g->tx - r; tx < g->tx + g->fw + r; tx++) {
+                if (!tile_on_map(tx, ty)) continue;
+                int dx = tx < g->tx ? g->tx - tx : tx >= g->tx + g->fw ? tx - (g->tx + g->fw - 1) : 0;
+                int dy = ty < g->ty ? g->ty - ty : ty >= g->ty + g->fh ? ty - (g->ty + g->fh - 1) : 0;
+                if (rs && dx <= rs && dy <= rs) s_sprinkled[ty][tx] = 1;
+                if (rc && dx <= rc && dy <= rc) s_scared[ty][tx] = 1;
+            }
+    }
+}
+
+static bool crows_come_here(void) { return map_gets_rain(); }   // outdoors
+
+// ---- the crows ----
+static void crow_clear(void)
+{
+    memset(s_crows, 0, sizeof(s_crows));
+    s_crow_ate_n = 0;
+    spray_clear();
+}
+
+// A crow lands on tile (tx,ty), where a crop was: its feet on the tile's
+// bottom, centred across it. crow_tick() puts it on screen.
+static void crow_land(int tx, int ty)
+{
+    for (int i = 0; i < CROW_MAX; i++) {
+        crow_t *c = &s_crows[i];
+        if (c->used) continue;
+        *c = (crow_t){ .used = true, .flip = (esp_random() & 1) != 0, .phase = (uint16_t)(esp_random() % 3000), .frame = -1,
+                       .x = (float)(tx * TILE_SIZE + TILE_SIZE / 2 - CROW_PX / 2), .y = (float)((ty + 1) * TILE_SIZE - CROW_PX) };
+        return;
+    }
+}
+
+// Every crop on the loaded map that no scarecrow guards (s_scared — call
+// farm_guards_update() first) is eaten pct % of the time: gone, its farmland
+// left. land: a crow waits on each tile. The caller unbakes / repaints
+// (crows_ate_repaint()). Returns how many.
+static int crows_eat(int pct, bool land)
+{
+    int n = 0;
+    for (int i = 0; i < FARM_MAX; i++) {
+        farm_plot_t *p = &s_farm[i];
+        if (!p->used || s_scared[p->ty][p->tx] || (int)(esp_random() % 100) >= pct) continue;
+        p->used = false;
+        n++;
+        if (s_crow_ate_n < FARM_MAX) {
+            s_crow_ate[s_crow_ate_n][0] = p->tx;
+            s_crow_ate[s_crow_ate_n][1] = p->ty;
+            s_crow_ate_n++;
+        }
+        if (land) crow_land(p->tx, p->ty);
+        ESP_LOGI(TAG, "farm: a crow ate the %s at tile (%d,%d) on %s", s_crops[p->crop]->id, p->tx, p->ty, current_map_name());
+    }
+    return n;
+}
+
+// Repaints where crows_eat() took crops (they're out of the map pixels already).
+static void crows_ate_repaint(void)
+{
+    for (int k = 0; k < s_crow_ate_n; k++) farm_repaint(s_crow_ate[k][0], s_crow_ate[k][1]);
+    s_crow_ate_n = 0;
+}
+
+static rect_t crow_rect(const crow_t *c) { return (rect_t){ (int)c->x, (int)c->y, CROW_PX, CROW_PX }; }
+
+// Puts crow c on screen as it is now and off where it was (gone: just off) — at the end of this frame.
+static void crow_show(crow_t *c, bool gone)
+{
+    rect_t now = crow_rect(c), r = gone ? c->drawn : c->drawn.w ? rect_union(c->drawn, now) : now;
+    c->drawn = gone ? (rect_t){ 0, 0, 0, 0 } : now;
+    r = rect_clip_screen(r);
+    if (r.w > 0 && r.h > 0) npc_dirty_add(r);
+}
+
+// Once per game frame (see update_input): the crows peck; one the player
+// comes near (or that's been there till noon) caws and flies off, away from
+// them; one off the screen is gone.
+static void crow_tick(void)
+{
+    uint32_t now = (uint32_t)(esp_timer_get_time() / 1000), el = now - s_crow_ms;
+    s_crow_ms = now;
+    if (!s_map_loaded) return;
+    float dt = el > 100 ? 0.1f : (float)el / 1000.0f;   // back from a screen: carry on, don't jump
+    int pcx = s_player_x + PLAYER_W / 2, ptx = pcx / TILE_SIZE, pty = (s_player_y + PLAYER_H - 1) / TILE_SIZE;
+    int minute = clock_minute_of_day();
+    bool cawed = false;
+    for (int i = 0; i < CROW_MAX; i++) {
+        crow_t *c = &s_crows[i];
+        if (!c->used) continue;
+        int cx = (int)c->x + CROW_PX / 2;
+        if (!c->flying && c->frame >= 0) {
+            int ctx = cx / TILE_SIZE, cty = ((int)c->y + CROW_PX - 1) / TILE_SIZE;
+            bool near = abs(ptx - ctx) <= CROW_SPOOK_TILES && abs(pty - cty) <= CROW_SPOOK_TILES;
+            bool late = minute >= CROW_LEAVE_MIN || minute < FARM_MORNING_MIN;   // (or the clock went back: Dev Tools)
+            if ((near || late) && now - c->t0 >= CROW_SIT_MIN_MS) {
+                c->flying = true;
+                c->t0     = now;
+                c->flip   = pcx < cx;                                    // away from the player
+                c->vx     = (c->flip ? 1.0f : -1.0f) * CROW_FLY_PX_S;
+                c->vy     = -0.55f * CROW_FLY_PX_S;
+                if (!cawed) sfx_play("crow");                            // (one caw for a flock)
+                cawed = true;
+            }
+        }
+        int frame;
+        if (c->flying) {
+            c->x += c->vx * dt;
+            c->y += c->vy * dt;
+            rect_t r = crow_rect(c);
+            if (r.x + r.w <= 0 || r.x >= LCD_H_RES || r.y + r.h <= 0) {   // off the screen: gone
+                crow_show(c, true);
+                c->used = false;
+                continue;
+            }
+            frame = CROW_SIT_FRAMES + (int)((now - c->t0) / CROW_FLAP_MS) % CROW_FLY_FRAMES;
+        } else {
+            if (c->frame < 0) c->t0 = now;   // first on screen now
+            frame = k_crow_sit[((now - c->t0 + c->phase) / CROW_SIT_MS) % sizeof(k_crow_sit)];
+        }
+        if (frame != c->frame || !c->drawn.w || (int)c->x != c->drawn.x || (int)c->y != c->drawn.y) {
+            c->frame = (int8_t)frame;
+            crow_show(c, false);
+        }
+    }
+}
+
+// Every crow that overlaps (x,y,w,h), over what's there (the map was just put back): see the section comment.
+static void crow_paint_rect(int x, int y, int w, int h)
+{
+    for (int i = 0; i < CROW_MAX; i++) {
+        const crow_t *c = &s_crows[i];
+        if (!c->used || c->frame < 0 || !c->drawn.w) continue;
+        rect_t r = c->drawn;
+        int x0 = r.x > x ? r.x : x, y0 = r.y > y ? r.y : y;
+        int x1 = r.x + r.w < x + w ? r.x + r.w : x + w, y1 = r.y + r.h < y + h ? r.y + r.h : y + h;
+        if (x0 < 0) x0 = 0;
+        if (y0 < 0) y0 = 0;
+        if (x1 > s_fb_w) x1 = s_fb_w;
+        if (y1 > s_fb_h) y1 = s_fb_h;
+        const uint16_t *px = crow_sheet + c->frame * CROW_PX;
+        for (int yy = y0; yy < y1; yy++)
+            for (int xx = x0; xx < x1; xx++) {
+                int sx = xx - r.x;
+                uint16_t v = px[(yy - r.y) * CROW_SHEET_W + (c->flip ? CROW_PX - 1 - sx : sx)];
+                if (v == FB_TRANSPARENT_COLOR || (!c->flying && map_pixel_layer(xx, yy))) continue;
+                s_fb[yy * s_fb_w + xx] = s_night_shown ? night_px(&s_night_lut, v) : v;
+            }
+    }
+}
+
+// ---- the morning ----
+// Plays today's morning on the loaded map if it hasn't been (and it's 6:00
+// or later): the crows come — crow_pct % of the crops no scarecrow guards
+// (CROW_PCT; never indoors) — and the sprinklers water their squares. baked:
+// the farmland and crops are in the map pixels (else mapsave_show() bakes
+// them later); repaint: and on screen. force (Dev link): play it again now,
+// whatever the time, indoors too. true = something changed.
+static bool farm_morning(bool baked, bool repaint, bool force, int crow_pct)
+{
+    int32_t today = (int32_t)clock_day();
+    if (!s_map_loaded) return false;
+    if (!force && (s_morning_day >= today || clock_minute_of_day() < FARM_MORNING_MIN)) return false;
+    s_morning_day = today;
+    farm_guards_update();
+    memcpy(s_soil_was, s_soil, sizeof(s_soil_was));
+    s_crow_ate_n = 0;
+    int eaten = (force || crows_come_here()) ? crows_eat(crow_pct, true) : 0;
+
+    int sprinklers = 0, watered = 0;
+    int32_t at = force ? farm_now_min() : today * FARM_DAY_MIN + FARM_MORNING_MIN;   // their water counts from 6:00 (Dev link: from now)
+    for (int i = 0; i < PLACE_MAX; i++)
+        if (sprinkler_range(&s_place[i].g)) { s_place[i].sprayed_day = today; sprinklers++; }
+    for (int ty = 0; sprinklers && ty < TILE_ROWS; ty++)
+        for (int tx = 0; tx < TILE_COLS; tx++) {
+            if (!s_sprinkled[ty][tx] || s_soil[ty][tx] == SOIL_NONE) continue;
+            s_soil_wet_at[ty][tx] = at;
+            if (s_soil[ty][tx] == SOIL_DRY) { s_soil[ty][tx] = SOIL_WATERED; watered++; }
+        }
+
+    if (baked && (eaten || watered)) {
+        soil_show_changes(repaint);   // the new farmland, every crop baked again (the eaten ones aren't)
+        if (repaint) crows_ate_repaint();
+    }
+    s_crow_ate_n = 0;
+    if (eaten || watered || sprinklers || farm_covers_any()) mapsave_mark_dirty();   // (the save keeps that today's morning is played)
+    if (eaten == 1) message(3000, "A crow got one of your crops!");
+    else if (eaten) message(3000, "Crows got %d of your crops!", eaten);
+    if (eaten || sprinklers)
+        ESP_LOGI(TAG, "farm: %s morning of day %ld: %d crop%s eaten by crows, %d sprinkler%s watered %d farmland",
+                 current_map_name(), (long)today, eaten, eaten == 1 ? "" : "s", sprinklers, sprinklers == 1 ? "" : "s", watered);
+    return eaten || watered;
+}
+
+// mapsave_load(): the map loaded between 6:00 and 7:00 with its morning
+// already played (it was here earlier): the sprinklers spray on, and their
+// water still counts from 6:00.
+static void sprinkler_resume(void)
+{
+    int32_t today = (int32_t)clock_day();
+    int     m     = clock_minute_of_day();
+    if (s_morning_day != today || m < FARM_MORNING_MIN || m >= SPRINKLE_END_MIN) return;
+    bool any = false;
+    for (int i = 0; i < PLACE_MAX; i++)
+        if (sprinkler_range(&s_place[i].g) && s_place[i].sprayed_day != today) { s_place[i].sprayed_day = today; any = true; }
+    if (!any) return;
+    farm_guards_update();
+    int32_t at = today * FARM_DAY_MIN + FARM_MORNING_MIN;
+    for (int ty = 0; ty < TILE_ROWS; ty++)
+        for (int tx = 0; tx < TILE_COLS; tx++)
+            if (s_sprinkled[ty][tx] && s_soil[ty][tx] != SOIL_NONE && s_soil_wet_at[ty][tx] < at) s_soil_wet_at[ty][tx] = at;
+}
+
+// ---- holding one: its square around the hologram ----
+// The square the held sprinkler or scarecrow would cover (the hologram's) and its colour. false = none.
+static bool holo_range(rect_t *out, uint16_t *col)
+{
+    if (!s_holo_shown) return false;
+    int r = sprinkler_range(&s_holo);
+    *col = RANGE_COL_SPRINKLER;
+    if (!r) { r = scarecrow_range(&s_holo); *col = RANGE_COL_SCARECROW; }
+    if (!r) return false;
+    *out = farm_range_rect(&s_holo, r);
+    return true;
+}
+
+// Its dashed outline (2 px on, 2 off), where it crosses (x,y,w,h).
+static void range_paint_rect(int x, int y, int w, int h)
+{
+    rect_t   R;
+    uint16_t col;
+    if (!holo_range(&R, &col) || !anim_rects_overlap(x, y, w, h, R.x, R.y, R.w, R.h)) return;
+    if (x > R.x && y > R.y && x + w < R.x + R.w && y + h < R.y + R.h) return;   // all inside it: no edge here
+    int x0 = x < 0 ? 0 : x, y0 = y < 0 ? 0 : y;
+    int x1 = x + w > s_fb_w ? s_fb_w : x + w, y1 = y + h > s_fb_h ? s_fb_h : y + h;
+    int bx = R.x + R.w - 1, by = R.y + R.h - 1;
+    for (int k = 0; k < R.w; k++) {
+        int px = R.x + k;
+        if ((k & 2) || px < x0 || px >= x1) continue;
+        if (R.y >= y0 && R.y < y1) s_fb[R.y * s_fb_w + px] = col;
+        if (by >= y0 && by < y1)   s_fb[by * s_fb_w + px] = col;
+    }
+    for (int k = 0; k < R.h; k++) {
+        int py = R.y + k;
+        if ((k & 2) || py < y0 || py >= y1) continue;
+        if (R.x >= x0 && R.x < x1) s_fb[py * s_fb_w + R.x] = col;
+        if (bx >= x0 && bx < x1)   s_fb[py * s_fb_w + bx] = col;
+    }
+}
+
+// Repaints where g's square's outline is (place_holo_tick(): the hologram moved, came or went).
+static void farm_range_repaint(const place_geom_t *g)
+{
+    int r = sprinkler_range(g);
+    if (!r) r = scarecrow_range(g);
+    if (!r) return;
+    rect_t R = farm_range_rect(g, r);
+    rect_t e[4] = { { R.x, R.y, R.w, 1 }, { R.x, R.y + R.h - 1, R.w, 1 }, { R.x, R.y, 1, R.h }, { R.x + R.w - 1, R.y, 1, R.h } };
+    for (int k = 0; k < 4; k++) {
+        rect_t s = rect_clip_screen(e[k]);
+        if (s.w > 0 && s.h > 0) map_repaint_rect(s.x, s.y, s.w, s.h, NULL);
+    }
+}
+
+// map_repaint_rect() and the full repaints: the crows, and a held sprinkler's or scarecrow's square.
+static void farmfx_paint_rect(int x, int y, int w, int h)
+{
+    crow_paint_rect(x, y, w, h);
+    range_paint_rect(x, y, w, h);
 }
 
 // ============================================================
@@ -10764,12 +12184,22 @@ static bool nav_plan(int tap_x, int tap_y)
     // The held prop's green hologram: walk next to its footprint and put it
     // down (1); a prop with empty hands: walk next to it and pick it up (2) — PLACEMENT.
     int  place_tap   = (!target_brk && !on_brk && !target_trig) ? place_tap_target(gx, gy) : 0;
+    // A walk-in bed: walk into it, onto the tile it's lain in (BEDS) — it asks once the player lies there.
+    int  bed_i = -1;
+    if (place_tap == 2) {
+        int i = place_at_tile(gx, gy), bx, by;
+        if (bed_tap_target(i, &bx, &by)) {
+            if (bx < 0) { sleep_open(i); return false; }   // already in it: ask again
+            bed_i = i; place_tap = 0; gx = bx; gy = by;
+        }
+    }
+    bool bed_walk = bed_i >= 0;
     // A farm animal (it stops and waits), or — holding an animal, grass starter or a scythe — ground
     // for it: walk next to that tile and press action there (ANIMALS). gx/gy become the animal's tile.
-    bool ranch_target = !target_brk && !on_brk && !target_trig && !place_tap && ranch_tap_target(tap_x, tap_y, &gx, &gy);
-    bool farm_target = !target_brk && !on_brk && !target_trig && !place_tap && (ranch_target || farm_tap_target(&gx, &gy));
+    bool ranch_target = !target_brk && !on_brk && !target_trig && !place_tap && !bed_walk && ranch_tap_target(tap_x, tap_y, &gx, &gy);
+    bool farm_target = !target_brk && !on_brk && !target_trig && !place_tap && !bed_walk && (ranch_target || farm_tap_target(&gx, &gy));
     // Water, with a fishing rod in hand: the shore spot whose water is nearest the tap, facing it (FISHING).
-    bool fish_target = !target_brk && !on_brk && !target_trig && !place_tap && !farm_target && fish_tap_target(gx, gy);
+    bool fish_target = !target_brk && !on_brk && !target_trig && !place_tap && !bed_walk && !farm_target && fish_tap_target(gx, gy);
     int  fish_goal = -1, fish_d2 = INT32_MAX;
     direction_t fish_face = DIR_CENTER;
     bool walk_onto = !target_brk && !target_trig && !farm_target && !place_tap && !fish_target && (s_nav_cls[gy][gx] & NAV_FEET_FREE);
@@ -10848,6 +12278,19 @@ static bool nav_plan(int tap_x, int tap_y)
     }
 
     if (fish_target && fish_goal >= 0) { goal = fish_goal; face = fish_face; }
+    if (bed_walk && goal < 0) {   // can't get into the bed (blocked both sides): next to it, asked from there
+        const place_geom_t *bg = &s_place[bed_i].g;
+        int bd = INT16_MAX;
+        for (int i = 0; i < TILE_ROWS * TILE_COLS; i++) {
+            int x = i % TILE_COLS, y = i / TILE_COLS;
+            if (prev[i] == -2 || geom_has_tile(bg, x, y)) continue;
+            for (int k = 0; k < 4; k++) {
+                if (dist[i] >= bd || !geom_has_tile(bg, x + k_dx[k], y + k_dy[k])) continue;
+                bd = dist[i]; goal = i; face = nav_delta_to_dir(k_dx[k], k_dy[k]);
+            }
+        }
+        if (goal >= 0) walk_onto = false;
+    }
     s_nav_act = (goal >= 0 && !walk_onto && !on_brk);   // on a breakable but off its hit tile: walk only
     s_nav_face = face;
     if (!s_nav_act) s_place_pend = false;   // can't get next to the hologram: it goes back to following the player
@@ -11270,10 +12713,10 @@ static void open_menu(menu_id_t id);   // defined after the settings table
 #define SLIDER_MAX 100.0f
 
 // ---- UI state ----
-typedef enum { UI_NONE, UI_INVENTORY, UI_MENU, UI_KEYBOARD, UI_SHOP, UI_SHELF, UI_OFFER, UI_AUCTION, UI_LEDGER, UI_FISHING, UI_SLEEP, UI_FISHBOOK } ui_screen_t;
+typedef enum { UI_NONE, UI_INVENTORY, UI_MENU, UI_KEYBOARD, UI_SHOP, UI_SHELF, UI_OFFER, UI_AUCTION, UI_LEDGER, UI_FISHING, UI_SLEEP, UI_FISHBOOK, UI_CRAFT } ui_screen_t;
 
 // LEDGER section (after the CLOCK): every buy and sell, for the ledger screen and ledger.csv.
-static void ledger_add(bool sell, uint8_t item, uint8_t quality, int count, uint32_t amount, const char *who, const char *where);
+static void ledger_add(bool sell, item_id_t item, uint8_t quality, int count, uint32_t amount, const char *who, const char *where);
 static void ledger_draw(void);
 static void update_ledger_touch(const input_frame_t *in);
 static rect_t ledger_rect(void);
@@ -11284,10 +12727,17 @@ static void   fishbook_draw(void);
 static void   update_fishbook_touch(const input_frame_t *in);
 static rect_t fishbook_rect(void);
 static void   book_draw_button(int x, int y);
-static bool   fishbook_record(uint8_t it, uint8_t q, int inches);
+static bool   fishbook_record(item_id_t it, uint8_t q, int inches);
 static void   fishbook_load(const char *dir);
 static void   fishbook_reset(void);
 static void   fish_ui_shape(int x, int y, int scale, uint16_t mono);
+
+// CRAFTING section (after FISH BOOK): the inventory's crafting tab.
+static bool   craft_open(void);
+static void   craft_draw(void);
+static void   update_craft_touch(const input_frame_t *in);
+static rect_t craft_rect(void);
+static rect_t craft_tabs_rect(void);
 
 // SLEEP section (after DAY / NIGHT): "Go to bed?"
 static void sleep_draw(void);
@@ -11403,20 +12853,20 @@ static void save_slot_dir(int slot, char *out, size_t n);   // SAVE SLOTS sectio
 #define SOLD_MAX        32     // kinds sold in one day, at most remembered
 #define PHOTO_KIND_MAX  48     // photo items made this session whose kind is known
 typedef struct { int32_t day; char kind[CAM_KIND_LEN]; } sold_t;
-typedef struct { uint8_t item; char kind[CAM_KIND_LEN]; } photo_kind_t;
+typedef struct { item_id_t item; char kind[CAM_KIND_LEN]; } photo_kind_t;
 static sold_t       s_sold[SOLD_MAX];
 static int          s_sold_n;
 static photo_kind_t s_photo_kinds[PHOTO_KIND_MAX];
 static int          s_photo_kinds_n;
 
 // The kind a photo item was made as ("" = not a photo item, or made without one).
-static const char *photo_kind(uint8_t item)
+static const char *photo_kind(item_id_t item)
 {
     for (int i = 0; i < s_photo_kinds_n; i++) if (s_photo_kinds[i].item == item) return s_photo_kinds[i].kind;
     return "";
 }
 
-static void photo_kind_set(uint8_t item, const char *kind)
+static void photo_kind_set(item_id_t item, const char *kind)
 {
     if (!kind[0]) return;
     if (s_photo_kinds_n == PHOTO_KIND_MAX) {   // full: the oldest goes
@@ -11527,7 +12977,7 @@ static void inv_sell_carried(void)
     s_ui_needs_redraw = true;
 }
 
-static bool ground_drop(uint8_t item, uint8_t quality, int count);   // GROUND ITEMS section
+static bool ground_drop(item_id_t item, uint8_t quality, int count);   // GROUND ITEMS section
 
 // DROP: puts the whole carried stack on the ground in front of the player
 // (it shows up when the inventory closes; walk onto it to pick it back up).
@@ -11586,6 +13036,8 @@ static void inv_click_slot(int slot)
         *s = s_inv_carry;
         s_inv_carry.item  = ITEM_NONE;
         s_inv_carry.count = 0;
+    } else if (fish_rig_attach(&s_inv_carry, s->item)) {   // bait or tackle onto a rod: on the line (FISHING)
+        hud_refresh();
     } else if (s->item == s_inv_carry.item && s->quality == s_inv_carry.quality) {
         int room = item_max_stack(s->item) - s->count;
         int put  = room < s_inv_carry.count ? room : s_inv_carry.count;
@@ -11805,9 +13257,13 @@ static void inv_draw_money(int right, int cy, int max_w)
 #define INV_COL_DOWN    COLOR_RGB565(176,  76,  56)   // ...lowers it
 #define INV_COL_LEGEND  COLOR_RGB565(150,  60, 200)   // a LEGENDARY trait
 
+// A rod's card: the line's bait and tackle as chips (FISHING); a tap on one takes it off.
+static rect_t s_inv_rig_chip[3];   // where each was drawn on the card (w 0 = not shown): bait, tackle 1, tackle 2
+
 static void inv_draw_card(void)
 {
-    uint8_t item = ITEM_NONE, quality = QUALITY_STANDARD;
+    item_id_t item = ITEM_NONE; uint8_t quality = QUALITY_STANDARD;
+    memset(s_inv_rig_chip, 0, sizeof(s_inv_rig_chip));
     if (s_inv_carry.count > 0) {
         item    = s_inv_carry.item;
         quality = s_inv_carry.quality;
@@ -11817,7 +13273,8 @@ static void inv_draw_card(void)
     }
     trait_t t[ITEM_PHOTO_ATTR_MAX];
     int total = item == ITEM_NONE ? 0 : item_traits(item, t, ITEM_PHOTO_ATTR_MAX);
-    if (total == 0 && (item == ITEM_NONE || (quality == QUALITY_STANDARD && item_attr(item, ITEM_ATTR_FISH, 0) <= 0))) return;
+    bool rod = item != ITEM_NONE && item_attr(item, ITEM_ATTR_ROD, 0) > 0;
+    if (total == 0 && !rod && (item == ITEM_NONE || (quality == QUALITY_STANDARD && item_attr(item, ITEM_ATTR_FISH, 0) <= 0))) return;
     if (total > ITEM_PHOTO_ATTR_MAX) total = ITEM_PHOTO_ATTR_MAX;
 
     const int x = INV_CARD_X, y = INV_CARD_Y, w = INV_CARD_W, h = INV_CARD_H;
@@ -11863,6 +13320,30 @@ static void inv_draw_card(void)
         draw_wet_badge(cx + 4, cy + 2, quality);
         draw_text(cx + 14, cy + 3, "Wet", 1, COLOR_RGB565(120, 190, 255));
         cx += cw + 4;
+    }
+    if (rod && s_inv_carry.count == 0) {   // FISHING: what's on the line — bait, then the tackle slots this rod has
+        int bait_ok = (int)item_attr(item, ITEM_ATTR_ROD_BAIT, 0) > 0, slots = (int)item_attr(item, ITEM_ATTR_ROD_TACKLE, 0);
+        slots = slots < 0 ? 0 : slots > 2 ? 2 : slots;
+        if (!bait_ok && !slots) {
+            int cw = text_width("No bait or tackle", 1) + 8;
+            fill_round_rect(cx, cy, cw, INV_CARD_CHIP_H, 3, INV_COL_SLOT_DK, 255);
+            draw_text(cx + 4, cy + 3, "No bait or tackle", 1, INV_COL_TEXT_DIM);
+            cx += cw + 4;
+        }
+        for (int k = bait_ok ? 0 : 1; k <= slots; k++) {
+            char rt[32];
+            item_id_t gi = fish_rig_item(k);
+            if (gi == ITEM_NONE) snprintf(rt, sizeof(rt), k == 0 ? "+ bait" : "+ tackle");
+            else if (k == 0)     snprintf(rt, sizeof(rt), "%s x%d", item_name(gi), fish_rig_count(0));
+            else                 snprintf(rt, sizeof(rt), "%s %d", item_name(gi), fish_rig_count(k));
+            int cw = text_width(rt, 1) + 8 + (gi != ITEM_NONE ? 6 : 0);
+            if (cx + cw > x + w - 10) break;
+            fill_round_rect(cx, cy, cw, INV_CARD_CHIP_H, 3, gi != ITEM_NONE ? COLOR_RGB565(46, 96, 160) : INV_COL_SLOT_DK, 255);
+            draw_text(cx + 4, cy + 3, rt, 1, gi != ITEM_NONE ? INV_COL_SHINE : INV_COL_TEXT_DIM);
+            if (gi != ITEM_NONE) draw_text(cx + cw - 8, cy + 3, "x", 1, COLOR_RGB565(255, 160, 140));   // tap to take it off
+            s_inv_rig_chip[k] = (rect_t){ cx, cy, cw, INV_CARD_CHIP_H };
+            cx += cw + 4;
+        }
     }
     int tier = item != ITEM_NONE && item_attr(item, ITEM_ATTR_FISH, 0) > 0 ? fish_tier_of(item) : -1;
     if (tier >= 0) {   // FISHING: "Rare fish"
@@ -11916,10 +13397,69 @@ static void draw_leather_panel(int px, int py, int pw, int ph)
     }
 }
 
+// ---- the tabs on top of the inventory and crafting panels (Stardew style) ----
+// A backpack (the inventory) and a hammer (CRAFTING). Both panels share
+// INV_PANEL_X; each passes its own top. The picked tab sits lower and
+// lighter, as if part of the panel. Not on the SELL screen.
+#define INV_TAB_W    40
+#define INV_TAB_H    32
+#define INV_TAB_GAP  4
+#define INV_TAB_RISE 26     // how far an unpicked tab stands up over its panel (the picked one 4 px less)
+#define INV_TAB_X(k) (INV_PANEL_X + 18 + (k) * (INV_TAB_W + INV_TAB_GAP))
+enum { INV_TAB_BAG = 0, INV_TAB_CRAFT, INV_TABS };
+
+static rect_t inv_tabs_rect(int panel_y)
+{
+    return (rect_t){ INV_TAB_X(0), panel_y - INV_TAB_RISE - 2, INV_TABS * (INV_TAB_W + INV_TAB_GAP), INV_TAB_RISE + 12 };
+}
+
+// Which tab (x,y) is on, or -1: only the part standing up over the panel counts.
+static int inv_tab_at(int panel_y, int x, int y)
+{
+    for (int k = 0; k < INV_TABS; k++)
+        if (pt_in(x, y, INV_TAB_X(k) - 2, panel_y - INV_TAB_RISE - 8, INV_TAB_W + 4, INV_TAB_RISE + 8)) return k;
+    return -1;
+}
+
+// Called twice: before the panel (front = false: the unpicked tabs, their bottoms
+// tucked in under its edge), then after it (front = true: the picked tab, over
+// the edge, so it reads as part of the panel — Stardew's open tab).
+static void inv_draw_tabs(int panel_y, int active, bool front)
+{
+    for (int k = 0; k < INV_TABS; k++) {
+        bool on = k == active;
+        if (on != front) continue;
+        int  x = INV_TAB_X(k), y = panel_y - INV_TAB_RISE - (on ? 2 : 0);
+        int  h = on ? panel_y + 5 - y : INV_TAB_H;
+        fill_round_rect(x, y, INV_TAB_W, h, 6, on ? INV_COL_PANEL : INV_COL_SLOT_LT, 255);
+        draw_round_rect(x, y, INV_TAB_W, h, 6, 2, INV_COL_EDGE);
+        if (on) {   // open into the panel: no edge along its bottom, nor the panel's edge under it
+            fill_rect(x + 2, panel_y - 2, INV_TAB_W - 4, 7, INV_COL_PANEL);
+            fill_rect(x + 4, y + 3, INV_TAB_W - 8, 1, INV_COL_SHINE);
+        }
+        int cx = x + INV_TAB_W / 2, cy = y + 13;
+        if (k == INV_TAB_BAG) {   // a backpack: body, flap, buckle, straps
+            fill_round_rect(cx - 8, cy - 6, 16, 15, 4, COLOR_RGB565(150, 96, 48), 255);
+            draw_round_rect(cx - 8, cy - 6, 16, 15, 4, 1, INV_COL_EDGE);
+            fill_round_rect(cx - 7, cy - 6, 14, 7, 3, COLOR_RGB565(186, 124, 64), 255);
+            draw_round_rect(cx - 7, cy - 6, 14, 7, 3, 1, INV_COL_EDGE);
+            fill_rect(cx - 1, cy - 1, 3, 3, INV_COL_GOLD);
+            fill_rect(cx - 4, cy - 9, 8, 2, INV_COL_EDGE);
+        } else {                  // a hammer: wooden handle, steel head
+            for (int i = 0; i < 12; i++) fill_rect(cx - 5 + i * 9 / 12, cy + 8 - i, 3, 2, i == 0 ? INV_COL_EDGE : COLOR_RGB565(170, 112, 56));
+            fill_round_rect(cx - 2, cy - 8, 12, 7, 2, steel_gray(200), 255);
+            draw_round_rect(cx - 2, cy - 8, 12, 7, 2, 1, MTL_COL_GEAR_DK);
+            fill_rect(cx - 1, cy - 7, 8, 1, steel_gray(236));
+        }
+    }
+}
+
 static void inv_draw(void)
 {
     const int px = INV_PANEL_X, py = INV_PANEL_Y, pw = INV_PANEL_W;
+    if (!s_inv_sell_mode) inv_draw_tabs(py, INV_TAB_BAG, false);
     draw_leather_panel(px, py, pw, INV_PANEL_H);
+    if (!s_inv_sell_mode) inv_draw_tabs(py, INV_TAB_BAG, true);
 
     // header: gear (settings) + camera | title | red X (close). The SELL screen has neither.
     const char *title = s_inv_sell_mode ? "SELL" : "INVENTORY";
@@ -12054,6 +13594,7 @@ static void inv_activate(int row, int col)
         else if (col == 2) menu_action_capture();
 #endif
         else if (col == 3) fishbook_open();
+        else if (col == 4) craft_open();   // the crafting tab (CRAFTING)
         else          ui_close();
         return;
     }
@@ -12084,6 +13625,15 @@ static void update_inventory_touch(const input_frame_t *in)
     if (pt_in(tx, ty, INV_CAM_X - 3, INV_BTN_Y - 6, INV_BTN + 9, INV_BTN + 12)) { inv_activate(-1, 2); return; }
 #endif
     if (!s_inv_sell_mode && pt_in(tx, ty, INV_BOOK_X - 3, INV_BTN_Y - 6, INV_BTN + 6, INV_BTN + 12)) { inv_activate(-1, 3); return; }
+    if (!s_inv_sell_mode && inv_tab_at(INV_PANEL_Y, tx, ty) == INV_TAB_CRAFT) { inv_activate(-1, 4); return; }
+    for (int k = 0; k < 3; k++) {   // a chip on a rod's card: that bait / tackle off the line, carried (FISHING)
+        rect_t c = s_inv_rig_chip[k];
+        if (c.w && pt_in(tx, ty, c.x - 2, c.y - 4, c.w + 4, c.h + 8)) {
+            if (fish_rig_take(k, &s_inv_carry)) { s_inv_carry_from = inv_cell_slot(s_inv_cur_row, s_inv_cur_col); hud_refresh(); }
+            s_ui_needs_redraw = true;
+            return;
+        }
+    }
     if (pt_in(tx, ty, INV_SELL_X - 4, inv_sell_y() - 4, INV_SELL_W + 8, INV_SELL_H + 8)) {
         s_inv_cur_row = INV_SELL_ROW;   // col is kept: the cursor goes back to that slot later
         inv_activate(INV_SELL_ROW, s_inv_cur_col);
@@ -12157,9 +13707,11 @@ static void update_inventory_touch(const input_frame_t *in)
 #define SHOP_CARD_H   44
 #define SHOP_TAB_W    66                     // the SEEDS / BUILD / RANCH tabs in the header...
 #define SHOP_TAB_W3   56                     // ...narrower when there are three
+#define SHOP_TAB_W4   50                     // ...four (the money moves down to the footer)...
+#define SHOP_TAB_W5   44                     // ...or five
 #define SHOP_TAB_X    (SHOP_PANEL_X + INV_BTN + 22)
 
-static uint8_t s_shop_items[SHOP_MAX];   // what's for sale
+static item_id_t s_shop_items[SHOP_MAX];   // what's for sale
 static const char *s_shop_title = "SEED SHOP";
 static int     s_shop_count = 0;
 static int     s_shop_sel   = 0;         // index into s_shop_items
@@ -12174,7 +13726,7 @@ static void shop_cell_xy(int k, int *x, int *y)
     *y = SHOP_GRID_Y + (k / SHOP_COLS) * (SHOP_CELL_H + SHOP_ROW_GAP);
 }
 
-static int inv_count_of(uint8_t item)
+static int inv_count_of(item_id_t item)
 {
     int n = 0;
     for (int i = 0; i < INV_SLOTS; i++)
@@ -12191,55 +13743,89 @@ static bool shop_show(void);
 // asset action ("seed_shop", "build_shop", "ranch_shop") opens its own; the
 // counters that have stock get tabs in the header to switch between them, so
 // any shop on a map sells the animals too.
-enum { SHOP_SEEDS = 0, SHOP_BUILD, SHOP_RANCH, SHOP_KINDS };
+// GOODS (the General store) sells anything else with a price, and an item's
+// "shop N" (items.h ITEM_ATTR_SHOP) puts it on counter N instead, so any item
+// can be sold anywhere (Game Tools' Item Editor / Shop Editor).
+enum { SHOP_SEEDS = 0, SHOP_BUILD, SHOP_RANCH, SHOP_FISH, SHOP_GENERAL, SHOP_KINDS };
+static const char *const k_shop_title[SHOP_KINDS] = { "SEED SHOP", "BUILD SHOP", "RANCH", "FISH SHOP", "GENERAL STORE" };
+static const char *const k_shop_tab[SHOP_KINDS]   = { "SEEDS", "BUILD", "RANCH", "FISH", "GOODS" };
+static const char *const k_shop_who[SHOP_KINDS]   = { "Seed shop", "Build shop", "Ranch", "Fish shop", "General store" };
+
+// The fish shop sells it (Stardew's Willy): a rod, bait, tackle or a crab pot (FISHING).
+static bool fish_shop_sells(item_id_t item)
+{
+    return item_attr(item, ITEM_ATTR_ROD, 0) > 0 || item_attr(item, ITEM_ATTR_BAIT, 0) > 0 ||
+           item_attr(item, ITEM_ATTR_TACKLE, 0) > 0 || item_attr(item, ITEM_ATTR_CRAB_POT, 0) > 0;
+}
 static int s_shop_kind = SHOP_SEEDS;
 
-static int  animal_of_item(uint8_t item);   // ANIMALS section: the s_animals[] index item lets out, or -1
-static bool ranch_sells(uint8_t item);      // ...hay, grass starter, an animal tool
-static void ranch_shop_card(uint8_t item, char *line, size_t n);
+static int  animal_of_item(item_id_t item);   // ANIMALS section: the s_animals[] index item lets out, or -1
+static bool ranch_sells(item_id_t item);      // ...hay, grass starter, an animal tool
+static void ranch_shop_card(item_id_t item, char *line, size_t n);
 
-// Fills out[] with what counter `kind` sells. Returns how many.
-static int shop_stock(int kind, uint8_t *out)
+// The counter item is sold on (SHOP_*), or -1: it has no price.
+static int shop_kind_of(item_id_t item)
+{
+    if (item_buy_price(item) <= 0) return -1;
+    int k = (int)item_attr(item, ITEM_ATTR_SHOP, 0);
+    if (k >= 1 && k <= SHOP_KINDS) return k - 1;   // put on a counter by hand (Item Editor / Shop Editor)
+    if (animal_of_item(item) >= 0 || ranch_sells(item)) return SHOP_RANCH;
+    if (ITEM_TILLS(item) || ITEM_WATERS(item) || crop_of_seed(item) >= 0) return SHOP_SEEDS;
+    if (fish_shop_sells(item)) return SHOP_FISH;
+    if (place_item_kind(item) != PLACE_NONE) return SHOP_BUILD;
+    return SHOP_GENERAL;
+}
+
+// Fills out[] with what counter `kind` sells. Returns how many. FISH: rods,
+// bait, tackle, crab pots, then the rest; RANCH: the animals first; SEEDS:
+// the farming tools, then the packets in crop order (in season only).
+static int shop_stock(int kind, item_id_t *out)
 {
     int n = 0;
-    if (kind == SHOP_RANCH) {
-        for (int i = 1; i < item_count && n < SHOP_MAX; i++)   // the animals first
-            if (animal_of_item((uint8_t)i) >= 0 && item_buy_price((uint8_t)i) > 0) out[n++] = (uint8_t)i;
-        for (int i = 1; i < item_count && n < SHOP_MAX; i++)
-            if (animal_of_item((uint8_t)i) < 0 && ranch_sells((uint8_t)i) && item_buy_price((uint8_t)i) > 0) out[n++] = (uint8_t)i;
-    } else if (kind == SHOP_SEEDS) {
+    if (kind == SHOP_SEEDS) {
         for (int i = 1; i < item_count && n < SHOP_MAX; i++)   // farming tools with a price first (a watering can)
-            if ((ITEM_TILLS((uint8_t)i) || ITEM_WATERS((uint8_t)i)) && item_buy_price((uint8_t)i) > 0) out[n++] = (uint8_t)i;
+            if (shop_kind_of((item_id_t)i) == SHOP_SEEDS && crop_of_seed((item_id_t)i) < 0) out[n++] = (item_id_t)i;
         for (int c = 0; c < crop_count && n < SHOP_MAX; c++) {
             char id[48];
             snprintf(id, sizeof(id), "%s_seeds", s_crops[c]->id);
-            uint8_t seeds = item_find(id);
-            if (seeds != ITEM_NONE && item_buy_price(seeds) > 0) out[n++] = seeds;
+            item_id_t seeds = item_find(id);
+            if (!season_fits(crop_seasons(c), clock_season())) continue;   // SEASONS: in-season seeds only
+            if (seeds != ITEM_NONE && shop_kind_of(seeds) == SHOP_SEEDS) out[n++] = seeds;
         }
-    } else {
-        for (int i = 1; i < item_count && n < SHOP_MAX; i++)
-            if (place_item_kind((uint8_t)i) != PLACE_NONE && item_buy_price((uint8_t)i) > 0) out[n++] = (uint8_t)i;
+        return n;
     }
+    for (int pass = 0; pass < 5; pass++)
+        for (int i = 1; i < item_count && n < SHOP_MAX; i++) {
+            item_id_t it = (item_id_t)i;
+            if (shop_kind_of(it) != kind) continue;
+            int p = 4;   // which pass it's listed in
+            if (kind == SHOP_FISH)
+                p = item_attr(it, ITEM_ATTR_ROD, 0) > 0 ? 0 : item_attr(it, ITEM_ATTR_BAIT, 0) > 0 ? 1 :
+                    item_attr(it, ITEM_ATTR_TACKLE, 0) > 0 ? 2 : item_attr(it, ITEM_ATTR_CRAB_POT, 0) > 0 ? 3 : 4;
+            else if (kind == SHOP_RANCH)
+                p = animal_of_item(it) >= 0 ? 0 : 4;
+            if (p == pass) out[n++] = it;
+        }
     return n;
 }
 
 // The counters with something for sale, in tab order, into kinds[]. Returns how many.
 static int shop_tab_kinds(int kinds[SHOP_KINDS])
 {
-    static uint8_t tmp[SHOP_MAX];
+    static item_id_t tmp[SHOP_MAX];
     int n = 0;
     for (int k = 0; k < SHOP_KINDS; k++) if (shop_stock(k, tmp) > 0) kinds[n++] = k;
     return n;
 }
 
 // Two counters or more have something: the header shows a tab each, this wide.
-static int shop_tab_w(int n) { return n > 2 ? SHOP_TAB_W3 : SHOP_TAB_W; }
+static int shop_tab_w(int n) { return n > 4 ? SHOP_TAB_W5 : n > 3 ? SHOP_TAB_W4 : n > 2 ? SHOP_TAB_W3 : SHOP_TAB_W; }
 
 static void shop_switch(int kind)
 {
     s_shop_kind  = kind;
     s_shop_count = shop_stock(kind, s_shop_items);
-    s_shop_title = kind == SHOP_SEEDS ? "SEED SHOP" : kind == SHOP_BUILD ? "BUILD SHOP" : "RANCH";
+    s_shop_title = k_shop_title[kind];
     s_shop_sel   = 0;
     s_shop_page  = 0;
 }
@@ -12259,6 +13845,8 @@ static bool shop_open_kind(int kind)
 bool seed_shop_open(void)  { return shop_open_kind(SHOP_SEEDS); }
 bool build_shop_open(void) { return shop_open_kind(SHOP_BUILD); }
 bool ranch_shop_open(void) { return shop_open_kind(SHOP_RANCH); }
+bool fish_shop_open(void)  { return shop_open_kind(SHOP_FISH); }
+bool general_shop_open(void) { return shop_open_kind(SHOP_GENERAL); }
 
 // Opens the shop screen on what shop_switch() stocked.
 static bool shop_show(void)
@@ -12281,7 +13869,7 @@ static void shop_buy(int n)
 {
     s_ui_needs_redraw = true;
     if (s_shop_sel < 0 || s_shop_sel >= s_shop_count) return;
-    uint8_t  item  = s_shop_items[s_shop_sel];
+    item_id_t  item  = s_shop_items[s_shop_sel];
     uint32_t price = (uint32_t)item_buy_price(item);
     if (price > 0 && money_get() / price < (uint32_t)n) n = (int)(money_get() / price);
     if (n <= 0) { message(2000, "Not enough money for %s", item_name(item)); return; }
@@ -12289,7 +13877,7 @@ static void shop_buy(int n)
     if (got == 0) { message(2000, "No room in your bag"); return; }
     money_spend(price * (uint32_t)got);
     ledger_add(false, item, QUALITY_STANDARD, got, price * (uint32_t)got, "",
-               s_shop_kind == SHOP_SEEDS ? "Seed shop" : s_shop_kind == SHOP_BUILD ? "Build shop" : "Ranch");
+               k_shop_who[s_shop_kind]);
     if (got > 1) message(2000, "Bought %s x%d for $%lu", item_name(item), got, (unsigned long)(price * got));
     else         message(2000, "Bought %s for $%lu", item_name(item), (unsigned long)price);
 }
@@ -12308,7 +13896,7 @@ static void shop_draw_button(int x, int w, const char *label, bool lit)
 static void shop_draw_card(void)
 {
     if (s_shop_sel < 0 || s_shop_sel >= s_shop_count) return;
-    uint8_t item = s_shop_items[s_shop_sel];
+    item_id_t item = s_shop_items[s_shop_sel];
     const int x = SHOP_PANEL_X, y = SHOP_CARD_Y, w = SHOP_PANEL_W, h = SHOP_CARD_H;
     fill_round_rect(x, y, w, h, 8, INV_COL_PANEL, INV_PANEL_ALPHA);
     draw_round_rect(x, y, w, h, 8, 2, INV_COL_EDGE);
@@ -12321,14 +13909,22 @@ static void shop_draw_card(void)
     draw_text(x + w - 12 - pw, y + 8, p, 2, INV_COL_GOLD);
     char line[80];
     int  c = crop_of_seed(item), have = inv_count_of(item);
+    char when[24];   // SEASONS
+    if (c >= 0) season_list(crop_seasons(c), when, sizeof(when), true);
     if (c >= 0 && s_crops[c]->regrow_days)
-        snprintf(line, sizeof(line), "Ripe in %d days, then every %d days.  In bag: %d",
-                 s_crops[c]->grow_days, s_crops[c]->regrow_days, have);
+        snprintf(line, sizeof(line), "%s. Ripe in %d days, then every %d.  In bag: %d",
+                 when, s_crops[c]->grow_days, s_crops[c]->regrow_days, have);
     else if (c >= 0)
-        snprintf(line, sizeof(line), "Ripe in %d day%s, harvested once.  In bag: %d",
-                 s_crops[c]->grow_days, s_crops[c]->grow_days == 1 ? "" : "s", have);
+        snprintf(line, sizeof(line), "%s. Ripe in %d day%s, once.  In bag: %d",
+                 when, s_crops[c]->grow_days, s_crops[c]->grow_days == 1 ? "" : "s", have);
     else if (s_shop_kind == SHOP_RANCH)
         ranch_shop_card(item, line, sizeof(line));   // what the animal gives, or what the tool is for
+    else if (s_shop_kind == SHOP_FISH) {             // what the gear does (FISHING)
+        char g[64];
+        fish_gear_text(item, g, sizeof(g));
+        if (item_attr(item, ITEM_ATTR_CRAB_POT, 0) > 0) snprintf(g, sizeof(g), "Goes in water. Bait it; it catches overnight.");
+        snprintf(line, sizeof(line), "%s  In bag: %d", g[0] ? g : "", have);
+    }
     else
         snprintf(line, sizeof(line), "In bag: %d", have);
     draw_text_clip(x + 10, y + 28, line, 1, INV_COL_TEXT, w - 20);
@@ -12343,12 +13939,11 @@ static void shop_draw(void)
     const char *title = s_shop_title;
     int kinds[SHOP_KINDS], tabs = shop_tab_kinds(kinds), tw = shop_tab_w(tabs);
     if (tabs >= 2) {
-        static const char *const k_tab[SHOP_KINDS] = { "SEEDS", "BUILD", "RANCH" };
         for (int k = 0; k < tabs; k++) {
             int tx = SHOP_TAB_X + k * (tw + 4);
             fill_round_rect(tx, SHOP_BTN_Y, tw, INV_BTN, 5, kinds[k] == s_shop_kind ? INV_COL_GOLD : INV_COL_SLOT_LT, 255);
             draw_round_rect(tx, SHOP_BTN_Y, tw, INV_BTN, 5, 1, INV_COL_EDGE);
-            draw_text_centered(tx, SHOP_BTN_Y + 7, tw, k_tab[kinds[k]], INV_COL_TEXT, INV_COL_SHINE);
+            draw_text_centered(tx, SHOP_BTN_Y + 7, tw, k_shop_tab[kinds[k]], INV_COL_TEXT, INV_COL_SHINE);
         }
     } else {
         draw_text_centered(px + INV_BTN + 16, py + 17, pw - 2 * (INV_BTN + 16), title, INV_COL_TEXT, INV_COL_SHINE);
@@ -12356,7 +13951,8 @@ static void shop_draw(void)
     draw_coin(px + 10 + INV_BTN / 2, SHOP_BTN_Y + INV_BTN / 2);
     draw_close_button(SHOP_CLOSE_X, SHOP_BTN_Y, INV_BTN, false, COLOR_WHITE);
     int title_right = tabs >= 2 ? SHOP_TAB_X + tabs * (tw + 4) : px + pw / 2 + text_width(title, 2) / 2;
-    inv_draw_money(SHOP_CLOSE_X - 8, SHOP_BTN_Y + INV_BTN / 2, SHOP_CLOSE_X - 8 - title_right - 8);
+    bool money_below = tabs >= 4;   // no room left in the header: the money goes in the footer
+    if (!money_below) inv_draw_money(SHOP_CLOSE_X - 8, SHOP_BTN_Y + INV_BTN / 2, SHOP_CLOSE_X - 8 - title_right - 8);
 
     // the packets on this page, each with its price (red when it's more than the money)
     int first = s_shop_page * SHOP_PAGE;
@@ -12384,9 +13980,17 @@ static void shop_draw(void)
     shop_draw_button(SHOP_BUY_X, SHOP_BTN_W, "BUY", price > 0 && money_get() >= price);
     shop_draw_button(SHOP_BUY5_X, SHOP_BTN_W, "BUY 5", price > 0 && money_get() >= price * 5);
     char hint[32];
+    int  hint_right = SHOP_BUY_X - 6;
+    if (money_below) {   // the money, right of the hint
+        char amount[12];
+        snprintf(amount, sizeof(amount), "%lu", (unsigned long)money_get());
+        int mw = text_width(amount, 1) + 16;
+        inv_draw_money(SHOP_BUY_X - 8, SHOP_FOOT_Y + SHOP_BTN_H / 2, mw);
+        hint_right -= mw + 6;
+    }
     if (pages > 1) snprintf(hint, sizeof(hint), "PAGE %d/%d", s_shop_page + 1, pages);
-    else           snprintf(hint, sizeof(hint), "TAP A PACKET");
-    draw_text_centered(text_x, SHOP_FOOT_Y + 2, SHOP_BUY_X - 6 - text_x, hint, INV_COL_TEXT, INV_COL_SHINE);
+    else           snprintf(hint, sizeof(hint), money_below ? "TAP ONE" : "TAP A PACKET");
+    draw_text_centered(text_x, SHOP_FOOT_Y + 2, hint_right - text_x, hint, INV_COL_TEXT, INV_COL_SHINE);
     shop_draw_card();
 }
 
@@ -12689,9 +14293,9 @@ static void shelf_tick(void)
 //  map. On the map the player is on they also get a BODY (npc_t): a walking,
 //  tappable character.
 //
-//  Who: a name, a look — a character from assets/characters picked when they
-//  turn up (so new character folders join in by themselves), in their own
-//  colours (hair, shirt, trousers; npc_build_frames()) — a budget and two
+//  Who: a name, a look — an outfit from the WARDROBE (body, hair, clothes,
+//  maybe a hat, in their own colours: ward_random() from their seed, so new
+//  wardrobe art joins in by itself) — a budget and two
 //  TRAITS that change what they'll pay:
 //    Haggler      at most 90% of what a thing is worth
 //    Big spender  up to 160%, with more money
@@ -12760,8 +14364,19 @@ static void shelf_tick(void)
 #define MKT_LOOK_MAX         23
 #define MKT_SAY_MAX          8
 #define NPC_MAX              AUCTION_CROWD_MAX   // bodies on the loaded map at once
-#define NPC_FRAME_PX         (PLAYER_W * PLAYER_H)
-#define NPC_ANIM_TICKS       10
+#define NPC_FRAME_PX         CHAR_FRAME_PX   // a CHAR_SW x CHAR_SH outfit frame (WARDROBE)
+// How a shopper walks: speed (quarter px a game tick: 4 = the 1 px they all
+// used to walk) and stride (px walked a walking frame: longer = slower steps).
+// Each one's is picked from their seed (npc_build_frames()).
+typedef struct { const char *name; uint8_t speed_q, stride; } npc_gait_t;
+static const npc_gait_t k_npc_gaits[] = {
+    { "stroll",  3, 11 },   // in no hurry, long lazy steps
+    { "amble",   3,  8 },   // slow, short steps
+    { "walk",    4, 10 },   // as everyone used to
+    { "walk",    4, 10 },
+    { "brisk",   5,  9 },
+    { "hurry",   6,  8 },   // quick little steps
+};
 #define NPC_BUBBLE_H         10       // the "$" bubble over a waiting visitor's head
 #define NPC_SHOUT_MAX        19       // a speech bubble's text (vis_shout)
 #define NPC_SHOUT_H          12
@@ -12791,10 +14406,17 @@ static const char *const k_npc_say_arrive[] = { "Am I late?", "Ooh, an auction!"
 static const char *const k_npc_say_bidding[] = { "Come on...", "I need that!", "Don't you dare!", "Hmm...", "Going up!", "Mine, surely!" };
 static const char *const k_npc_say_watch[] = { "Who'll get it?", "Wow!", "What a price!", "Ooh!", "Go on, bid!" };
 static const char *const k_npc_say_over[]  = { "Well played!", "Next time...", "Congrats!" };
+// Visitors' names, by their gender (WARDROBE: ward_random()); either takes the last few.
 static const char *const k_npc_say_names[] = {
-    "Ada", "Bram", "Cleo", "Dov", "Edie", "Finn", "Gus", "Hana", "Ivo", "Juno", "Kit", "Lena", "Milo", "Nell", "Otis",
-    "Pia", "Quin", "Rosa", "Sami", "Tess", "Uma", "Vic", "Wren", "Xavi", "Yara", "Zed", "Mabel", "Rufus", "Iris", "Tobi",
+    "Bram", "Dov", "Finn", "Gus", "Ivo", "Milo", "Otis", "Vic", "Xavi", "Zed", "Rufus", "Tobi",              // male
+    "Ada", "Cleo", "Edie", "Hana", "Juno", "Lena", "Nell", "Pia", "Rosa", "Tess", "Uma", "Wren", "Yara",   // female
+    "Mabel", "Iris",
+    "Kit", "Quin", "Sami",                                                                                   // either
 };
+#define NPC_NAMES_MALE   12
+#define NPC_NAMES_FEMALE 15
+#define NPC_NAMES_EITHER 3
+_Static_assert(sizeof(k_npc_say_names) / sizeof(k_npc_say_names[0]) == NPC_NAMES_MALE + NPC_NAMES_FEMALE + NPC_NAMES_EITHER, "the names, by gender");
 #define NPC_PICK(arr) (arr[esp_random() % (sizeof(arr) / sizeof(arr[0]))])
 
 typedef struct {        // something on a shelf, somewhere, for sale
@@ -12802,7 +14424,7 @@ typedef struct {        // something on a shelf, somewhere, for sale
     char     map[TP_NAME_MAX + 1];
     uint16_t inst;
     int8_t   tx, ty, slot;             // the shelf (footprint top-left) and slot
-    uint8_t  item, quality, count;
+    item_id_t item; uint8_t quality, count;
     uint32_t price;
 } listing_t;
 
@@ -12820,7 +14442,7 @@ typedef struct {
     uint16_t inst;
     int32_t  due;                      // game-minute stamp: VIS_BROWSE decides, VIS_OFFER leaves
     int8_t   tx, ty, slot;             // VIS_OFFER: the shelf slot...
-    uint8_t  item;                     // ...and what's on it
+    item_id_t  item;                     // ...and what's on it
     uint32_t offer;                    // VIS_OFFER: for one; VIS_BID: unused
     int8_t   lot;                      // VIS_BID: which lot
     uint32_t value;                    // VIS_BID / VIS_OFFER: the most they'll go to
@@ -12828,7 +14450,7 @@ typedef struct {
 
 typedef struct {
     bool     used, unsold;             // unsold: over with no bids, waiting for room in the bag
-    uint8_t  item, quality, count;
+    item_id_t item; uint8_t quality, count;
     uint32_t start, bid, bidder;       // bidder: the visitor's id (0 = no bids)
     char     bidder_name[MKT_NAME_MAX + 1];
     int32_t  end;                      // game-minute stamp
@@ -12843,7 +14465,9 @@ typedef struct {
     uint16_t    *frames;          // PSRAM: [dir][frame] NPC_FRAME_PX each, in their own colours
     int          x, y;            // sprite top-left (like the player's)
     player_dir_t dir;
-    int          frame, anim;
+    int          frame, anim;     // anim: px walked since the frame changed
+    uint8_t      speed_q, stride; // their gait (k_npc_gaits)
+    uint8_t      sub;             // quarter px walked toward the next whole one
     uint8_t      mode;
     uint32_t     until_ms;
     int          shelf;           // s_place index heading for / at
@@ -12917,12 +14541,12 @@ static const char *mkt_shop_name(uint16_t inst)
 {
     const brec_t *r = brec_find(inst);
     int b = r ? building_find(r->id) : -1;
-    uint8_t item = b >= 0 ? item_find(s_buildings[b]->id) : ITEM_NONE;
+    item_id_t item = b >= 0 ? item_find(s_buildings[b]->id) : ITEM_NONE;
     return item != ITEM_NONE ? item_name(item) : "your shop";
 }
 
 // The most visitor v will pay for `count` of item at quality (0 = they don't want it).
-static uint32_t vis_value(const visitor_t *v, uint8_t item, uint8_t quality, int count)
+static uint32_t vis_value(const visitor_t *v, item_id_t item, uint8_t quality, int count)
 {
     int32_t worth = item_sell_price_q(item, quality);
     if (worth <= 0 || sold_today(photo_kind(item))) return 0;
@@ -12944,10 +14568,15 @@ static visitor_t *vis_new(void)
         if (v->state != VIS_FREE) continue;
         memset(v, 0, sizeof(*v));
         v->id = esp_random() | 1;
-        snprintf(v->name, sizeof(v->name), "%s", NPC_PICK(k_npc_say_names));
-        int nc = character_count();
-        snprintf(v->look, sizeof(v->look), "%s", character_name(nc ? (int)(esp_random() % nc) : 0));
-        v->seed = esp_random();
+        v->seed = esp_random();   // their outfit (npc_build_frames()); look: its body's name, for the logs
+        outfit_t o;
+        ward_random(v->seed, &o);
+        snprintf(v->look, sizeof(v->look), "%s", WARD_N_BODIES ? k_ward_bodies[o.body].name : "-");
+        {   // a name to go with them: one of their gender's, or one for either
+            int own = o.gender == WARD_G_FEMALE ? NPC_NAMES_FEMALE : NPC_NAMES_MALE, k = (int)(esp_random() % (uint32_t)(own + NPC_NAMES_EITHER));
+            int at  = k < own ? (o.gender == WARD_G_FEMALE ? NPC_NAMES_MALE : 0) + k : NPC_NAMES_MALE + NPC_NAMES_FEMALE + (k - own);
+            snprintf(v->name, sizeof(v->name), "%s", k_npc_say_names[at]);
+        }
         int t1 = (int)(esp_random() % NPC_T_COUNT), t2 = (int)(esp_random() % NPC_T_COUNT);
         if ((t1 == NPC_T_HAGGLER && t2 == NPC_T_BIG_SPENDER) || (t2 == NPC_T_HAGGLER && t1 == NPC_T_BIG_SPENDER)) t2 = NPC_T_CHATTY;
         v->traits = (uint16_t)(1u << t1 | 1u << t2);
@@ -12994,67 +14623,20 @@ done:
 }
 
 // ---- bodies (the visitors on the loaded map) ----
-static uint32_t npc_rand(uint32_t *s) { *s = *s * 1664525u + 1013904223u; return *s >> 8; }
-
-static void npc_rgb_to_hsv(int r, int g, int b, int *h, int *s, int *v)
-{
-    int mx = r > g ? (r > b ? r : b) : (g > b ? g : b), mn = r < g ? (r < b ? r : b) : (g < b ? g : b), d = mx - mn;
-    *v = mx;
-    *s = mx ? d * 255 / mx : 0;
-    if (!d) { *h = 0; return; }
-    int hh = mx == r ? 60 * (g - b) / d : mx == g ? 120 + 60 * (b - r) / d : 240 + 60 * (r - g) / d;
-    *h = (hh + 360) % 360;
-}
-
-static uint16_t npc_hsv_565(int h, int s, int v)
-{
-    int c = v * s / 255, x = c * (60 - abs(h % 120 - 60)) / 60, m = v - c, r, g, b;
-    if      (h < 60)  { r = c; g = x; b = 0; }
-    else if (h < 120) { r = x; g = c; b = 0; }
-    else if (h < 180) { r = 0; g = c; b = x; }
-    else if (h < 240) { r = 0; g = x; b = c; }
-    else if (h < 300) { r = x; g = 0; b = c; }
-    else              { r = c; g = 0; b = x; }
-    int rr = r + m, gg = g + m, bb = b + m;
-    uint16_t px = COLOR_RGB565(rr, gg, bb);
-    return px ? px : 0x0841;
-}
-
-// One pixel of a character in a visitor's colours: skin, outlines and dark
-// details stay; the rest takes the hair / shirt / trousers colour of its rows.
-static uint16_t npc_recolor(uint16_t c, int row, const int hue[3], const int sat[3], const int bright[3])
-{
-    int r = ((c >> 11) & 31) << 3, g = ((c >> 5) & 63) << 2, b = (c & 31) << 3, h, s, v;
-    npc_rgb_to_hsv(r, g, b, &h, &s, &v);
-    if (v < 56) return c;                                                             // outlines, eyes
-    if (r > g && g > b && r > 140 && r - b > 40 && r - b < 150 && g > 80) return c;   // skin
-    int part = row < 11 ? 0 : row < 22 ? 1 : 2;                                       // hair, shirt, trousers + shoes
-    if (part == 0 && s < 40) return c;
-    int nv = v * bright[part] / 100;
-    return npc_hsv_565(hue[part], sat[part] > s ? sat[part] : s, nv > 255 ? 255 : nv);
-}
-
-// The visitor's 16 walk frames: their character, in their colours (the same every time — from their seed).
+// The visitor's 16 walk frames: an outfit from their seed (WARDROBE:
+// ward_random()), the same every time; and their gait (k_npc_gaits), ditto. "python tools/wardrobe.py --preview
+// x.png --seed S" draws the visitor with seed S (dev link "npc" lists them).
 static bool npc_build_frames(npc_t *n, const visitor_t *v)
 {
-    static const int k_hair_hue[] = { 25, 30, 40, 15, 0, 220 }, k_hair_sat[] = { 160, 200, 170, 110, 0, 20 }, k_hair_v[] = { 60, 90, 120, 45, 35, 120 };
-    int nc = character_count(), ci = -1;
-    for (int i = 0; i < nc && ci < 0; i++) if (strcmp(character_name(i), v->look) == 0) ci = i;
-    uint32_t s = v->seed;
-    if (ci < 0) ci = nc ? (int)(npc_rand(&s) % nc) : 0;   // their character was taken out: another one
     n->frames = heap_caps_malloc((size_t)PDIR_COUNT * PLAYER_ANIM_FRAMES * NPC_FRAME_PX * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
     if (!n->frames) return false;
-    int hair = (int)(npc_rand(&s) % (sizeof(k_hair_hue) / sizeof(k_hair_hue[0])));
-    int hue[3]    = { k_hair_hue[hair], (int)(npc_rand(&s) % 360), (int)(npc_rand(&s) % 360) };
-    int sat[3]    = { k_hair_sat[hair], 120 + (int)(npc_rand(&s) % 120), 60 + (int)(npc_rand(&s) % 120) };
-    int bright[3] = { k_hair_v[hair], 85 + (int)(npc_rand(&s) % 30), 60 + (int)(npc_rand(&s) % 40) };
-    for (int d = 0; d < PDIR_COUNT; d++)
-        for (int f = 0; f < PLAYER_ANIM_FRAMES; f++) {
-            const uint16_t *src = character_frame(ci, false, (player_dir_t)d, f);
-            uint16_t       *dst = n->frames + (size_t)(d * PLAYER_ANIM_FRAMES + f) * NPC_FRAME_PX;
-            for (int k = 0; k < NPC_FRAME_PX; k++)
-                dst[k] = src[k] == FB_TRANSPARENT_COLOR ? FB_TRANSPARENT_COLOR : npc_recolor(src[k], k / PLAYER_W, hue, sat, bright);
-        }
+    outfit_t o;
+    ward_random(v->seed, &o);
+    ward_compose(&o, n->frames, NULL);
+    const npc_gait_t *g = &k_npc_gaits[(v->seed >> 24) % (sizeof(k_npc_gaits) / sizeof(k_npc_gaits[0]))];   // (not bits the outfit leans on most)
+    n->speed_q = g->speed_q;
+    n->stride  = g->stride;
+    n->sub     = 0;
     return true;
 }
 
@@ -13094,7 +14676,7 @@ static rect_t npc_shout_rect(const npc_t *n)
 // Everything of body n on screen: the sprite, the "$" spot over it, its speech bubble.
 static rect_t npc_view_rect(const npc_t *n)
 {
-    rect_t r = { n->x, n->y - NPC_BUBBLE_H, PLAYER_W, PLAYER_H + NPC_BUBBLE_H };
+    rect_t r = { n->x - WARD_BOX_X, n->y - NPC_BUBBLE_H, CHAR_SW, PLAYER_H + NPC_BUBBLE_H };   // the outfit frame (a hat's brim) and the "$" spot
     return n->shout[0] ? rect_union(r, npc_shout_rect(n)) : r;
 }
 
@@ -13134,8 +14716,9 @@ static void npc_paint_rect(int x, int y, int w, int h)
     }
     for (int o = 0; o < n; o++) {
         const npc_t *p = &s_npc[order[o]];
-        int x0 = p->x > x ? p->x : x, y0 = p->y > y ? p->y : y;
-        int x1 = p->x + PLAYER_W < x + w ? p->x + PLAYER_W : x + w, y1 = p->y + PLAYER_H < y + h ? p->y + PLAYER_H : y + h;
+        int sx = p->x - WARD_BOX_X, sy = p->y - WARD_BOX_Y;   // the outfit frame (WARDROBE): its body box on the body's
+        int x0 = sx > x ? sx : x, y0 = sy > y ? sy : y;
+        int x1 = sx + CHAR_SW < x + w ? sx + CHAR_SW : x + w, y1 = sy + CHAR_SH < y + h ? sy + CHAR_SH : y + h;
         if (x0 < 0) x0 = 0;
         if (y0 < 0) y0 = 0;
         if (x1 > s_fb_w) x1 = s_fb_w;
@@ -13143,7 +14726,7 @@ static void npc_paint_rect(int x, int y, int w, int h)
         const uint16_t *px = p->frames + (size_t)(p->dir * PLAYER_ANIM_FRAMES + p->frame) * NPC_FRAME_PX;
         for (int yy = y0; yy < y1; yy++)
             for (int xx = x0; xx < x1; xx++) {
-                uint16_t c = px[(yy - p->y) * PLAYER_W + (xx - p->x)];
+                uint16_t c = px[(yy - sy) * CHAR_SW + (xx - sx)];
                 if (c == FB_TRANSPARENT_COLOR || map_pixel_layer(xx, yy)) continue;
                 s_fb[yy * s_fb_w + xx] = s_night_shown ? night_px(&s_night_lut, c) : c;
             }
@@ -13453,18 +15036,22 @@ static int npc_step(npc_t *n)
     n->x += dx;
     n->y += dy;
     n->dir = dy < 0 ? PDIR_UP : dy > 0 ? PDIR_DOWN : dx < 0 ? PDIR_LEFT : PDIR_RIGHT;
-    if (++n->anim >= NPC_ANIM_TICKS) { n->anim = 0; n->frame = (n->frame + 1) % PLAYER_ANIM_FRAMES; }
+    if (++n->anim >= n->stride) { n->anim = 0; n->frame = (n->frame + 1) % PLAYER_ANIM_FRAMES; }
     return 0;
 }
 
-// This frame's walking for n: a pixel per game tick (s_game_ticks — by the
-// clock, so a slow frame doesn't slow them), shown once. true = it's at the end.
+// This frame's walking for n: their gait's speed each game tick (s_game_ticks —
+// by the clock, so a slow frame doesn't slow them), shown once. true = it's at the end.
 static bool npc_walk(npc_t *n)
 {
     int x = n->x, y = n->y, dir = n->dir, frame = n->frame, r = 0;
-    for (int t = 0; t < s_game_ticks && r != 1; t++) {
-        r = npc_step(n);
-        if (r < 0) break;
+    for (int t = 0; t < s_game_ticks && r != 1 && r >= 0; t++) {
+        n->sub += n->speed_q;
+        while (n->sub >= 4 && r != 1) {
+            n->sub -= 4;
+            r = npc_step(n);
+            if (r < 0) { n->sub = 0; break; }   // waiting for someone: no walking banked up meanwhile
+        }
     }
     if (n->x != x || n->y != y || n->dir != dir || n->frame != frame) npc_show(n);
     return r == 1;
@@ -13675,7 +15262,7 @@ static void vis_accept(int vis)
     int i = mkt_shelf_at(v->tx, v->ty);
     shelf_slot_t *s = (i >= 0 && v->slot >= 0 && v->slot < SHELF_SLOTS_MAX) ? &s_place[i].shelf[v->slot] : NULL;
     if (!s || !s->count || s->item != v->item) { message(2500, "That's not on the shelf any more"); vis_leave(vis, NULL); return; }
-    uint8_t item = s->item;
+    item_id_t item = s->item;
     money_add((int32_t)(v->offer > MONEY_MAX ? MONEY_MAX : v->offer));
     ledger_add(true, item, s->quality, 1, v->offer, v->name, mkt_shop_name(v->inst));
     sold_add(photo_kind(item));
@@ -13888,15 +15475,15 @@ static void lot_minute(int k, int32_t now)
 
 // ---- market.txt ----
 // "i <id>" / "p <pid hex>" for an item (a photo item by its lasting id).
-static void mkt_item_words(uint8_t item, char *out, size_t n)
+static void mkt_item_words(item_id_t item, char *out, size_t n)
 {
     if (item >= item_count) snprintf(out, n, "p %08lx", (unsigned long)item_photo_pid(item));
     else                    snprintf(out, n, "i %s", item_get(item)->id);
 }
-static uint8_t mkt_item_parse(const char *kind, const char *id)
+static item_id_t mkt_item_parse(const char *kind, const char *id)
 {
     if (strcmp(kind, "p") == 0) return item_find_photo((uint32_t)strtoul(id, NULL, 16));
-    uint8_t item = item_find(id);
+    item_id_t item = item_find(id);
     return item < item_count ? item : ITEM_NONE;
 }
 
@@ -13978,7 +15565,7 @@ static void market_load(const char *dir)
         int n = mkt_words(line, w, 24);
         // list MAP INST TX TY SLOT DOOR i|p ID COUNT QUALITY PRICE
         if (n == 12 && strcmp(w[0], "list") == 0 && nl < LIST_MAX) {
-            uint8_t item = mkt_item_parse(w[7], w[8]);
+            item_id_t item = mkt_item_parse(w[7], w[8]);
             if (item == ITEM_NONE || strlen(w[1]) > TP_NAME_MAX) continue;
             listing_t *l = &s_list[nl++];
             *l = (listing_t){ .used = true, .inst = (uint16_t)atoi(w[2]), .tx = (int8_t)atoi(w[3]), .ty = (int8_t)atoi(w[4]),
@@ -13989,7 +15576,7 @@ static void market_load(const char *dir)
         } else if (n == 19 && strcmp(w[0], "vis") == 0 && nv < VIS_MAX) {
             int state = atoi(w[2]);
             if (state != VIS_BROWSE && state != VIS_OFFER && state != VIS_BID && state != VIS_WATCH) continue;
-            uint8_t item = mkt_item_parse(w[15], w[16]);
+            item_id_t item = mkt_item_parse(w[15], w[16]);
             if (state == VIS_OFFER && item == ITEM_NONE) continue;
             visitor_t *v = &s_vis[nv++];
             *v = (visitor_t){ .state = (uint8_t)state, .id = (uint32_t)strtoul(w[1], NULL, 16), .seed = (uint32_t)strtoul(w[5], NULL, 16),
@@ -14002,7 +15589,7 @@ static void market_load(const char *dir)
         // lot K i|p ID COUNT QUALITY START BID BIDDER NAME END UNSOLD
         } else if (n == 12 && strcmp(w[0], "lot") == 0) {
             int k = atoi(w[1]);
-            uint8_t item = mkt_item_parse(w[2], w[3]);
+            item_id_t item = mkt_item_parse(w[2], w[3]);
             if (k < 0 || k >= LOT_MAX || item == ITEM_NONE) { ESP_LOGW(TAG, "save: an auction lot's item is gone — dropped"); continue; }
             lot_t *l = &s_lot[k];
             *l = (lot_t){ .used = true, .item = item, .count = (uint8_t)atoi(w[4]), .quality = (uint8_t)atoi(w[5]),
@@ -14358,14 +15945,17 @@ static void update_auction_touch(const input_frame_t *in)
 }
 
 // ============================================================
-//  ANIMALS — farm animals, Stardew Valley style (no barns or friendship
-//  yet). Each kind is made in the Game Tools Animals Editor (animals.h):
+//  ANIMALS — farm animals, Stardew Valley style (no friendship yet). Each
+//  kind is made in the Game Tools Farm tab's Animals Editor (animals.h):
 //  pigs, sheep, cows, chickens, goats, rabbits — whatever the editor made.
 //
 //  Getting one: the RANCH shop (the "ranch_shop" asset action) sells each
 //  animal's item. Hold it and tap open ground — the player walks next to
-//  that tile and lets the animal out there. It lives on that map from then
-//  on (outdoors: not inside a building), RANCH_MAX to a map.
+//  that tile and lets the animal out there. One with a home kind (a barn or
+//  coop animal — see FARM below) needs a building of that kind with room on
+//  that map (or tap the building itself, or let it out inside it), and lives
+//  in it from then on. One without lives on the outdoor map it was let out
+//  on, the old way. RANCH_MAX on screen at once.
 //
 //  Its day: it wanders about at random — stands a moment, walks a few tiles
 //  somewhere it could walk (the player's own rules, nav_can_step()), stands
@@ -14404,14 +15994,55 @@ static void update_auction_touch(const input_frame_t *in)
 //
 //  Saved with the map (MAP SAVES): "animal <id> at tile <x> <y> fed <0|1>
 //  days <d> ready <0|1> pending <n> variant <colour> age <days>" — where it is when the save is written
-//  (moving doesn't make one), so it may come back a few tiles away.
+//  (moving doesn't make one), so it may come back a few tiles away. Animals
+//  with a home are saved in farm.txt instead (FARM).
+//
+//  ---- FARM: barns, coops, silos, pipes and troughs ----
+//  Farm buildings are buildings (PLACEMENT) whose def says so (buildings.h):
+//  a barn or a coop `houses` animals of its kind, up to `capacity`; a silo
+//  stores hay. Every barn and coop has a record (house_t, by its building
+//  number): its animal door open or shut, the hay in its troughs, whether
+//  pipes join it to a silo. Every animal with a home has one too (herd_t):
+//  its home, inside it or out, where, and its day (fed, products, age) — so
+//  it lives on while the player is elsewhere; it only has a body (s_ranch)
+//  on the map it's on while that map is loaded.
+//  The day: the animal door starts shut. Tap it (holding anything) to open or
+//  shut it. Open, between 6:00 and RANCH_HOME_MIN with no rain, the animals
+//  come out of it one a game minute and graze outside like any other; from
+//  RANCH_HOME_MIN (or when it rains) they walk back to it and go in, and at
+//  RANCH_BED_MIN the ones still out are fetched in (a door left shut leaves
+//  them where they are — in, or out all night). Inside a barn they wander;
+//  with its door open they leave by the inside's "Building exit" and come
+//  back in by it. A map that isn't loaded just has them in or out as the
+//  clock and the door say (herd_settle()).
+//  Feeding: at midnight (herd_catch_up(), wherever the player is) an animal
+//  that ate nothing that day ate grass if it went out and there was grass
+//  its home's animals can walk to from the door (counted the last time that
+//  map was on screen, house_t.grass — eaten there for real when it's next
+//  loaded, house_t.owed); else, inside, it eats one hay from its home's
+//  troughs. The troughs are the inside map's objects with the "trough" asset
+//  action (their tiles, in order: the first `hay` of them show hay) — hold
+//  hay and tap one to fill it. A silo (tap it: take hay out, or hold hay to
+//  put it in) gets the hay a scythe cuts from grass; pipes (fences.h) in a
+//  line from a silo to a barn fill that barn's troughs from the silo every
+//  morning, and as soon as they're joined.
+//  farm.txt, in the save slot (written with world.txt):
+//      CAPTUREIT FARM 1
+//      day 12                                  the day the animals are up to
+//      silo hay 37                             hay in every silo, all together
+//      house inst 3 door 1 hay 2 piped 1 grass 40 owed 0
+//      animal cow home 3 out 0 at tile 4 5 fed 1 days 0 ready 0 pending 0 variant 1 age 12
 // ============================================================
 #include "animals.h"
 
-#define RANCH_MAX            16          // animals on one map
-#define RANCH_PATH_MAX       40          // tiles in one walk
+#define RANCH_MAX            24          // animals on screen at once
+#define RANCH_PATH_MAX       64          // tiles in one walk
 #define RANCH_WAKE_MIN       (6 * 60)    // they get up at 6:00 (CLOCK_START_MIN)...
+#define RANCH_HOME_MIN       (17 * 60)   // ...those with a home head back to it at 5 pm...
 #define RANCH_BED_MIN        (19 * 60)   // ...and lie down where they are at 7 pm
+#define HERD_MAX             64          // animals with a home, in one save
+#define HOUSE_MAX            BREC_MAX    // barns and coops, in one save (they're buildings)
+#define FARM_SAVE_DELAY_MS   2000        // farm.txt is written this long after the herd changed
 #define RANCH_PENDING_MAX    3           // products waiting to be laid (days away pile up to this)
 #define RANCH_WANDER_TILES   5           // a wander goes at most this many steps
 #define RANCH_IDLE_MIN_MS    1500        // it stands this long between walks...
@@ -14431,10 +16062,16 @@ static void update_auction_touch(const input_frame_t *in)
 #define ITEM_CUTS(item)   ((item) != ITEM_NONE && item_attr((item), ITEM_ATTR_CUTS, 0) > 0)
 #define ITEM_GRASSES(item) ((item) != ITEM_NONE && item_attr((item), ITEM_ATTR_GRASS, 0) > 0)
 
-enum { RA_IDLE, RA_WALK, RA_EAT, RA_SLEEP, RA_HELD };
+enum { RA_IDLE, RA_WALK, RA_EAT, RA_SLEEP, RA_HELD,
+       RA_HOME,                     // walking to its home's door (FARM): in through it at the end
+       RA_DOOR };                   // stepping through its home's animal door (door_dy: +1 out, -1 in), walls and all
 
 typedef struct {
     bool       used;
+    int8_t     herd;                // its s_herd[] record (FARM: an animal with a home); -1 = one of the map's own
+    int8_t     door_dy;             // RA_DOOR: +1 coming out (down), -1 going in (up)
+    uint8_t    door_px;             // RA_DOOR: pixels still to go
+    int8_t     home_tx, home_ty;    // RA_HOME: the tile it's walking to (in front of its door, or the inside's exit)
     uint8_t    def;                 // s_animals[] index
     uint8_t    variant;             // its colour (animal_def_t.variant_count), picked when it's let out
     uint8_t    age;                 // days since it was let out (255: and more) — a baby until grow_days
@@ -14456,12 +16093,53 @@ typedef struct {
     rect_t     drawn;               // on screen (w == 0: not yet)
 } animal_t;
 
-enum { AIM_NONE, AIM_ANIMAL, AIM_LET_OUT, AIM_GRASS, AIM_CUT };
+enum { AIM_NONE, AIM_ANIMAL, AIM_LET_OUT, AIM_GRASS, AIM_CUT,
+       AIM_DOOR,       // a barn's animal door: open / shut it (FARM)
+       AIM_SILO,       // a silo: hay out, or in
+       AIM_HOUSE,      // a barn's wall: how it's doing
+       AIM_LET_IN,     // a barn, holding an animal that lives in one: in it goes
+       AIM_WELL };     // a well: fills the held watering can (FARMING)
 
-static animal_t s_ranch[RANCH_MAX];
+EXT_RAM_BSS_ATTR static animal_t s_ranch[RANCH_MAX];   // PSRAM: ~4 KB, looked through a few times a frame
 static int      s_ranch_seen_min = -1;
-typedef struct { uint8_t kind; int8_t tx, ty, animal; } ranch_aim_t;
-static ranch_aim_t s_ranch_aim;   // what the walk ranch_tap_target() planned is for
+typedef struct { uint8_t kind; int8_t tx, ty, animal; int16_t place; } ranch_aim_t;
+static ranch_aim_t s_ranch_aim;   // what the walk ranch_tap_target() planned is for (place: the farm building's s_place[])
+
+// ---- FARM records (see the section comment) ----
+typedef struct {
+    bool     used;
+    uint16_t inst;        // the building (buildings.txt)
+    bool     door_open;   // its animal door
+    bool     piped;       // pipes join it to a silo (as last seen on its map)
+    item_id_t  hay;         // troughs with hay in them
+    uint16_t grass;       // grass tufts its animals can walk to from the door, as last seen on its map
+    uint16_t owed;        // tufts they ate while its map wasn't loaded: eaten off it when it next is
+} house_t;
+
+typedef struct {
+    bool     used;
+    uint8_t  def, variant, age, days, pending;   // as animal_t's
+    bool     fed, ready;
+    bool     went_out;    // it was outside some time today (it could graze)
+    bool     outside;     // out on the map its home stands on; else inside its home
+    uint16_t home;        // its home's building number (house_t.inst)
+    int8_t   tx, ty;      // where it was last, on the map it's on; -1 = anywhere (it gets a spot with its body)
+    int8_t   body;        // its s_ranch[] while it's on the loaded map, else -1
+} herd_t;
+
+EXT_RAM_BSS_ATTR static house_t s_house[HOUSE_MAX];   // PSRAM, like s_brec
+EXT_RAM_BSS_ATTR static herd_t  s_herd[HERD_MAX];
+static uint32_t s_silo_hay       = 0;      // hay in every silo, all together
+static int32_t  s_herd_day       = -1;     // the game day the herd is up to; -1 = today (not known yet)
+static bool     s_farm_dirty     = false;  // farm.txt is out of date...
+static uint32_t s_farm_dirty_ms  = 0;      // ...since (esp_timer ms)
+static int      s_herd_seen_min  = -1;     // the game minute herd_tick() last looked at
+
+static void farm_mark_dirty(void)
+{
+    if (!s_farm_dirty) s_farm_dirty_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    s_farm_dirty = true;
+}
 
 static uint32_t ranch_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
 static uint32_t ranch_rand(uint32_t lo, uint32_t hi) { return lo + esp_random() % (hi - lo + 1); }
@@ -14487,41 +16165,41 @@ static int animal_find(const char *id)
     return -1;
 }
 
-static int animal_of_item(uint8_t item)
+static int animal_of_item(item_id_t item)
 {
     const item_asset_t *a = item == ITEM_NONE ? NULL : item_get(item);
     return a ? animal_find(a->id) : -1;
 }
 
 // The tool that takes some animal's product (shears, a milk pail)?
-static bool ranch_is_tool(uint8_t item)
+static bool ranch_is_tool(item_id_t item)
 {
     for (int i = 0; i < animal_count; i++)
         if (s_animals[i]->tool[0] && item_attr(item, s_animals[i]->tool, 0) > 0) return true;
     return false;
 }
 
-static bool ranch_sells(uint8_t item)
+static bool ranch_sells(item_id_t item)
 {
     return ITEM_FEEDS(item) || ITEM_CUTS(item) || ITEM_GRASSES(item) || ranch_is_tool(item);
 }
 
 // The first item with attribute `attr` (hay for "feed", ...), ITEM_NONE if none.
-static uint8_t ranch_item_with(const char *attr)
+static item_id_t ranch_item_with(const char *attr)
 {
     for (int i = 1; i < item_count; i++)
-        if (item_attr((uint8_t)i, attr, 0) > 0) return (uint8_t)i;
+        if (item_attr((item_id_t)i, attr, 0) > 0) return (item_id_t)i;
     return ITEM_NONE;
 }
 
 static const char *ranch_item_name(const char *id)
 {
-    uint8_t it = id && id[0] ? item_find(id) : ITEM_NONE;
+    item_id_t it = id && id[0] ? item_find(id) : ITEM_NONE;
     return it != ITEM_NONE ? item_name(it) : "nothing";
 }
 
 // The RANCH shop's card line for item (SEED SHOP): what an animal gives, what a tool is for.
-static void ranch_shop_card(uint8_t item, char *line, size_t n)
+static void ranch_shop_card(item_id_t item, char *line, size_t n)
 {
     int a = animal_of_item(item);
     if (a >= 0) {
@@ -14530,11 +16208,17 @@ static void ranch_shop_card(uint8_t item, char *line, size_t n)
         if (d->product_days <= 1) snprintf(every, sizeof(every), "every day");
         else                      snprintf(every, sizeof(every), "every %d days", d->product_days);
         if (!d->product[0])  snprintf(line, n, "Eats grass or hay.");
-        else if (d->tool[0]) { uint8_t t = ranch_item_with(d->tool);
+        else if (d->tool[0]) { item_id_t t = ranch_item_with(d->tool);
                                snprintf(line, n, "%s %s when fed - take it with %s.", ranch_item_name(d->product), every,
                                         t != ITEM_NONE ? item_name(t) : d->tool); }
         else                 snprintf(line, n, "Lays %s %s when fed%s%s.", ranch_item_name(d->product), every,
                                       d->rare[0] ? ", now and then " : "", d->rare[0] ? ranch_item_name(d->rare) : "");
+        if (d->house && d->house[0]) {   // it needs a home (FARM)
+            char rest[128];
+            strlcpy(rest, line, sizeof(rest));
+            int k = snprintf(line, n, "Lives in a %s. ", d->house);
+            if (k > 0 && (size_t)k < n) strlcpy(line + k, rest, n - (size_t)k);
+        }
         return;
     }
     if (ITEM_FEEDS(item))        snprintf(line, n, "Hold it and tap a hungry animal to feed it.  In bag: %d", inv_count_of(item));
@@ -14558,7 +16242,7 @@ static int ra_frame(const animal_t *a, bool *flip)
     *flip = false;
     if (s == ANIMAL_SEQ_SLEEP && !d->seq_len[s]) { s = ANIMAL_SEQ_DOWN; f = 0; }   // no sleeping frames: its first walking-down one
     if (s >= 0 && !d->seq_len[s]) s = -1;                                         // no eating frames: stands as it is
-    if (s < 0) { s = a->dir; if (a->mode != RA_WALK) f = 0; }
+    if (s < 0) { s = a->dir; if (a->mode != RA_WALK && a->mode != RA_HOME && a->mode != RA_DOOR) f = 0; }
     if (s == ANIMAL_SEQ_LEFT && !d->seq_len[s]) { s = ANIMAL_SEQ_RIGHT; *flip = true; }
     if (!d->seq_len[s]) return 0;
     int k = d->seq[s][f % d->seq_len[s]];
@@ -14755,6 +16439,7 @@ static animal_t *ra_new(int def, int tx, int ty)
         uint32_t now = ranch_ms();
         memset(a, 0, sizeof(*a));
         a->used     = true;
+        a->herd     = -1;   // one of the map's own, unless FARM makes it a body for one with a home
         a->def      = (uint8_t)def;
         a->variant  = (uint8_t)(esp_random() % (uint32_t)ra_variants(s_animals[def]));   // a white or a brown one (Stardew)
         a->age      = 0;                                                                   // a baby, if it has a baby stage
@@ -14782,23 +16467,31 @@ static bool ra_spot_ok(int tx, int ty)
 }
 
 // Something animal a made: the rare one rare_chance % of the time, with a quality and maybe a mutation.
-static uint8_t ra_product(const animal_t *a, uint8_t *quality)
+static item_id_t ra_product(const animal_t *a, uint8_t *quality)
 {
     const animal_def_t *d = ra_def(a);
-    uint8_t item = d->rare[0] && (int)(esp_random() % 100) < d->rare_chance ? item_find(d->rare) : ITEM_NONE;
+    item_id_t item = d->rare[0] && (int)(esp_random() % 100) < d->rare_chance ? item_find(d->rare) : ITEM_NONE;
     if (item == ITEM_NONE) item = ra_product_id(a)[0] ? item_find(ra_product_id(a)) : ITEM_NONE;
     if (item != ITEM_NONE) *quality = wet_if_raining(QUALITY_MAKE(item_roll_quality(item, esp_random()), mut_roll(item, 1.0f)));   // MUTATIONS, WET ITEMS
     return item;
 }
 
+// Animal a's day changed (fed, a product taken): its save is out of date — the map's, or farm.txt (FARM).
+static void ra_dirty(const animal_t *a)
+{
+    if (a->herd >= 0) farm_mark_dirty();
+    else              mapsave_mark_dirty();
+}
+
 // A product it was due to lay, on the ground where it stands (or next to it).
 static void ra_lay(animal_t *a)
 {
-    uint8_t q = QUALITY_STANDARD, item = ra_product(a, &q);
+    uint8_t q = QUALITY_STANDARD; item_id_t item = ra_product(a, &q);
     if (item == ITEM_NONE) { a->pending = 0; return; }
     if (!ground_drop_near(item, q, 1, ra_tx(a), ra_ty(a), 0, 0, true, false)) return;   // no room on the ground near it: later
     a->pending--;
-    mapsave_mark_dirty();
+    mapsave_mark_dirty();   // (the stack on the ground)
+    ra_dirty(a);
 }
 
 // It finished eating the grass it's standing on.
@@ -14809,12 +16502,933 @@ static void ra_eat_grass(animal_t *a)
     grass_set(tx, ty, t > eats ? t - eats : 0);
     a->fed = true;
     mapsave_mark_dirty();
+    ra_dirty(a);
+}
+
+// ============ FARM (see the section comment): homes, the herd, silos, pipes, troughs ============
+static bool rain_outside_now(void);                       // WEATHER section: raining outdoors (wherever the player is)
+static bool rain_fell_outdoors(int32_t day, int upto_min); // ...and on day `day` before minute upto_min
+
+static bool def_houses(const building_def_t *d) { return d && d->houses && d->houses[0]; }
+static bool animal_needs_house(int def) { const char *h = s_animals[def]->house; return h && h[0]; }
+
+// Building number inst's def (buildings.txt), or NULL (no such building, or not in this build).
+static const building_def_t *house_def(uint16_t inst)
+{
+    const brec_t *r = brec_find(inst);
+    int b = r ? building_find(r->id) : -1;
+    return b >= 0 ? s_buildings[b] : NULL;
+}
+
+// Does animal kind def live in farm building d?
+static bool house_fits(const building_def_t *d, int def)
+{
+    return def_houses(d) && animal_needs_house(def) && strcmp(d->houses, s_animals[def]->house) == 0;
+}
+
+// Building number inst's record; create: made if it hasn't one yet. NULL = it isn't a barn or a coop (or no room).
+static house_t *house_get(uint16_t inst, bool create)
+{
+    house_t *free_slot = NULL;
+    for (int i = 0; inst && i < HOUSE_MAX; i++) {
+        if (s_house[i].used && s_house[i].inst == inst) return &s_house[i];
+        if (!s_house[i].used && !free_slot) free_slot = &s_house[i];
+    }
+    if (!inst || !create || !free_slot || !def_houses(house_def(inst))) return NULL;
+    *free_slot = (house_t){ .used = true, .inst = inst };   // its door starts shut (Stardew)
+    return free_slot;
+}
+
+// How many animals live in building inst.
+static int house_count(uint16_t inst)
+{
+    int n = 0;
+    for (int i = 0; i < HERD_MAX; i++) n += s_herd[i].used && s_herd[i].home == inst;
+    return n;
+}
+
+static int house_capacity(uint16_t inst)
+{
+    const building_def_t *d = house_def(inst);
+    return d ? d->capacity : 0;
+}
+
+// What the player calls building inst ("Barn").
+static const char *house_name(uint16_t inst)
+{
+    const brec_t *r = brec_find(inst);
+    item_id_t it = r ? item_find(r->id) : ITEM_NONE;
+    return it != ITEM_NONE ? item_name(it) : "barn";
+}
+
+// Placed building s_place[i]'s animal door: its tile (*dx,*dy — in the
+// footprint's bottom row) and the tile in front of it (*ox,*oy). false = it has none.
+static bool house_door_tiles(int i, int *dx, int *dy, int *ox, int *oy)
+{
+    const place_geom_t *g = &s_place[i].g;
+    if (g->kind != PLACE_BUILDING) return false;
+    const building_def_t *b = s_buildings[g->what];
+    if (!def_houses(b) || !b->animal_door || b->animal_door > g->fw) return false;
+    *dx = g->tx + b->animal_door - 1;
+    *dy = g->ty + g->fh - 1;
+    *ox = *dx;
+    *oy = *dy + 1;
+    return tile_on_map(*ox, *oy);
+}
+
+// Is the loaded map building number inst's inside?
+static bool house_inside_here(uint16_t inst) { return inst && s_map_inst == inst; }
+
+// Building number inst standing on the loaded map (outdoors): its s_place[], or -1.
+static int house_place(uint16_t inst)
+{
+    for (int i = 0; inst && !s_map_inst && i < PLACE_MAX; i++)
+        if (s_place[i].g.kind == PLACE_BUILDING && s_place[i].inst == inst) return i;
+    return -1;
+}
+
+// Do h's animals want to be out now — its door open, between 6:00 and RANCH_HOME_MIN, no rain?
+static bool house_wants_out(const house_t *h)
+{
+    int m = clock_minute_of_day();
+    return h && h->door_open && m >= RANCH_WAKE_MIN && m < RANCH_HOME_MIN && !rain_outside_now();
+}
+
+// Room for hay in every silo the player has built (buildings.txt, every map).
+static uint32_t silo_capacity(void)
+{
+    uint32_t n = 0;
+    for (int k = 0; k < BREC_MAX; k++) {
+        if (!s_brec[k].used) continue;
+        int b = building_find(s_brec[k].id);
+        if (b >= 0) n += s_buildings[b]->hay_capacity;
+    }
+    return n;
+}
+
+// ---- an animal's record and its body ----
+static void herd_from_body(herd_t *r, const animal_t *a)
+{
+    r->variant = a->variant; r->age = a->age; r->fed = a->fed; r->ready = a->ready; r->days = a->days; r->pending = a->pending;
+    int tx = ra_tx(a), ty = ra_ty(a);
+    if (a->ppos < a->plen) { tx = a->path[a->plen - 1].x; ty = a->path[a->plen - 1].y; }   // walking: where it's going
+    if (a->mode == RA_DOOR) tx = ty = -1;   // in a doorway: a spot by the door next time
+    r->tx = (int8_t)tx;
+    r->ty = (int8_t)ty;
+}
+
+static void herd_to_body(const herd_t *r, animal_t *a)
+{
+    a->variant = r->variant; a->age = r->age; a->fed = r->fed; a->ready = r->ready; a->days = r->days; a->pending = r->pending;
+}
+
+// Every body's day into its record (before the records are written, or a day is played).
+static void herd_sync_bodies(void)
+{
+    for (int i = 0; i < RANCH_MAX; i++)
+        if (s_ranch[i].used && s_ranch[i].herd >= 0) herd_from_body(&s_herd[s_ranch[i].herd], &s_ranch[i]);
+}
+
+// A body for record ri, standing on tile (tx,ty). NULL = no room on screen.
+static animal_t *herd_body_new(int ri, int tx, int ty)
+{
+    herd_t   *r = &s_herd[ri];
+    animal_t *a = ra_new(r->def, tx, ty);
+    if (!a) return NULL;
+    a->herd = (int8_t)ri;
+    herd_to_body(r, a);
+    a->adult_shown = !ra_baby(a);
+    r->body = (int8_t)(a - s_ranch);
+    return a;
+}
+
+// Body a goes off the screen (its record keeps it all): through a door, or fetched in.
+static void ra_free(animal_t *a)
+{
+    if (a->herd >= 0) {
+        herd_from_body(&s_herd[a->herd], a);
+        s_herd[a->herd].body = -1;
+    }
+    rect_t r = a->drawn;
+    a->used = false;
+    if (!r.w) return;
+    if (r.x < 0) { r.w += r.x; r.x = 0; }
+    if (r.y < 0) { r.h += r.y; r.y = 0; }
+    if (r.x + r.w > LCD_H_RES) r.w = LCD_H_RES - r.x;
+    if (r.y + r.h > LCD_V_RES) r.h = LCD_V_RES - r.y;
+    if (r.w > 0 && r.h > 0) npc_dirty_add(r);
+}
+
+// It went in at its home's door (outdoors), or was fetched in at bedtime.
+static void herd_go_in(animal_t *a)
+{
+    if (a->herd < 0) return;
+    herd_t *r = &s_herd[a->herd];
+    ra_free(a);
+    r->outside = false;
+    r->tx = r->ty = -1;
+    farm_mark_dirty();
+}
+
+// It went out by the inside's exit (inside its home).
+static void herd_go_out(animal_t *a)
+{
+    if (a->herd < 0) return;
+    herd_t *r = &s_herd[a->herd];
+    ra_free(a);
+    r->outside  = true;
+    r->went_out = true;
+    r->tx = r->ty = -1;
+    farm_mark_dirty();
+}
+
+// A new animal of kind def living in building inst (outside = out on its map). -1 = the farm is full (HERD_MAX).
+static int herd_new(int def, uint16_t inst, bool outside)
+{
+    for (int i = 0; i < HERD_MAX; i++) {
+        if (s_herd[i].used) continue;
+        s_herd[i] = (herd_t){ .used = true, .def = (uint8_t)def, .home = inst, .outside = outside, .went_out = outside,
+                              .variant = (uint8_t)(esp_random() % (uint32_t)ra_variants(s_animals[def])),   // a white or a brown one (Stardew)
+                              .fed = true,   // fed at the shop: no going hungry on its first day
+                              .tx = -1, .ty = -1, .body = -1 };
+        house_get(inst, true);
+        farm_mark_dirty();
+        return i;
+    }
+    return -1;
+}
+
+// A walk for a to tile (gx,gy), over the tiles the player could walk. avoid: round
+// the tiles other animals stand on (one met head-on in a narrow gap). false = it can't get there.
+static bool ra_plan_to(animal_t *a, int gx, int gy, bool avoid)
+{
+    static int16_t prev[TILE_ROWS * TILE_COLS], dist[TILE_ROWS * TILE_COLS], queue[TILE_ROWS * TILE_COLS];
+    static const int8_t k_dx[4] = { 0, 0, -1, 1 }, k_dy[4] = { -1, 1, 0, 0 };
+    npc_nav_tiles();
+    int sx = ra_tx(a), sy = ra_ty(a);
+    if (!tile_on_map(sx, sy) || !tile_on_map(gx, gy)) return false;
+    for (int i = 0; i < TILE_ROWS * TILE_COLS; i++) prev[i] = -2;
+    int qh = 0, qt = 0, goal = gy * TILE_COLS + gx;
+    prev[sy * TILE_COLS + sx] = -1;
+    dist[sy * TILE_COLS + sx] = 0;
+    queue[qt++] = (int16_t)(sy * TILE_COLS + sx);
+    while (qh < qt && prev[goal] == -2) {
+        int i = queue[qh++], x = i % TILE_COLS, y = i / TILE_COLS;
+        if (dist[i] >= RANCH_PATH_MAX - 1) continue;
+        for (int k = 0; k < 4; k++) {
+            int nx = x + k_dx[k], ny = y + k_dy[k];
+            if (!nav_can_step(x, y, nx, ny) || prev[ny * TILE_COLS + nx] != -2) continue;
+            if (avoid && (nx != gx || ny != gy)) { int o = ra_at(nx, ny); if (o >= 0 && &s_ranch[o] != a) continue; }
+            prev[ny * TILE_COLS + nx] = (int16_t)i;
+            dist[ny * TILE_COLS + nx] = (int16_t)(dist[i] + 1);
+            queue[qt++] = (int16_t)(ny * TILE_COLS + nx);
+        }
+    }
+    if (prev[goal] == -2) return false;
+    int len = dist[goal] + 1;
+    for (int i = goal, k = len - 1; k >= 0; i = prev[i], k--) {
+        a->path[k].x = (int8_t)(i % TILE_COLS);
+        a->path[k].y = (int8_t)(i / TILE_COLS);
+    }
+    a->plen = (uint8_t)len;
+    a->ppos = 0;
+    a->blocked = 0;
+    return true;
+}
+
+// Is tile (tx,ty) free for an animal to step onto now (standable, nobody on it or heading there, not the player)?
+static bool ra_tile_free(int tx, int ty)
+{
+    return ra_spot_ok(tx, ty) && !ra_claimed(NULL, tx, ty) && !ra_player_on(tx, ty);
+}
+
+// A free tile 1..max_d steps from (sx,sy), at random (or (sx,sy) itself if it's free and there's none). false = none.
+static bool ra_spot_near(int sx, int sy, int max_d, int *tx, int *ty)
+{
+    static int16_t dist[TILE_ROWS * TILE_COLS], queue[TILE_ROWS * TILE_COLS];
+    static const int8_t k_dx[4] = { 0, 0, -1, 1 }, k_dy[4] = { -1, 1, 0, 0 };
+    if (!tile_on_map(sx, sy)) return false;
+    npc_nav_tiles();
+    for (int i = 0; i < TILE_ROWS * TILE_COLS; i++) dist[i] = -1;
+    int qh = 0, qt = 0, seen = 0;
+    dist[sy * TILE_COLS + sx] = 0;
+    queue[qt++] = (int16_t)(sy * TILE_COLS + sx);
+    while (qh < qt) {
+        int i = queue[qh++], x = i % TILE_COLS, y = i / TILE_COLS;
+        if (dist[i] > 0 && ra_tile_free(x, y) && esp_random() % (uint32_t)++seen == 0) { *tx = x; *ty = y; }
+        if (dist[i] >= max_d) continue;
+        for (int k = 0; k < 4; k++) {
+            int nx = x + k_dx[k], ny = y + k_dy[k];
+            if (!nav_can_step(x, y, nx, ny) || dist[ny * TILE_COLS + nx] >= 0) continue;
+            dist[ny * TILE_COLS + nx] = (int16_t)(dist[i] + 1);
+            queue[qt++] = (int16_t)(ny * TILE_COLS + nx);
+        }
+    }
+    if (seen) return true;
+    if (!ra_tile_free(sx, sy)) return false;
+    *tx = sx; *ty = sy;
+    return true;
+}
+
+// ---- grass outside a barn ----
+// The grass tufts the animals of farm building s_place[i] can walk to from
+// its door (fences and shut gates in the way), as it is — eating `eat` of
+// them on the way, nearest the door first (the caller shows the change).
+static int house_grass_scan(int i, int eat)
+{
+    static int16_t queue[TILE_ROWS * TILE_COLS];
+    static uint8_t seen[TILE_ROWS][TILE_COLS];
+    static const int8_t k_dx[4] = { 0, 0, -1, 1 }, k_dy[4] = { -1, 1, 0, 0 };
+    int dx, dy, ox, oy;
+    if (!house_door_tiles(i, &dx, &dy, &ox, &oy)) return 0;
+    npc_nav_tiles();
+    memset(seen, 0, sizeof(seen));
+    int qh = 0, qt = 0, total = 0;
+    seen[oy][ox] = 1;
+    queue[qt++] = (int16_t)(oy * TILE_COLS + ox);
+    while (qh < qt) {
+        int k = queue[qh++], x = k % TILE_COLS, y = k / TILE_COLS, t = s_grass[y][x];
+        if (t && !grass_frozen(x, y)) {
+            total += t;
+            if (eat > 0) { int e = eat < t ? eat : t; s_grass[y][x] = (uint8_t)(t - e); eat -= e; }
+        }
+        for (int d = 0; d < 4; d++) {
+            int nx = x + k_dx[d], ny = y + k_dy[d];
+            if (!nav_can_step(x, y, nx, ny) || seen[ny][nx]) continue;
+            seen[ny][nx] = 1;
+            queue[qt++] = (int16_t)(ny * TILE_COLS + nx);
+        }
+    }
+    return total;
+}
+
+// What every barn and coop on the loaded map can graze, for the days it isn't loaded.
+static void farm_houses_scan(void)
+{
+    for (int i = 0; !s_map_inst && i < PLACE_MAX; i++) {
+        house_t *h = s_place[i].g.kind == PLACE_BUILDING ? house_get(s_place[i].inst, false) : NULL;
+        if (!h) continue;
+        int t = house_grass_scan(i, 0);
+        if (t > 65535) t = 65535;
+        if (h->grass != t) { h->grass = (uint16_t)t; farm_mark_dirty(); }
+    }
+}
+
+// ---- the troughs inside a barn (the inside map's "trough" objects) ----
+#define TROUGH_MAX 32
+static int8_t s_trough_x[TROUGH_MAX], s_trough_y[TROUGH_MAX];
+static int    s_trough_n = 0;              // trough tiles on the loaded map (0 outdoors)
+static int    s_trough_shown = 0;          // ...how many show hay
+
+// The loaded map's trough tiles, in order: every "trough" object's tiles, row by row.
+static void trough_find(void)
+{
+    s_trough_n = s_trough_shown = 0;
+    int act = asset_action_find("trough");
+    if (act < 0 || !s_map_inst) return;
+    for (int t = 0; t < s_trig.count; t++) {
+        const trig_t *tr = &s_trig.items[t];
+        bool is = false;
+        for (int a = 0; a < tr->action_count; a++) is |= tr->actions[a] == act;
+        if (!is) continue;
+        for (int ty = tr->y / TILE_SIZE; ty <= (tr->y + tr->h - 1) / TILE_SIZE; ty++)
+            for (int tx = tr->x / TILE_SIZE; tx <= (tr->x + tr->w - 1) / TILE_SIZE && s_trough_n < TROUGH_MAX; tx++) {
+                s_trough_x[s_trough_n] = (int8_t)tx;
+                s_trough_y[s_trough_n] = (int8_t)ty;
+                s_trough_n++;
+            }
+    }
+}
+
+// The hay in the troughs, painted over the map (the map was just put back there). map_repaint_rect() calls it.
+static void trough_paint_rect(int x, int y, int w, int h)
+{
+    static uint16_t spr[GROUND_TILE_PX];
+    static item_id_t  spr_item = ITEM_NONE;
+    if (!s_trough_shown) return;
+    item_id_t hay = ranch_item_with(ITEM_ATTR_FEED);
+    if (hay == ITEM_NONE) return;
+    if (hay != spr_item) { ground_sprite(hay, QUALITY_STANDARD, spr); spr_item = hay; }
+    for (int k = 0; k < s_trough_shown; k++) {
+        int x0 = s_trough_x[k] * TILE_SIZE, y0 = s_trough_y[k] * TILE_SIZE;
+        if (!anim_rects_overlap(x, y, w, h, x0, y0, TILE_SIZE, TILE_SIZE)) continue;
+        for (int row = 0; row < TILE_SIZE; row++) {
+            int py = y0 + row;
+            if (py < y || py >= y + h) continue;
+            for (int col = 0; col < TILE_SIZE; col++) {
+                int px = x0 + col;
+                uint16_t c = spr[row * TILE_SIZE + col];
+                if (px < x || px >= x + w || c == FB_TRANSPARENT_COLOR || map_pixel_layer(px, py)) continue;
+                s_fb[py * s_fb_w + px] = s_night_shown ? night_px(&s_night_lut, c) : c;
+            }
+        }
+    }
+}
+
+// The troughs show what the loaded barn's record says (repainted where that changed).
+static void trough_show(void)
+{
+    house_t *h = s_trough_n ? house_get(s_map_inst, false) : NULL;
+    int want = h ? (h->hay < s_trough_n ? h->hay : s_trough_n) : 0;
+    if (want == s_trough_shown) return;
+    int lo = want < s_trough_shown ? want : s_trough_shown, hi = want < s_trough_shown ? s_trough_shown : want;
+    s_trough_shown = want;
+    for (int k = lo; k < hi; k++) map_redraw_over(s_trough_x[k] * TILE_SIZE, s_trough_y[k] * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+}
+
+// Fills h's empty troughs from the silos. Returns how much hay went in.
+static int house_fill_from_silo(house_t *h)
+{
+    int n = house_capacity(h->inst) - h->hay;
+    if (n > (int)s_silo_hay) n = (int)s_silo_hay;
+    if (n <= 0) return 0;
+    h->hay += (uint8_t)n;
+    s_silo_hay -= (uint32_t)n;
+    farm_mark_dirty();
+    return n;
+}
+
+// ---- pipes ----
+// Which barns and coops on the loaded map pipes join to a silo on it: a line
+// of pipe pieces from a tile next to a silo to a tile next to the building.
+// One that's just been joined gets its troughs filled now (announce: says so).
+static void farm_pipes_update(bool announce)
+{
+    static uint8_t grid[TILE_ROWS][TILE_COLS];   // 1 = a pipe, 2 = one the silo's hay reaches
+    static int16_t queue[TILE_ROWS * TILE_COLS];
+    static const int8_t k_dx[4] = { 0, 0, -1, 1 }, k_dy[4] = { -1, 1, 0, 0 };
+    if (!s_map_loaded || s_map_inst) return;
+    memset(grid, 0, sizeof(grid));
+    for (int i = 0; i < PLACE_MAX; i++)
+        if (link_group(&s_place[i].g) == 2) grid[s_place[i].g.ty][s_place[i].g.tx] = 1;
+    int qh = 0, qt = 0;
+    for (int i = 0; i < PLACE_MAX; i++) {   // the pipes touching a silo
+        const place_geom_t *g = &s_place[i].g;
+        if (g->kind != PLACE_BUILDING || !s_buildings[g->what]->hay_capacity) continue;
+        for (int ty = g->ty - 1; ty <= g->ty + g->fh; ty++)
+            for (int tx = g->tx - 1; tx <= g->tx + g->fw; tx++) {
+                bool side = (tx >= g->tx && tx < g->tx + g->fw) != (ty >= g->ty && ty < g->ty + g->fh);   // edge-on, not a corner or inside
+                if (!side || !tile_on_map(tx, ty) || grid[ty][tx] != 1) continue;
+                grid[ty][tx] = 2;
+                queue[qt++] = (int16_t)(ty * TILE_COLS + tx);
+            }
+    }
+    while (qh < qt) {
+        int k = queue[qh++], x = k % TILE_COLS, y = k / TILE_COLS;
+        for (int d = 0; d < 4; d++) {
+            int nx = x + k_dx[d], ny = y + k_dy[d];
+            if (!tile_on_map(nx, ny) || grid[ny][nx] != 1) continue;
+            grid[ny][nx] = 2;
+            queue[qt++] = (int16_t)(ny * TILE_COLS + nx);
+        }
+    }
+    for (int i = 0; i < PLACE_MAX; i++) {   // the barns and coops a reached pipe touches
+        const place_geom_t *g = &s_place[i].g;
+        if (g->kind != PLACE_BUILDING || !def_houses(s_buildings[g->what])) continue;
+        bool piped = false;
+        for (int ty = g->ty - 1; ty <= g->ty + g->fh && !piped; ty++)
+            for (int tx = g->tx - 1; tx <= g->tx + g->fw && !piped; tx++) {
+                bool side = (tx >= g->tx && tx < g->tx + g->fw) != (ty >= g->ty && ty < g->ty + g->fh);
+                piped = side && tile_on_map(tx, ty) && grid[ty][tx] == 2;
+            }
+        house_t *h = house_get(s_place[i].inst, true);
+        if (!h || h->piped == piped) continue;
+        h->piped = piped;
+        farm_mark_dirty();
+        if (!piped) { if (announce) message(2500, "The %s isn't joined to a silo any more", house_name(h->inst)); continue; }
+        int n = house_fill_from_silo(h);
+        if (!announce) continue;
+        if (n) message(3000, "Pipes join the %s to the silo: %d hay into its troughs", house_name(h->inst), n);
+        else   message(3000, "Pipes join the %s to the silo - it fills the troughs every morning", house_name(h->inst));
+    }
+}
+
+static void farm_pipes_changed(void) { farm_pipes_update(true); }
+
+// ---- the animal door, and the pipes running up to a building ----
+// Pipes (fences.h) that join a farm building end at its footprint's edge,
+// but its picture may not reach that edge (a barn's walls stand in from its
+// tiles). So each pipe beside it (or below it) carries on into the
+// building's rect, its edge pixels drawn on — row by row, until they meet
+// the building's own art — and it looks joined to the wall. Drawn into the
+// map pixels with the building (its under-buffer covers them): when a pipe
+// beside it comes or goes, the building is baked again (place_rebake()).
+static void house_bake_pipes(int i)
+{
+    const place_geom_t   *g = &s_place[i].g;
+    const building_def_t *b = s_buildings[g->what];
+    if (!building_is_farm(g)) return;
+    rect_t r = geom_rect(g);
+    for (int k = 0; k < PLACE_MAX; k++) {
+        const place_geom_t *o = &s_place[k].g;
+        if (link_group(o) != 2) continue;
+        int side;   // which way the pipe runs into the building: 0 right (it's on the left), 1 left, 2 up (it's below)
+        if (o->ty >= g->ty && o->ty < g->ty + g->fh && o->tx == g->tx - 1)        side = 0;
+        else if (o->ty >= g->ty && o->ty < g->ty + g->fh && o->tx == g->tx + g->fw) side = 1;
+        else if (o->ty == g->ty + g->fh && o->tx >= g->tx && o->tx < g->tx + g->fw)  side = 2;
+        else continue;
+        const fence_def_t *fd = s_fences[o->fence];
+        const uint16_t *look = link_look_art(o, link_look(o, false));
+        int top = fd->h - TILE_SIZE;   // (the pipe's own tile in its art)
+        for (int c = 0; c < TILE_SIZE; c++) {
+            uint16_t px = side == 0 ? look[(top + c) * fd->w + fd->w - 1] : side == 1 ? look[(top + c) * fd->w] : look[top * fd->w + c];
+            if (px == FB_TRANSPARENT_COLOR) continue;
+            int x = side == 0 ? o->tx * TILE_SIZE + TILE_SIZE : side == 1 ? o->tx * TILE_SIZE - 1 : o->tx * TILE_SIZE + c;
+            int y = side == 2 ? o->ty * TILE_SIZE - 1 : o->ty * TILE_SIZE + c;
+            int sx = side == 0 ? 1 : side == 1 ? -1 : 0, sy = side == 2 ? -1 : 0;
+            for (int n = 0; n < 3 * TILE_SIZE; n++, x += sx, y += sy) {
+                if (x < r.x || y < r.y || x >= r.x + r.w || y >= r.y + r.h) break;
+                int ax = x - g->ax, ay = y - g->ay;
+                if (ax >= 0 && ay >= 0 && ax < g->aw && ay < g->ah && b->pixels[ay * g->aw + ax] != FB_TRANSPARENT_COLOR) break;   // the wall
+                s_map_pixels[y * s_map_w + x] = s_night_shown ? night_px(&s_night_lut, px) : px;
+            }
+        }
+    }
+}
+
+// Building s_place[i] baked again (its door opened, a pipe beside it came or
+// went), with any fence tops over its wall kept in front, and repainted.
+static void place_rebake(int i)
+{
+    if (!s_place[i].baked) return;
+    bool links = place_links_over(geom_rect(&s_place[i].g));   // a fence's top over its wall: off first, back on after
+    if (links) place_links_lift();
+    place_unbake(i, true);
+    place_bake(i);
+    if (links) place_links_lay();
+    place_repaint(&s_place[i].g);
+}
+
+// The farm buildings a pipe on tile (tx,ty) runs into (beside one, or below it): baked again, its pipe end and all.
+static void place_rebake_piped(int tx, int ty)
+{
+    for (int i = 0; i < PLACE_MAX; i++) {
+        const place_geom_t *g = &s_place[i].g;
+        if (!building_is_farm(g)) continue;
+        bool side  = ty >= g->ty && ty < g->ty + g->fh && (tx == g->tx - 1 || tx == g->tx + g->fw);
+        bool below = ty == g->ty + g->fh && tx >= g->tx && tx < g->tx + g->fw;
+        if (side || below) place_rebake(i);
+    }
+}
+
+// Draws building s_place[i]'s animal door over its art as it is, open or shut
+// (in the map pixels, inside its rect), and its pipe ends. Part of place_bake().
+static void house_bake_door(int i)
+{
+    house_bake_pipes(i);
+    int dx, dy, ox, oy;
+    if (!house_door_tiles(i, &dx, &dy, &ox, &oy)) return;
+    const house_t *h = house_get(s_place[i].inst, false);
+    bool open = h && h->door_open;
+    const place_geom_t   *g = &s_place[i].g;
+    const building_def_t *b = s_buildings[g->what];
+    if (b->door_w && b->door_h) {   // its own shut and open looks, over the opening in its picture
+        const uint16_t *look = open ? b->door_open : b->door_shut;
+        for (int row = 0; row < b->door_h; row++)
+            for (int col = 0; col < b->door_w; col++) {
+                int x = g->ax + b->door_x + col, y = g->ay + b->door_y + row;
+                if (x < 0 || y < 0 || x >= s_map_w || y >= s_map_h || b->door_x + col >= g->aw || b->door_y + row >= g->ah) continue;
+                int mi = y * s_map_w + x;
+                if (look) {
+                    uint16_t c = look[row * b->door_w + col];
+                    if (c == FB_TRANSPARENT_COLOR) continue;
+                    s_map_pixels[mi] = s_night_shown ? night_px(&s_night_lut, c) : c;
+                } else if (open) {   // no open look: the doorway goes dark
+                    uint16_t c = s_map_pixels[mi];
+                    s_map_pixels[mi] = (uint16_t)((((c >> 11) * 3 / 10) << 11) | ((((c >> 5) & 0x3F) * 3 / 10) << 5) | ((c & 0x1F) * 3 / 10));
+                }
+            }
+        return;
+    }
+    if (!open) return;
+    for (int row = 0; row < TILE_SIZE; row++)
+        for (int col = 0; col < TILE_SIZE; col++) {
+            int mi = (dy * TILE_SIZE + row) * s_map_w + dx * TILE_SIZE + col;
+            if (b->door_open) {
+                uint16_t c = b->door_open[row * TILE_SIZE + col];
+                if (c == FB_TRANSPARENT_COLOR) continue;
+                s_map_pixels[mi] = s_night_shown ? night_px(&s_night_lut, c) : c;
+            } else {   // no open look: the doorway goes dark
+                uint16_t c = s_map_pixels[mi];
+                s_map_pixels[mi] = (uint16_t)((((c >> 11) * 3 / 10) << 11) | ((((c >> 5) & 0x3F) * 3 / 10) << 5) | ((c & 0x1F) * 3 / 10));
+            }
+        }
+}
+
+// The door of building s_place[i] opens or shuts.
+static void house_door_toggle(int i)
+{
+    house_t *h = house_get(s_place[i].inst, true);
+    if (!h) return;
+    h->door_open = !h->door_open;
+    farm_mark_dirty();
+    place_rebake(i);
+    int n = house_count(h->inst);
+    message(2500, h->door_open ? "Opened the %s's animal door%s" : "Shut the %s's animal door%s", house_name(h->inst),
+            !n ? "" : h->door_open ? (house_wants_out(h) ? " - out they come" : " - they go out in the morning") : "");
+}
+
+// ---- in and out, on the loaded map (once a game minute) ----
+// A barn's animals coming out of its door (outdoors) or going out by the
+// inside's exit, heading home at RANCH_HOME_MIN, fetched in at RANCH_BED_MIN.
+static void herd_tick(void)
+{
+    int m = clock_minute_of_day();
+    if (m == s_herd_seen_min || !s_map_loaded) return;
+    s_herd_seen_min = m;
+    bool home_time = m >= RANCH_HOME_MIN || m < RANCH_WAKE_MIN || rain_outside_now();
+    bool bed       = m >= RANCH_BED_MIN || m < RANCH_WAKE_MIN;
+    if (m % 60 == 0) farm_houses_scan();   // what they can graze, kept up to date for when the map's left
+    if (!s_map_inst) {
+        for (int i = 0; i < PLACE_MAX; i++) {
+            int dx, dy, ox, oy;
+            if (!house_door_tiles(i, &dx, &dy, &ox, &oy)) continue;
+            uint16_t inst = s_place[i].inst;
+            house_t *h = house_get(inst, false);
+            if (!h || !h->door_open) continue;
+            if (house_wants_out(h)) {          // one comes out of the door, if there's room in front of it
+                if (!ra_tile_free(ox, oy) || ra_at(dx, dy) >= 0) continue;
+                for (int ri = 0; ri < HERD_MAX; ri++) {
+                    herd_t *r = &s_herd[ri];
+                    if (!r->used || r->home != inst || r->outside || r->body >= 0) continue;
+                    animal_t *a = herd_body_new(ri, dx, dy);
+                    if (!a) break;
+                    a->mode = RA_DOOR; a->door_dy = 1; a->door_px = TILE_SIZE; a->dir = ANIMAL_SEQ_DOWN; a->acc = 0;
+                    r->outside = r->went_out = true;
+                    farm_mark_dirty();
+                    break;
+                }
+            } else if (home_time) {            // the ones out walk home (bedtime: the rest are fetched in)
+                for (int k = 0; k < RANCH_MAX; k++) {
+                    animal_t *a = &s_ranch[k];
+                    if (!a->used || a->herd < 0 || s_herd[a->herd].home != inst || !s_herd[a->herd].outside) continue;
+                    if (bed && a->mode != RA_DOOR) { herd_go_in(a); continue; }
+                    if (a->mode == RA_HOME || a->mode == RA_DOOR || a->mode == RA_HELD || a->mode == RA_SLEEP) continue;
+                    if (!ra_plan_to(a, ox, oy, false)) continue;   // can't get there (fenced off): fetched in at bedtime
+                    a->mode = RA_HOME; a->frame = 0; a->anim = 0; a->acc = 0; a->to_eat = false;
+                    a->home_tx = (int8_t)ox; a->home_ty = (int8_t)oy;
+                }
+            }
+        }
+        for (int k = 0; k < RANCH_MAX; k++) {   // an animal of the map's own that lives in a barn now has one: it moves in
+            animal_t *a = &s_ranch[k];
+            if (!a->used || a->herd >= 0 || !animal_needs_house(a->def)) continue;
+            for (int i = 0; i < PLACE_MAX; i++) {
+                const place_geom_t *g = &s_place[i].g;
+                if (g->kind != PLACE_BUILDING || !house_fits(s_buildings[g->what], a->def)) continue;
+                if (house_count(s_place[i].inst) >= s_buildings[g->what]->capacity) continue;
+                int ri = herd_new(a->def, s_place[i].inst, true);
+                if (ri < 0) break;
+                herd_from_body(&s_herd[ri], a);
+                s_herd[ri].body = (int8_t)k;
+                a->herd = (int8_t)ri;
+                mapsave_mark_dirty();   // (its line goes from the map's save)
+                char nbuf[48];
+                message(3000, "Your %s moved into the %s", ra_name(a, nbuf, sizeof(nbuf)), house_name(s_place[i].inst));
+                break;
+            }
+        }
+        return;
+    }
+    house_t *h = house_get(s_map_inst, false);   // inside a barn
+    int ex, ey;
+    if (!h || !h->door_open || !map_exit_tile(&ex, &ey)) return;
+    if (house_wants_out(h)) {                    // one heads for the way out
+        for (int k = 0; k < RANCH_MAX; k++) {
+            animal_t *a = &s_ranch[k];
+            if (!a->used || a->herd < 0 || s_herd[a->herd].home != s_map_inst) continue;
+            if (a->mode == RA_HOME || a->mode == RA_HELD || a->mode == RA_SLEEP) continue;
+            if (!ra_plan_to(a, ex, ey, false)) continue;
+            a->mode = RA_HOME; a->frame = 0; a->anim = 0; a->acc = 0; a->to_eat = false;
+            a->home_tx = (int8_t)ex; a->home_ty = (int8_t)ey;
+            break;
+        }
+    } else if (home_time) {                      // one comes in by it (bedtime: all of them)
+        for (int ri = 0; ri < HERD_MAX; ri++) {
+            herd_t *r = &s_herd[ri];
+            if (!r->used || r->home != s_map_inst || !r->outside || r->body >= 0) continue;
+            int tx = ex, ty = ey;
+            if (!ra_tile_free(tx, ty) && (!bed || !ra_spot_near(ex, ey, 8, &tx, &ty))) break;
+            r->outside = false;
+            farm_mark_dirty();
+            herd_body_new(ri, tx, ty);
+            if (!bed) break;
+        }
+    }
+}
+
+// ---- the days ----
+// The day's grass for record r, which went out: from what its home's animals
+// can reach (for real if its map is loaded — the caller shows it — else from
+// house_t.grass, eaten off that map when it next loads). true = it found some.
+static bool herd_graze(herd_t *r, house_t *h)
+{
+    int eats = s_animals[r->def]->eats ? s_animals[r->def]->eats : 1;
+    int i = house_place(r->home);
+    if (i >= 0) return house_grass_scan(i, eats) > 0;
+    if (h->grass < eats) return false;
+    h->grass -= (uint16_t)eats;
+    if (h->owed < 65535 - eats) h->owed += (uint16_t)eats;
+    return true;
+}
+
+// Midnight after game day d, for every animal with a home: it ate (grass if
+// it went out and found some, else hay from its troughs if it's inside),
+// counts the day toward its product, grows a day older; then pipes fill the
+// troughs from the silos for the new day.
+static void herd_play_day(int32_t d)
+{
+    for (int ri = 0; ri < HERD_MAX; ri++) {
+        herd_t *r = &s_herd[ri];
+        if (!r->used || r->def >= animal_count) continue;
+        const animal_def_t *def = s_animals[r->def];
+        house_t *h = house_get(r->home, true);
+        if (!r->fed && h) {
+            bool out = r->went_out || (h->door_open && !rain_fell_outdoors(d, 12 * 60));   // (a day nobody saw: out if its door was open and the morning dry)
+            if (out && herd_graze(r, h))   r->fed = true;
+            else if (!r->outside && h->hay) { h->hay--; r->fed = true; }
+        }
+        bool baby = def->frames_baby && def->grow_days && r->age < def->grow_days;   // (a baby makes nothing)
+        const char *prod = def->variant_products && r->variant < ra_variants(def) && def->variant_products[r->variant] &&
+                           def->variant_products[r->variant][0] ? def->variant_products[r->variant] : def->product;
+        if (!baby && r->fed && prod[0] && !r->ready) {
+            int every = def->product_days ? def->product_days : 1;
+            if (++r->days >= every) {
+                r->days = 0;
+                if ((int)(esp_random() % 100) < (def->product_chance ? def->product_chance : 100)) {
+                    if (def->tool[0])                         r->ready = true;
+                    else if (r->pending < RANCH_PENDING_MAX)  r->pending++;
+                }
+            }
+        }
+        if (r->age < 255) r->age++;
+        r->fed = false;
+        r->went_out = r->outside;   // one left out tonight starts the day out
+    }
+    for (int k = 0; k < HOUSE_MAX; k++)
+        if (s_house[k].used && s_house[k].piped) house_fill_from_silo(&s_house[k]);
+}
+
+// Plays every midnight from s_herd_day up to today (wherever the player is).
+// baked: the loaded map's grass is in its pixels (eaten grass is put right
+// there; repaint: on screen too). true = something changed.
+static bool herd_catch_up(bool baked, bool repaint)
+{
+    int32_t today = (int32_t)clock_day();
+    if (s_herd_day < 0 || s_herd_day > today) s_herd_day = today;   // new, or the clock went back (Dev Tools)
+    if (s_herd_day == today) return false;
+    bool any = false;
+    for (int i = 0; i < HERD_MAX && !any; i++) any = s_herd[i].used;
+    if (!any) { s_herd_day = today; return false; }
+    herd_sync_bodies();
+    memcpy(s_grass_was, s_grass, sizeof(s_grass_was));
+    int32_t from = today - s_herd_day > FARM_CATCHUP_MAX ? today - FARM_CATCHUP_MAX : s_herd_day;
+    for (int32_t d = from; d < today; d++) herd_play_day(d);
+    ESP_LOGI(TAG, "farm: the herd caught up from day %ld to day %ld (silo %lu hay)", (long)s_herd_day, (long)today, (unsigned long)s_silo_hay);
+    s_herd_day = today;
+    for (int i = 0; i < RANCH_MAX; i++)
+        if (s_ranch[i].used && s_ranch[i].herd >= 0) herd_to_body(&s_herd[s_ranch[i].herd], &s_ranch[i]);
+    if (memcmp(s_grass_was, s_grass, sizeof(s_grass_was)) != 0) {
+        mapsave_mark_dirty();
+        if (baked) grass_show_changes(repaint);
+    }
+    farm_mark_dirty();   // (the troughs follow in ranch_tick(): trough_show())
+    return true;
+}
+
+// Records the player didn't see go in or out: in or out now, as their home's
+// door and the clock say. here_too: the ones on the map that just loaded too
+// (else they go in and out of their doors in front of the player — herd_tick()).
+static void herd_settle(bool here_too)
+{
+    for (int ri = 0; ri < HERD_MAX; ri++) {
+        herd_t *r = &s_herd[ri];
+        if (!r->used || r->body >= 0) continue;
+        if (!here_too && (house_place(r->home) >= 0 || house_inside_here(r->home))) continue;
+        const house_t *h = house_get(r->home, false);
+        if (!h || !h->door_open) continue;   // shut in (or out)
+        bool out = house_wants_out(h);
+        if (out == r->outside) continue;
+        r->outside = out;
+        r->tx = r->ty = -1;
+        if (out) r->went_out = true;
+        farm_mark_dirty();
+    }
+}
+
+// Bodies for the animals on the loaded map now: out on it (their home stands
+// here) or inside their home (this is its inside), where they were — or a spot
+// by the door (the exit, inside).
+static void herd_spawn_here(void)
+{
+    for (int ri = 0; ri < HERD_MAX; ri++) {
+        herd_t *r = &s_herd[ri];
+        if (!r->used || r->body >= 0) continue;
+        int i = house_place(r->home), sx = -1, sy = -1, dx, dy;
+        if (r->outside ? i < 0 : (!s_map_inst || s_map_inst != r->home)) continue;
+        if (r->outside) { if (!house_door_tiles(i, &dx, &dy, &sx, &sy)) continue; }
+        else if (!map_exit_tile(&sx, &sy)) { sx = TILE_COLS / 2; sy = TILE_ROWS / 2; }
+        int tx = r->tx, ty = r->ty;
+        if (tx < 0 || !ra_tile_free(tx, ty)) {
+            if (!ra_spot_near(sx, sy, 7, &tx, &ty)) { ESP_LOGW(TAG, "farm: no room for a %s here — it stays out of sight", s_animals[r->def]->id); continue; }
+        }
+        if (!herd_body_new(ri, tx, ty)) break;   // the screen's full
+    }
+}
+
+// ---- the map coming and going (load_map()) ----
+static bool s_farm_detached = true;   // the records were just reset or loaded: the bodies on screen aren't theirs
+
+static void farm_map_leaving(void)
+{
+    if (!s_map_loaded || s_farm_detached) return;
+    herd_sync_bodies();
+    farm_houses_scan();
+}
+
+static void farm_map_loaded_late(void)
+{
+    s_farm_detached = false;
+    s_herd_seen_min = -1;
+    trough_find();
+    herd_catch_up(true, false);
+    herd_settle(true);
+    bool ate = false;   // what was eaten here while the map was away
+    memcpy(s_grass_was, s_grass, sizeof(s_grass_was));
+    for (int i = 0; !s_map_inst && i < PLACE_MAX; i++) {
+        house_t *h = s_place[i].g.kind == PLACE_BUILDING ? house_get(s_place[i].inst, false) : NULL;
+        if (!h || !h->owed) continue;
+        house_grass_scan(i, h->owed);
+        h->owed = 0;
+        ate = true;
+        farm_mark_dirty();
+    }
+    if (ate && memcmp(s_grass_was, s_grass, sizeof(s_grass_was)) != 0) { grass_show_changes(false); mapsave_mark_dirty(); }
+    farm_pipes_update(false);
+    herd_spawn_here();
+    farm_houses_scan();   // (the troughs' hay is painted after the fade in: ranch_tick(), trough_show())
+}
+
+// ---- farm.txt ----
+static void farm_reset(void)
+{
+    memset(s_house, 0, sizeof(s_house));
+    memset(s_herd, 0, sizeof(s_herd));
+    for (int i = 0; i < HERD_MAX; i++) s_herd[i].body = -1;
+    for (int i = 0; i < RANCH_MAX; i++) if (s_ranch[i].herd >= 0) s_ranch[i].used = false;   // another game's
+    s_silo_hay      = 0;
+    s_herd_day      = -1;
+    s_farm_dirty    = false;
+    s_farm_detached = true;
+}
+
+// Writes farm.txt for the save slot being played. false = couldn't (logged).
+static bool farm_save(void)
+{
+    static char path[MAPSAVE_PATH_MAX], tmp[MAPSAVE_PATH_MAX], line[MAPSAVE_LINE_MAX];
+    if (!s_farm_detached) herd_sync_bodies();
+    snprintf(path, sizeof(path), "%s/farm.txt", s_save_dir);
+    snprintf(tmp, sizeof(tmp), "%s/farm.new", s_save_dir);
+    mapsave_make_dirs(path);
+    FILE *f = fopen(tmp, "w");
+    if (!f) { ESP_LOGE(TAG, "save: can't write %s", tmp); return false; }
+    fputs("CAPTUREIT FARM 1\n# The barns, coops and silos (FARM in main.c) and every animal living in one.\n", f);
+    snprintf(line, sizeof(line), "day %ld\nsilo hay %lu\n", (long)(s_herd_day < 0 ? (int32_t)clock_day() : s_herd_day), (unsigned long)s_silo_hay);
+    fputs(line, f);
+    for (int i = 0; i < HOUSE_MAX; i++) {
+        const house_t *h = &s_house[i];
+        if (!h->used || !brec_find(h->inst)) continue;
+        snprintf(line, sizeof(line), "house inst %u door %d hay %d piped %d grass %u owed %u\n", h->inst, h->door_open, h->hay, h->piped, h->grass, h->owed);
+        fputs(line, f);
+    }
+    for (int i = 0; i < HERD_MAX; i++) {
+        const herd_t *r = &s_herd[i];
+        if (!r->used || r->def >= animal_count) continue;
+        snprintf(line, sizeof(line), "animal %s home %u out %d at tile %d %d fed %d days %d ready %d pending %d variant %d age %d\n",
+                 s_animals[r->def]->id, r->home, r->outside, r->tx, r->ty, r->fed, r->days, r->ready, r->pending, r->variant, r->age);
+        fputs(line, f);
+    }
+    bool ok = !ferror(f);
+    if (fclose(f) != 0) ok = false;
+    if (ok) {
+        unlink(path);                      // FAT's rename won't replace an existing file
+        ok = rename(tmp, path) == 0;
+    }
+    if (!ok) ESP_LOGE(TAG, "save: can't write %s — the farm animals aren't being kept", path);
+    else     s_farm_dirty = false;
+    return ok;
+}
+
+// Reads farm.txt from save folder `dir` (a saved game loading — after buildings.txt).
+static void farm_load(const char *dir)
+{
+    static char  path[MAPSAVE_PATH_MAX], line[MAPSAVE_LINE_MAX];
+    static char *word[MAPSAVE_WORDS];
+    farm_reset();
+    snprintf(path, sizeof(path), "%s/farm.txt", dir);
+    FILE *f = fopen(path, "r");
+    if (!f) {                              // a power cut between removing the old file and renaming the new one?
+        snprintf(path, sizeof(path), "%s/farm.new", dir);
+        if (!(f = fopen(path, "r"))) return;
+    }
+    if (!fgets(line, sizeof(line), f) || strncmp(line, "CAPTUREIT FARM 1", 16) != 0) {
+        ESP_LOGW(TAG, "save: %s isn't a CaptureIt farm file — ignored", path);
+        fclose(f);
+        return;
+    }
+    int houses = 0, animals = 0, skipped = 0;
+    while (fgets(line, sizeof(line), f)) {
+        int nw = mapsave_words(line, word), v[12];
+        const char *any = NULL;
+        if (nw == 0 || word[0][0] == '#') continue;
+        if (mapsave_match(word, nw, "day #", v, &any)) {
+            s_herd_day = v[0];
+        } else if (mapsave_match(word, nw, "silo hay #", v, &any)) {
+            s_silo_hay = (uint32_t)(v[0] < 0 ? 0 : v[0]);
+        } else if (mapsave_match(word, nw, "house inst # door # hay # piped # grass # owed #", v, &any)) {
+            house_t *h = v[0] > 0 && v[0] < 65535 ? house_get((uint16_t)v[0], true) : NULL;
+            if (!h) { skipped++; continue; }
+            h->door_open = v[1] != 0;
+            h->hay       = (uint8_t)(v[2] < 0 ? 0 : v[2] > 255 ? 255 : v[2]);
+            h->piped     = v[3] != 0;
+            h->grass     = (uint16_t)(v[4] < 0 ? 0 : v[4] > 65535 ? 65535 : v[4]);
+            h->owed      = (uint16_t)(v[5] < 0 ? 0 : v[5] > 65535 ? 65535 : v[5]);
+            houses++;
+        } else if (mapsave_match(word, nw, "animal * home # out # at tile # # fed # days # ready # pending # variant # age #", v, &any)) {
+            int def = animal_find(any), ri = -1;
+            if (def < 0) { ESP_LOGW(TAG, "save: farm animal \"%s\" isn't in this build — dropped", any); skipped++; continue; }
+            for (int i = 0; i < HERD_MAX && ri < 0; i++) if (!s_herd[i].used) ri = i;
+            if (ri < 0 || v[0] <= 0 || v[0] >= 65535) { skipped++; continue; }
+            s_herd[ri] = (herd_t){ .used = true, .def = (uint8_t)def, .home = (uint16_t)v[0], .outside = v[1] != 0, .went_out = v[1] != 0,
+                                   .tx = (int8_t)(tile_on_map(v[2], v[3]) ? v[2] : -1), .ty = (int8_t)(tile_on_map(v[2], v[3]) ? v[3] : -1),
+                                   .fed = v[4] != 0, .days = (uint8_t)(v[5] < 0 ? 0 : v[5] > 255 ? 255 : v[5]), .ready = v[6] != 0,
+                                   .pending = (uint8_t)(v[7] < 0 ? 0 : v[7] > RANCH_PENDING_MAX ? RANCH_PENDING_MAX : v[7]),
+                                   .variant = (uint8_t)(v[8] >= 0 && v[8] < ra_variants(s_animals[def]) ? v[8] : 0),
+                                   .age = (uint8_t)(v[9] < 0 ? 0 : v[9] > 255 ? 255 : v[9]), .body = -1 };
+            animals++;
+        }
+    }
+    fclose(f);
+    s_farm_dirty = false;
+    ESP_LOGI(TAG, "save: farm.txt — %d barns and coops, %d animals, %lu hay in the silos%s", houses, animals, (unsigned long)s_silo_hay,
+             skipped ? " (some lines skipped)" : "");
+}
+
+// Once per game frame (from ranch_tick()): farm.txt a moment after the herd changed.
+static void farm_save_tick(void)
+{
+    uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+    if (!s_farm_dirty || now - s_farm_dirty_ms < FARM_SAVE_DELAY_MS) return;
+    if (!farm_save()) s_farm_dirty_ms = now;   // (the card's out or full: try again after another delay)
 }
 
 // Once per game frame (see update_input): every animal on the loaded map.
 static void ranch_tick(void)
 {
     if (!s_map_loaded) return;
+    herd_tick();        // barn animals in and out of their doors (FARM)
+    trough_show();      // ...the hay in a barn's troughs
+    farm_save_tick();   // ...and farm.txt
     uint32_t now = ranch_ms();
     int  minute  = clock_minute_of_day();
     bool awake   = minute >= RANCH_WAKE_MIN && minute < RANCH_BED_MIN;
@@ -14824,6 +17438,8 @@ static void ranch_tick(void)
         animal_t *a = &s_ranch[i];
         if (!a->used) continue;
         const animal_def_t *d = ra_def(a);
+        if (!a->drawn.w && a->herd >= 0 && !s_herd[a->herd].outside && awake)   // found inside its home: what it made overnight is on the floor
+            for (int k = 0; k < RANCH_PENDING_MAX && a->pending; k++) ra_lay(a);
         if (!a->drawn.w || ra_bare(a) != a->bare_shown) { a->bare_shown = ra_bare(a); ra_show(a); }   // new on screen, or shorn / grown back
         if (ra_baby(a) == a->adult_shown) {   // a baby grew up (overnight): it looks it, and the player hears about it
             a->adult_shown = !ra_baby(a);
@@ -14856,6 +17472,35 @@ static void ranch_tick(void)
             if (d->seq_len[ANIMAL_SEQ_SLEEP] > 1 && (int32_t)(now - a->frame_ms) >= RANCH_SLEEP_FRAME_MS) { a->frame_ms = now; a->frame++; ra_show(a); }
             if (awake) ra_idle(a, now);
             break;
+        case RA_HOME: {   // to its home's door (FARM — herd_tick() sent it)
+            if (!ra_walk(a)) break;
+            if (!a->plen) {   // gave up (another animal in the way — maybe one heading the other way): round it, or out of its way
+                if (ra_plan_to(a, a->home_tx, a->home_ty, true)) { a->acc = 0; break; }
+                if (ra_plan(a, false)) { a->mode = RA_WALK; a->frame = 0; a->anim = 0; a->acc = 0; break; }   // (sent home again next minute)
+                ra_idle(a, now);
+                break;
+            }
+            if (s_map_inst) { herd_go_out(a); continue; }   // inside: out by the exit
+            const house_t *h = a->herd >= 0 ? house_get(s_herd[a->herd].home, false) : NULL;
+            if (!h || !h->door_open) { ra_idle(a, now); break; }   // its door was shut in front of it
+            a->mode = RA_DOOR; a->door_dy = -1; a->door_px = TILE_SIZE; a->dir = ANIMAL_SEQ_UP; a->acc = 0; a->plen = a->ppos = 0;
+            break;
+        }
+        case RA_DOOR: {   // through its home's animal door, walls and all
+            int y0 = a->y;
+            a->acc += (uint8_t)(d->speed_q * s_game_ticks);
+            while (a->acc >= 4 && a->door_px) { a->y += a->door_dy; a->door_px--; a->acc -= 4; }
+            if (a->y != y0) {
+                a->anim += (uint8_t)s_game_ticks;
+                if (a->anim >= RANCH_ANIM_TICKS) { a->anim = 0; a->frame++; }
+                ra_show(a);
+            }
+            if (a->door_px) break;
+            a->acc = 0;
+            if (a->door_dy < 0) { herd_go_in(a); continue; }   // in: off the map
+            ra_idle(a, now);                                     // out: off it goes
+            break;
+        }
         default:   // RA_IDLE
             if (!awake) { a->mode = RA_SLEEP; a->frame = 0; a->frame_ms = now; ra_show(a); break; }
             if ((int32_t)(now - a->until_ms) < 0) break;
@@ -14880,7 +17525,12 @@ static void ranch_tick(void)
 // Tapped animal a: it stops (at the tile it was stepping onto) and waits for the player.
 static void ra_hold(animal_t *a, int idx, int *tx, int *ty)
 {
-    if (a->mode == RA_WALK || a->mode == RA_HELD) {
+    if (a->mode == RA_DOOR) {   // in a doorway: it carries on — the player can't reach it there
+        *tx = ra_tx(a); *ty = ra_ty(a);
+        s_ranch_aim = (ranch_aim_t){ AIM_ANIMAL, (int8_t)*tx, (int8_t)*ty, (int8_t)idx, -1 };
+        return;
+    }
+    if (a->mode == RA_WALK || a->mode == RA_HELD || a->mode == RA_HOME) {
         while (a->ppos < a->plen && a->x == a->path[a->ppos].x * TILE_SIZE && a->y == a->path[a->ppos].y * TILE_SIZE) a->ppos++;
         a->plen = ra_aligned(a) ? a->ppos : (uint8_t)(a->ppos + 1);   // between two tiles: it finishes that step
         a->to_eat = false;
@@ -14889,14 +17539,61 @@ static void ra_hold(animal_t *a, int idx, int *tx, int *ty)
     else                   { *tx = ra_tx(a); *ty = ra_ty(a); }
     if (a->mode != RA_SLEEP && a->mode != RA_EAT) { a->mode = RA_HELD; a->frame = 0; }
     a->until_ms = ranch_ms() + RANCH_HELD_MS;
-    s_ranch_aim = (ranch_aim_t){ AIM_ANIMAL, (int8_t)*tx, (int8_t)*ty, (int8_t)idx };
+    s_ranch_aim = (ranch_aim_t){ AIM_ANIMAL, (int8_t)*tx, (int8_t)*ty, (int8_t)idx, -1 };
     ra_show(a);
 }
 
-// Can an animal be let out on tile (tx,ty) now?
-static bool ranch_let_out_ok(int tx, int ty)
+// Can an animal of kind def be let out on tile (tx,ty) now? (One with a home
+// kind anywhere — whether there's a home for it is house_for()'s; one without, outdoors.)
+static bool ranch_let_out_ok(int def, int tx, int ty)
 {
-    return s_map_inst == 0 && ra_spot_ok(tx, ty) && !ra_claimed(NULL, tx, ty);
+    return (s_map_inst == 0 || animal_needs_house(def)) && ra_spot_ok(tx, ty) && !ra_claimed(NULL, tx, ty);
+}
+
+// The farm building an animal of kind def let out at tile (tx,ty) would live
+// in: this one (inside it), or the nearest on this map with room for it. 0 = none.
+static uint16_t house_for(int def, int tx, int ty)
+{
+    if (s_map_inst) {
+        const building_def_t *d = house_def(s_map_inst);
+        return house_fits(d, def) && house_count(s_map_inst) < d->capacity ? s_map_inst : 0;
+    }
+    uint16_t best = 0;
+    int best_d = INT32_MAX;
+    for (int i = 0; i < PLACE_MAX; i++) {
+        const place_geom_t *g = &s_place[i].g;
+        if (g->kind != PLACE_BUILDING || !house_fits(s_buildings[g->what], def)) continue;
+        if (house_count(s_place[i].inst) >= s_buildings[g->what]->capacity) continue;
+        int dd = abs(g->tx + g->fw / 2 - tx) + abs(g->ty + g->fh - 1 - ty);
+        if (dd < best_d) { best_d = dd; best = s_place[i].inst; }
+    }
+    return best;
+}
+
+// A tap on tile (tx,ty) of a barn, coop or silo standing on the loaded map
+// (not its player door — that's walked into): its animal door, the silo,
+// letting the held animal in, or how the building's doing. The walk goes
+// below the footprint's bottom row there. false = not one.
+static bool farm_tap_building(int tx, int ty, item_id_t held, int *gx, int *gy)
+{
+    int pi = s_map_inst ? -1 : place_at_tile(tx, ty);
+    if (pi < 0 || s_place[pi].g.kind != PLACE_BUILDING) return false;
+    const place_geom_t   *g = &s_place[pi].g;
+    const building_def_t *b = s_buildings[g->what];
+    if (!building_is_farm(g) && !b->water_source) return false;
+    int bx = tx < g->tx ? g->tx : tx >= g->tx + g->fw ? g->tx + g->fw - 1 : tx, by = g->ty + g->fh - 1;
+    if (g->door_tx >= 0 && bx == g->door_tx) return false;   // its own door: walk in
+    int dx, dy, ox, oy, def = animal_of_item(held);
+    bool door = house_door_tiles(pi, &dx, &dy, &ox, &oy) &&
+                (bx == dx || (b->door_w && tx * TILE_SIZE + TILE_SIZE > g->ax + b->door_x && tx * TILE_SIZE < g->ax + b->door_x + b->door_w));   // (any tile of a wide door)
+    uint8_t kind = door                      ? AIM_DOOR :
+                   def >= 0 && def_houses(b) ? AIM_LET_IN :
+                   b->hay_capacity           ? AIM_SILO :
+                   b->water_source           ? AIM_WELL : AIM_HOUSE;
+    if (door) bx = dx;   // (the walk goes in front of the tile the animals use)
+    s_ranch_aim = (ranch_aim_t){ kind, (int8_t)bx, (int8_t)by, -1, (int16_t)pi };
+    *gx = bx; *gy = by;
+    return true;
 }
 
 // TAP-TO-WALK asks: is a tap at screen (tap_x,tap_y) aimed at an animal (it
@@ -14917,13 +17614,15 @@ static bool ranch_tap_target(int tap_x, int tap_y, int *gx, int *gy)
     if (best >= 0) { ra_hold(&s_ranch[best], best, gx, gy); return true; }
     int tx = tap_x / TILE_SIZE, ty = tap_y / TILE_SIZE;
     if (!tile_on_map(tx, ty)) return false;
-    uint8_t held = inv_held_item();
-    if (animal_of_item(held) >= 0 && s_map_inst) message(2000, "Animals need to be outdoors");   // no barns yet
-    uint8_t kind = animal_of_item(held) >= 0 && ranch_let_out_ok(tx, ty)                                    ? AIM_LET_OUT :
+    item_id_t held = inv_held_item();
+    if (farm_tap_building(tx, ty, held, gx, gy)) return true;   // a barn, a coop, a silo (FARM)
+    int def = animal_of_item(held);
+    if (def >= 0 && s_map_inst && !animal_needs_house(def)) message(2000, "This animal lives outdoors");
+    uint8_t kind = def >= 0 && ranch_let_out_ok(def, tx, ty)                                                ? AIM_LET_OUT :
                    ITEM_GRASSES(held) && !s_grass[ty][tx] && grass_spot_ok(tx, ty) && farm_at(tx, ty) < 0 ? AIM_GRASS :
                    ITEM_CUTS(held) && s_grass[ty][tx] && !grass_frozen(tx, ty)                             ? AIM_CUT : AIM_NONE;
     if (kind == AIM_NONE) return false;
-    s_ranch_aim = (ranch_aim_t){ kind, (int8_t)tx, (int8_t)ty, -1 };
+    s_ranch_aim = (ranch_aim_t){ kind, (int8_t)tx, (int8_t)ty, -1, -1 };
     *gx = tx; *gy = ty;
     return true;
 }
@@ -14937,7 +17636,7 @@ static void ranch_use_held(void)
 }
 
 // Into the bag — what doesn't fit goes on the ground by the player.
-static void ranch_give(uint8_t item, uint8_t q, int n)
+static void ranch_give(item_id_t item, uint8_t q, int n)
 {
     int spill = inv_add_q(item, q, n);
     if (spill > 0 && !ground_drop(item, q, spill)) ESP_LOGW(TAG, "ranch: %d x %s didn't fit anywhere — lost", spill, item_name(item));
@@ -14945,7 +17644,7 @@ static void ranch_give(uint8_t item, uint8_t q, int n)
 }
 
 // The player, next to animal a and facing it, pressed action holding `held`.
-static void ra_interact(animal_t *a, uint8_t held)
+static void ra_interact(animal_t *a, item_id_t held)
 {
     const animal_def_t *d = ra_def(a);
     char nbuf[48];
@@ -14963,7 +17662,7 @@ static void ra_interact(animal_t *a, uint8_t held)
         a->fed = true;
         a->to_eat = false;
         if (a->mode != RA_SLEEP) { a->mode = RA_EAT; a->frame = 0; a->frame_ms = now; a->until_ms = now + RANCH_EAT_MS; ra_show(a); }
-        mapsave_mark_dirty();
+        ra_dirty(a);
         message(2000, "Fed the %s", name);
         return;
     }
@@ -14974,9 +17673,9 @@ static void ra_interact(animal_t *a, uint8_t held)
             message(2500, "No %s yet - %d more fed day%s", ranch_item_name(ra_product_id(a)), left, left == 1 ? "" : "s");
             return;
         }
-        uint8_t q = QUALITY_STANDARD, item = ra_product(a, &q);
+        uint8_t q = QUALITY_STANDARD; item_id_t item = ra_product(a, &q);
         a->ready = false;
-        mapsave_mark_dirty();
+        ra_dirty(a);
         if (item == ITEM_NONE) return;
         ranch_give(item, q, 1);
         if (d->sound[0]) sfx_play(d->sound);
@@ -14996,7 +17695,97 @@ static void ra_interact(animal_t *a, uint8_t held)
     else if (d->tool[0])    snprintf(what, sizeof(what), a->ready ? " %s ready!" : " %s in %d fed day%s.", ranch_item_name(ra_product_id(a)), left, left == 1 ? "" : "s");
     else if (a->pending)    snprintf(what, sizeof(what), " %s on the way!", ranch_item_name(ra_product_id(a)));
     else                    snprintf(what, sizeof(what), " %s in %d fed day%s.", ranch_item_name(ra_product_id(a)), left, left == 1 ? "" : "s");
-    message(3000, "%s%s: %s.%s", name, a->mode == RA_SLEEP ? " (asleep)" : "", a->fed ? "Full" : "Hungry", what);
+    const char *hunger = a->fed ? "Full" : "Hungry";
+    if (!a->fed && a->herd >= 0 && !s_herd[a->herd].outside) {   // in its barn: the troughs feed it tonight (FARM)
+        const house_t *h = house_get(s_herd[a->herd].home, false);
+        hunger = h && h->hay ? "Hungry - eats from the trough tonight" : "Hungry - its trough is empty";
+    }
+    message(3000, "%s%s: %s.%s", name, a->mode == RA_SLEEP ? " (asleep)" : "", hunger, what);
+}
+
+// ---- FARM: what a tap on a barn, a coop or a silo does (farm_tap_building()) ----
+// Hay: the held stack into the silos, or (holding anything else) a stack out of them.
+static void silo_on_action(item_id_t held)
+{
+    item_id_t  hay = ranch_item_with(ITEM_ATTR_FEED);
+    uint32_t cap = silo_capacity();
+    if (hay == ITEM_NONE) { message(2000, "There's no hay in this game"); return; }
+    if (ITEM_FEEDS(held)) {
+        inv_slot_t *s = &s_inv[s_inv_held];
+        uint32_t room = cap > s_silo_hay ? cap - s_silo_hay : 0, n = s->count < room ? s->count : room;
+        if (!n) { message(2000, "The silo is full: %lu hay", (unsigned long)s_silo_hay); return; }
+        s->count -= (uint8_t)n;
+        if (!s->count) *s = (inv_slot_t){ ITEM_NONE, 0, QUALITY_STANDARD };
+        hud_refresh();
+        s_silo_hay += n;
+        farm_mark_dirty();
+        message(2500, "Put %lu hay in the silo: %lu of %lu", (unsigned long)n, (unsigned long)s_silo_hay, (unsigned long)cap);
+        return;
+    }
+    if (!s_silo_hay) { message(2500, "The silo is empty (0 of %lu) - cut grass with a scythe to fill it", (unsigned long)cap); return; }
+    int n = (int)(s_silo_hay < item_max_stack(hay) ? s_silo_hay : item_max_stack(hay)), spill = inv_add_q(hay, QUALITY_STANDARD, n);
+    if (spill == n) { message(2000, "No room in your bag for hay"); return; }
+    s_silo_hay -= (uint32_t)(n - spill);
+    hud_refresh();
+    farm_mark_dirty();
+    message(2500, "Took %d hay from the silo: %lu of %lu left", n - spill, (unsigned long)s_silo_hay, (unsigned long)cap);
+}
+
+// How barn s_place[i] is doing: its animals, its door, its troughs.
+static void house_info(int i)
+{
+    const building_def_t *b = s_buildings[s_place[i].g.what];
+    uint16_t inst = s_place[i].inst;
+    if (!def_houses(b)) { message(2000, "%s", place_name(&s_place[i].g)); return; }
+    const house_t *h = house_get(inst, false);
+    int n = house_count(inst), out = 0;
+    for (int k = 0; k < HERD_MAX; k++) out += s_herd[k].used && s_herd[k].home == inst && s_herd[k].outside;
+    message(3500, "%s: %d of %d animals (%d out), door %s, hay in %d of %d troughs%s", house_name(inst), n, b->capacity, out,
+            h && h->door_open ? "open" : "shut", h ? h->hay : 0, b->capacity, h && h->piped ? ", piped" : "");
+}
+
+// Holding an animal that lives in a barn, the player tapped barn s_place[i]: in it goes.
+static void house_let_in(int i, item_id_t held)
+{
+    int def = animal_of_item(held);
+    const building_def_t *b = s_buildings[s_place[i].g.what];
+    uint16_t inst = s_place[i].inst;
+    const char *iname = item_name(held);
+    if (def < 0) return;
+    if (!animal_needs_house(def)) { message(2500, "A %s lives outdoors - let it out on open ground", iname); return; }
+    if (!house_fits(b, def))      { message(2500, "A %s lives in a %s, not a %s", iname, s_animals[def]->house, b->houses); return; }
+    if (house_count(inst) >= b->capacity) { message(2500, "The %s is full (%d animals)", house_name(inst), b->capacity); return; }
+    int ri = herd_new(def, inst, false);
+    if (ri < 0) { message(2500, "The farm can't fit more animals"); return; }
+    ranch_use_held();
+    if (s_animals[def]->sound[0]) sfx_play(s_animals[def]->sound);
+    message(3000, "Your %s is in the %s now%s", iname, house_name(inst), house_get(inst, false) && house_get(inst, false)->door_open ? "" : " - open its door to let it out");
+}
+
+// The "trough" asset action (actions.c): a trough tapped inside a barn —
+// holding hay, its empty troughs fill from the held stack; else how they are.
+void trough_tapped(int tx, int ty)
+{
+    (void)tx; (void)ty;   // (one barn's troughs are filled in order, whichever is tapped)
+    house_t *h = s_map_inst ? house_get(s_map_inst, true) : NULL;
+    int slots = h ? house_capacity(h->inst) : 0;
+    if (!h || !slots) { message(2000, "Nothing eats from this trough"); return; }
+    item_id_t held = inv_held_item();
+    if (ITEM_FEEDS(held)) {
+        if (h->hay >= slots) { message(2000, "The troughs are full (%d)", slots); return; }
+        int n = slots - h->hay;
+        inv_slot_t *s = &s_inv[s_inv_held];
+        if (n > s->count) n = s->count;
+        s->count -= (uint8_t)n;
+        if (!s->count) *s = (inv_slot_t){ ITEM_NONE, 0, QUALITY_STANDARD };
+        hud_refresh();
+        h->hay += (uint8_t)n;
+        farm_mark_dirty();
+        message(2000, "Put %d %s in the troughs: %d of %d full", n, item_name(held), h->hay, slots);
+        return;
+    }
+    message(3000, h->piped ? "Hay in %d of %d troughs - the silo fills them every morning" : "Hay in %d of %d troughs - hold hay and tap to fill them",
+            h->hay, slots);
 }
 
 // update_player(), when a walk arrives and presses action: whatever ranch_tap_target() planned it for.
@@ -15006,7 +17795,7 @@ static bool ranch_on_action(void)
     int tx = s_selected_tile_x, ty = s_selected_tile_y, kind = s_ranch_aim.kind;
     if (tx != s_ranch_aim.tx || ty != s_ranch_aim.ty) { s_ranch_aim.kind = AIM_NONE; return false; }   // a walk for something else
     s_ranch_aim.kind = AIM_NONE;
-    uint8_t held = inv_held_item();
+    item_id_t held = inv_held_item();
     if (kind == AIM_ANIMAL) {
         int i = s_ranch_aim.animal;
         if (i < 0 || !s_ranch[i].used || ra_tx(&s_ranch[i]) != tx || ra_ty(&s_ranch[i]) != ty) i = ra_at(tx, ty);
@@ -15014,13 +17803,34 @@ static bool ranch_on_action(void)
         ra_interact(&s_ranch[i], held);
         return true;
     }
+    if (kind == AIM_WELL) { can_fill(s_ranch_aim.place >= 0 ? place_name(&s_place[s_ranch_aim.place].g) : "well"); return true; }   // (FARMING)
+    if (kind == AIM_DOOR || kind == AIM_SILO || kind == AIM_HOUSE || kind == AIM_LET_IN) {   // a barn, a coop, a silo (FARM)
+        int i = s_ranch_aim.place;
+        if (i < 0 || i >= PLACE_MAX || !building_is_farm(&s_place[i].g)) return true;
+        if (kind == AIM_DOOR)        house_door_toggle(i);
+        else if (kind == AIM_SILO)   silo_on_action(held);
+        else if (kind == AIM_LET_IN) house_let_in(i, held);
+        else                         house_info(i);
+        return true;
+    }
     if (kind == AIM_LET_OUT) {
         int def = animal_of_item(held);
         if (def < 0) return true;
-        if (s_map_inst)                  { message(2500, "Animals need to be outdoors"); return true; }
-        if (!ranch_let_out_ok(tx, ty))   { message(2000, "Not enough room there"); return true; }
-        animal_t *a = ra_new(def, tx, ty);
-        if (!a)                          { message(2500, "This map can't fit more animals"); return true; }
+        if (!ranch_let_out_ok(def, tx, ty)) { message(2000, s_map_inst && !animal_needs_house(def) ? "This animal lives outdoors" : "Not enough room there"); return true; }
+        uint16_t home = 0;
+        if (animal_needs_house(def) && !(home = house_for(def, tx, ty))) {   // FARM: it needs a home with room
+            if (s_map_inst) message(3000, "No room for a %s in here", item_name(held));
+            else            message(3000, "A %s needs a %s with room - build one here first", item_name(held), s_animals[def]->house);
+            return true;
+        }
+        int ri = home ? herd_new(def, home, !s_map_inst) : -1;
+        if (home && ri < 0)              { message(2500, "The farm can't fit more animals"); return true; }
+        animal_t *a = ri >= 0 ? herd_body_new(ri, tx, ty) : ra_new(def, tx, ty);
+        if (!a) {
+            if (ri >= 0) { s_herd[ri].used = false; farm_mark_dirty(); }
+            message(2500, "This map can't fit more animals");
+            return true;
+        }
         char nbuf[48];
         const char *name = ra_name(a, nbuf, sizeof(nbuf));
         ranch_use_held();
@@ -15030,8 +17840,8 @@ static bool ranch_on_action(void)
         a->fed = true;   // fed at the shop: no going hungry on its first day
         if (s_animals[def]->sound[0]) sfx_play(s_animals[def]->sound);
         ra_show(a);
-        mapsave_mark_dirty();
-        message(2500, "Welcome to the farm, %s!", name);
+        if (home) { herd_from_body(&s_herd[ri], a); farm_mark_dirty(); message(3000, "Welcome to the farm, %s! It lives in the %s", name, house_name(home)); }
+        else      { mapsave_mark_dirty(); message(2500, "Welcome to the farm, %s!", name); }
         return true;
     }
     if (kind == AIM_GRASS) {
@@ -15044,8 +17854,17 @@ static bool ranch_on_action(void)
     if (kind == AIM_CUT) {
         if (!ITEM_CUTS(held) || !s_grass[ty][tx]) return true;
         grass_set(tx, ty, 0);
-        uint8_t hay = ranch_item_with(ITEM_ATTR_FEED);
-        if (hay != ITEM_NONE && (int)(esp_random() % 100) < RANCH_HAY_PCT) { ranch_give(hay, QUALITY_STANDARD, 1); message(1500, "Got %s", item_name(hay)); }
+        item_id_t hay = ranch_item_with(ITEM_ATTR_FEED);
+        if (hay == ITEM_NONE || (int)(esp_random() % 100) >= RANCH_HAY_PCT) return true;
+        uint32_t cap = silo_capacity();
+        if (s_silo_hay < cap) {   // a silo with room takes it (FARM)
+            s_silo_hay++;
+            farm_mark_dirty();
+            message(1500, "%s to the silo (%lu of %lu)", item_name(hay), (unsigned long)s_silo_hay, (unsigned long)cap);
+            return true;
+        }
+        ranch_give(hay, QUALITY_STANDARD, 1);
+        message(1500, cap ? "Got %s (the silo is full)" : "Got %s", item_name(hay));
         return true;
     }
     return false;
@@ -15054,15 +17873,15 @@ static bool ranch_on_action(void)
 // ---- the days (farm_catch_up() in FARMING plays them, with the crops) ----
 static bool ranch_any(void)
 {
-    if (grass_count()) return true;
-    for (int i = 0; i < RANCH_MAX; i++) if (s_ranch[i].used) return true;
+    if (grass_count() || grassy_any()) return true;   // (wild grass grows back on Grassy ground)
+    for (int i = 0; i < RANCH_MAX; i++) if (s_ranch[i].used && s_ranch[i].herd < 0) return true;   // (one with a home is farm.txt's — FARM)
     return false;
 }
 
 static int ranch_animal_count(void)
 {
     int n = 0;
-    for (int i = 0; i < RANCH_MAX; i++) n += s_ranch[i].used;
+    for (int i = 0; i < RANCH_MAX; i++) n += s_ranch[i].used && s_ranch[i].herd < 0;   // (the map's own: one with a home is farm.txt's)
     return n;
 }
 
@@ -15072,7 +17891,7 @@ static bool ranch_graze_away(void)
     bool any = false;
     for (int i = 0; i < RANCH_MAX; i++) {
         animal_t *a = &s_ranch[i];
-        if (!a->used || a->fed) continue;
+        if (!a->used || a->fed || a->herd >= 0) continue;   // (one with a home: herd_play_day())
         int ax = ra_tx(a), ay = ra_ty(a), bx = -1, by = -1, best = INT32_MAX;
         for (int ty = 0; ty < TILE_ROWS; ty++)
             for (int tx = 0; tx < TILE_COLS; tx++) {
@@ -15094,7 +17913,7 @@ static bool ranch_new_day(void)
     bool any = false;
     for (int i = 0; i < RANCH_MAX; i++) {
         animal_t *a = &s_ranch[i];
-        if (!a->used) continue;
+        if (!a->used || a->herd >= 0) continue;   // (one with a home: herd_play_day())
         any = true;
         const animal_def_t *d = ra_def(a);
         bool baby = ra_baby(a);             // (a baby makes nothing — the day it grows up counts from the next one)
@@ -15125,7 +17944,7 @@ static void ranch_write(FILE *f, char *line, size_t n)
         }
     for (int i = 0; i < RANCH_MAX; i++) {
         const animal_t *a = &s_ranch[i];
-        if (!a->used) continue;
+        if (!a->used || a->herd >= 0) continue;   // (one with a home is in farm.txt — FARM)
         int tx = ra_tx(a), ty = ra_ty(a);
         if (a->ppos < a->plen) { tx = a->path[a->plen - 1].x; ty = a->path[a->plen - 1].y; }   // walking: where it's going
         snprintf(line, n, "animal %s at tile %d %d fed %d days %d ready %d pending %d variant %d age %d\n", ra_def(a)->id, tx, ty,
@@ -15168,17 +17987,25 @@ static bool ranch_restore(const char *id, int tx, int ty, int fed, int days, int
 // A new map is replacing the old one (and its pixels): its animals and grass go with it (they're in its save).
 static void ranch_clear(void)
 {
+    for (int i = 0; i < RANCH_MAX; i++)   // the bodies of animals with a home: their records keep where they were (FARM)
+        if (s_ranch[i].used && s_ranch[i].herd >= 0) {
+            herd_from_body(&s_herd[s_ranch[i].herd], &s_ranch[i]);
+            s_herd[s_ranch[i].herd].body = -1;
+        }
     memset(s_ranch, 0, sizeof(s_ranch));
     memset(s_grass, 0, sizeof(s_grass));
     memset(s_grass_slot, 0, sizeof(s_grass_slot));
     memset(s_grass_used, 0, sizeof(s_grass_used));
     s_ranch_aim.kind = AIM_NONE;
     s_ranch_seen_min = -1;
+    s_trough_n = s_trough_shown = 0;   // (the new map's: trough_find())
 }
 
-// Dev link (DEV LINK section): "animal list" | "animal add ID [COLOUR] [adult]" (next to the player; a baby unless "adult") | "animal feed" (all) |
-// "animal ready" (every product due now) | "animal day" (midnight now: products, hunger, the grass grows) |
-// "animal grass TX TY N" (N tufts there, 0 = none).
+// Dev link (DEV LINK section): "animal list" | "animal add ID [COLOUR] [adult]" (next to the player; a baby unless "adult";
+// one that lives in a barn goes in the nearest with room) | "animal feed" (all) | "animal ready" (every product due now) |
+// "animal day" (midnight now: products, hunger, the grass grows — the herd too) | "animal grass TX TY N" (N tufts there, 0 = none) |
+// FARM: "animal herd" (every animal with a home, every barn, the silos) | "animal door INST 0|1" | "animal hay INST N" (troughs) |
+// "animal silo N" (hay in the silos) | "animal pipes" (which barns pipes join to a silo, here).
 static void ranch_dev_cmd(char *args)
 {
     static char *w[6];
@@ -15186,23 +18013,32 @@ static void ranch_dev_cmd(char *args)
     if (nw == 0 || strcmp(w[0], "list") == 0) {
         for (int i = 0; i < RANCH_MAX; i++) {
             const animal_t *a = &s_ranch[i];
-            if (a->used) dev_out("@@ANIMAL %d %s variant=%d age=%d baby=%d tile=%d,%d mode=%d fed=%d days=%d ready=%d pending=%d", i, ra_def(a)->id,
-                                 a->variant, a->age, ra_baby(a), ra_tx(a), ra_ty(a), a->mode, a->fed, a->days, a->ready, a->pending);
+            if (a->used) dev_out("@@ANIMAL %d %s variant=%d age=%d baby=%d tile=%d,%d mode=%d fed=%d days=%d ready=%d pending=%d herd=%d", i, ra_def(a)->id,
+                                 a->variant, a->age, ra_baby(a), ra_tx(a), ra_ty(a), a->mode, a->fed, a->days, a->ready, a->pending, a->herd);
         }
-        dev_out("@@OK %d animals, %d grass tiles, %d kinds built in", ranch_animal_count(), grass_count(), animal_count);
+        dev_out("@@OK %d animals of the map's own, %d grass tiles, %d kinds built in", ranch_animal_count(), grass_count(), animal_count);
+        dev_out("@@END");
     } else if (strcmp(w[0], "add") == 0 && nw >= 2) {
-        int def = animal_find(w[1]), ptx = (s_player_x + PLAYER_W / 2) / TILE_SIZE, pty = (s_player_y + PLAYER_H - 1) / TILE_SIZE;
+        int def = animal_find(w[1]), ptx = (s_player_x + PLAYER_W / 2) / TILE_SIZE, pty = (s_player_y + PLAYER_H - 1) / TILE_SIZE, ri = -1;
+        uint16_t home = def >= 0 && animal_needs_house(def) ? house_for(def, ptx, pty) : 0;
         animal_t *a = NULL;
-        for (int r = 1; r <= 3 && def >= 0 && !a; r++)
+        if (home && (ri = herd_new(def, home, !s_map_inst)) < 0) home = 0;
+        for (int r = 1; r <= 3 && def >= 0 && !a && (home || !animal_needs_house(def)); r++)
             for (int dy = -r; dy <= r && !a; dy++)
                 for (int dx = -r; dx <= r && !a; dx++)
-                    if ((abs(dx) == r || abs(dy) == r) && ranch_let_out_ok(ptx + dx, pty + dy)) a = ra_new(def, ptx + dx, pty + dy);
-        if (def < 0)  dev_out("@@ERR no animal %s", w[1]);
-        else if (!a)  dev_out("@@ERR no room");
-        else {
+                    if ((abs(dx) == r || abs(dy) == r) && ranch_let_out_ok(def, ptx + dx, pty + dy))
+                        a = ri >= 0 ? herd_body_new(ri, ptx + dx, pty + dy) : ra_new(def, ptx + dx, pty + dy);
+        if (def < 0)                                    dev_out("@@ERR no animal %s", w[1]);
+        else if (animal_needs_house(def) && !home)      dev_out("@@ERR a %s needs a %s with room on this map", w[1], s_animals[def]->house);
+        else if (!a) {
+            if (ri >= 0) s_herd[ri].used = false;
+            dev_out("@@ERR no room");
+        } else {
             if (nw >= 3 && atoi(w[2]) >= 0 && atoi(w[2]) < ra_variants(s_animals[def])) a->variant = (uint8_t)atoi(w[2]);   // "animal add cow 1": that colour
             if (nw >= 4 && strcmp(w[3], "adult") == 0) { a->age = 255; a->adult_shown = true; }                     // "animal add cow 0 adult": grown up
-            ra_show(a); mapsave_mark_dirty(); dev_out("@@OK %s (colour %d) at %d,%d", w[1], a->variant, ra_tx(a), ra_ty(a));
+            if (ri >= 0) herd_from_body(&s_herd[ri], a);
+            ra_show(a); ra_dirty(a);
+            dev_out("@@OK %s (colour %d) at %d,%d home %u", w[1], a->variant, ra_tx(a), ra_ty(a), home);
         }
     } else if (strcmp(w[0], "feed") == 0 || strcmp(w[0], "ready") == 0) {
         bool feed = w[0][0] == 'f';
@@ -15213,33 +18049,98 @@ static void ranch_dev_cmd(char *args)
             else if (ra_def(a)->tool[0])    a->ready = true;
             else                            a->pending = RANCH_PENDING_MAX;
         }
+        for (int i = 0; i < HERD_MAX; i++) {   // (and the ones with a home that aren't here)
+            herd_t *r = &s_herd[i];
+            if (!r->used || r->body >= 0) continue;
+            if (feed)                           r->fed = true;
+            else if (s_animals[r->def]->tool[0]) r->ready = true;
+            else                                r->pending = RANCH_PENDING_MAX;
+        }
         mapsave_mark_dirty();
+        farm_mark_dirty();
         dev_out("@@OK");
     } else if (strcmp(w[0], "day") == 0) {
         memcpy(s_grass_was, s_grass, sizeof(s_grass_was));
         ranch_new_day();
+        herd_sync_bodies();                  // the herd's midnight too (FARM)
+        herd_play_day((int32_t)clock_day());
+        for (int i = 0; i < RANCH_MAX; i++)
+            if (s_ranch[i].used && s_ranch[i].herd >= 0) herd_to_body(&s_herd[s_ranch[i].herd], &s_ranch[i]);
         grass_night();
         grass_show_changes(true);
         mapsave_mark_dirty();
-        dev_out("@@OK %d grass tiles", grass_count());
+        farm_mark_dirty();
+        dev_out("@@OK %d grass tiles, %lu hay in the silos", grass_count(), (unsigned long)s_silo_hay);
     } else if (strcmp(w[0], "grass") == 0 && nw >= 4) {
         int tx = atoi(w[1]), ty = atoi(w[2]), n = atoi(w[3]);
         if (!tile_on_map(tx, ty) || (n && !grass_spot_ok(tx, ty))) dev_out("@@ERR grass can't grow at %d,%d", tx, ty);
         else { grass_set(tx, ty, n); dev_out("@@OK grass %d,%d = %d", tx, ty, s_grass[ty][tx]); }
+    } else if (strcmp(w[0], "herd") == 0) {
+        herd_sync_bodies();
+        int n = 0;
+        for (int i = 0; i < HERD_MAX; i++) {
+            const herd_t *r = &s_herd[i];
+            if (!r->used) continue;
+            n++;
+            dev_out("@@HERD %d %s home=%u out=%d tile=%d,%d body=%d fed=%d days=%d ready=%d pending=%d variant=%d age=%d went_out=%d", i,
+                    s_animals[r->def]->id, r->home, r->outside, r->tx, r->ty, r->body, r->fed, r->days, r->ready, r->pending, r->variant, r->age, r->went_out);
+        }
+        for (int i = 0; i < HOUSE_MAX; i++) {
+            const house_t *h = &s_house[i];
+            if (h->used) dev_out("@@HOUSE %u %s animals=%d/%d door=%d hay=%d piped=%d grass=%u owed=%u here=%d", h->inst, house_name(h->inst),
+                                 house_count(h->inst), house_capacity(h->inst), h->door_open, h->hay, h->piped, h->grass, h->owed,
+                                 house_place(h->inst) >= 0 ? 1 : house_inside_here(h->inst) ? 2 : 0);
+        }
+        dev_out("@@OK %d animals with a home, silo %lu of %lu hay, herd day %ld, troughs here %d (%d with hay)", n, (unsigned long)s_silo_hay,
+                (unsigned long)silo_capacity(), (long)s_herd_day, s_trough_n, s_trough_shown);
+        dev_out("@@END");
+    } else if ((strcmp(w[0], "door") == 0 || strcmp(w[0], "hay") == 0) && nw >= 3) {
+        house_t *h = house_get((uint16_t)atoi(w[1]), true);
+        if (!h) { dev_out("@@ERR building %s isn't a barn or a coop", w[1]); return; }
+        if (w[0][0] == 'd') {
+            int i = house_place(h->inst);
+            if ((atoi(w[2]) != 0) != h->door_open) {
+                if (i >= 0) house_door_toggle(i);
+                else        h->door_open = !h->door_open;
+            }
+        } else {
+            int v = atoi(w[2]), cap = house_capacity(h->inst);
+            h->hay = (uint8_t)(v < 0 ? 0 : v > cap ? cap : v);
+        }
+        farm_mark_dirty();
+        dev_out("@@OK %s door=%d hay=%d", house_name(h->inst), h->door_open, h->hay);
+    } else if (strcmp(w[0], "silo") == 0 && nw >= 2) {
+        s_silo_hay = (uint32_t)(atoi(w[1]) < 0 ? 0 : atoi(w[1]));
+        farm_mark_dirty();
+        dev_out("@@OK silo %lu of %lu hay", (unsigned long)s_silo_hay, (unsigned long)silo_capacity());
+    } else if (strcmp(w[0], "pipes") == 0) {
+        farm_pipes_update(true);
+        for (int i = 0; i < HOUSE_MAX; i++)
+            if (s_house[i].used && house_place(s_house[i].inst) >= 0) dev_out("@@PIPED %u %s %d", s_house[i].inst, house_name(s_house[i].inst), s_house[i].piped);
+        dev_out("@@OK");
+        dev_out("@@END");
     } else {
-        dev_out("@@ERR animal list | add ID | feed | ready | day | grass TX TY N");
+        dev_out("@@ERR animal list | add ID | feed | ready | day | grass TX TY N | herd | door INST 0|1 | hay INST N | silo N | pipes");
     }
 }
 
 // ============================================================
 //  FISHING — Stardew Valley style. Hold a fishing rod (an item with "rod 1")
 //  and tap water: ground ticked "Fishable" in the Map Editor
-//  (TILE_FLAG_FISHABLE). The player walks to the shore spot nearest the tap,
-//  faces the water and casts (fish_on_action()): the bobber flies out up to
-//  FISH_CAST_TILES tiles toward where was tapped and sits there bobbing while
-//  the world goes on. After a while a fish bites — a "!" pops up over the
-//  player: tap within FISH_BITE_MS to hook it, or it's gone. A tap before
-//  that reels the line back in; so does putting the rod away.
+//  (TILE_FLAG_FISHABLE; its water kind — pond, River, Ocean — is
+//  TILE_FLAG_RIVER / TILE_FLAG_OCEAN). The player walks to the shore spot
+//  nearest the tap, faces the water and casts (fish_on_action()): the bobber
+//  flies out up to FISH_CAST_TILES tiles toward where was tapped and sits
+//  there bobbing while the world goes on. After a while something bites — a
+//  "!" pops up over the player: tap within FISH_BITE_MS to hook it, or it's
+//  gone. A tap before that reels the line back in; so does putting the rod away.
+//
+//  What bites (fish_bite_pick()): now and then junk (items with "junk" —
+//  pulled straight up, no fight); else a fish, picked by rarity out of the
+//  ones whose conditions hold right here, right now (fish_cond_ok(): hours,
+//  season, weekday, weather, water kind, map, how far out the bobber is, the
+//  fishing level, a legend not caught yet — items.h); nothing can bite: junk
+//  after all, or "not even a nibble".
 //
 //  Hooked, the minigame (UI_FISHING): a wooden bar beside the player — a
 //  column of water with the fish darting up and down it, and a green catch
@@ -15248,14 +18149,27 @@ static void ranch_dev_cmd(char *args)
 //  spins); out of it, the meter drains. Full = caught: a card shows the fish,
 //  its size and quality, and it goes in the bag. "PERFECT!" when the fish
 //  never left the bar — one quality better. Empty = it got away.
+//  Fish can have tricks ("fish_trait", FISH_TRAIT_*): play dead, glue the bar,
+//  dash, jump out, fade away, bring a decoy, a current, drag the bar down,
+//  shrink it, steal the meter back, go into a frenzy. Sometimes a treasure
+//  chest sinks into the water too: hold the bar over it until its gauge
+//  fills, land the fish, and its loot ("treasure" items, or money) is yours.
 //
-//  Fish are items (Item Editor "Fishing" card; items.h ITEM_ATTR_FISH*):
-//  difficulty, how they swim, the hours they bite, the weather, rarity and
-//  size, a tier (Common..Mythic: Rare and up colour the "!" and the fish in
-//  the minigame) and a mutation multiplier. Which one bites is picked at the
-//  bite, out of those that can then. A catch can come out mutated
-//  (MUTATIONS): more likely when perfect, in the rain, with a lucky rod.
-//  A rod's "rod_bar" sets its catch bar (bigger = easier).
+//  Gear (fish_fx_get(), items.h "Effects"): the rod, the bait and the tackle
+//  on the player's line (s_rig — one bait stack and two tackle slots, kept
+//  with the save; the held rod uses what it has room for: "rod_bait",
+//  "rod_tackle"). Drop bait or tackle on a rod in the bag to put it on;
+//  the rod's card in the bag shows it, a tap takes it off. A bait is used per
+//  bite hooked, a tackle wears out after "tackle" catches.
+//  Luck: the gear's, plus the day's (fish_day_luck()), times the Fishing tab's
+//  global multiplier (k_fishing_cfg): rarer fish, less junk, more treasure,
+//  better quality, more mutations.
+//  Fishing xp (Stardew's sums) makes fishing levels 1..10 — each grows the
+//  catch bar — and some fish want a level. Kept with the save (world.txt).
+//
+//  Crab pots (CRAB POTS below) are props that go in the water and catch
+//  their own things overnight.
+//
 //  The line and bobber are drawn by fish_paint_rect() from
 //  map_repaint_rect(), like the shoppers, so whatever repaints over them
 //  puts them back. Timers only run while the game world does.
@@ -15263,17 +18177,16 @@ static void ranch_dev_cmd(char *args)
 enum { FISH_OFF, FISH_CAST, FISH_WAIT, FISH_BITE, FISH_GAME, FISH_DONE };
 #define FISH_CAST_TILES   3        // how far out a cast can land, in tiles from the shore
 #define FISH_CAST_MS      450      // the bobber's flight
-#define FISH_WAIT_MIN_MS  2500     // a bite comes after this...
-#define FISH_WAIT_MAX_MS  9000     // ...to this (three quarters of it in the rain)
 #define FISH_BITE_MS      1000     // the "!": tap within this to hook it
 #define FISH_BOB_MS       450      // the bobber bobbing
 #define FISH_WATER_H      280      // the minigame's water column, px
-#define FISH_BAR_H        64       // a rod's catch bar without "rod_bar"
 #define FISH_GRACE_S      0.6f     // the minigame's first moments: the meter doesn't drain yet
 #define FISH_FILL_S       0.125f   // the catch meter, per second, with the fish in the bar...
 #define FISH_DRAIN_S      0.17f    // ...and out of it
 #define FISH_LIFT         560.0f   // px/s² the bar speeds up while held (and sinks while not)
 #define FISH_SPEED_MAX    420.0f   // px/s
+#define FISH_LEVEL_MAX    10
+#define FISH_LOOT_MAX     3        // things in one treasure chest
 
 #define FISH_PANEL_W      108
 #define FISH_PANEL_H      (FISH_WATER_H + 74)
@@ -15282,11 +18195,41 @@ enum { FISH_OFF, FISH_CAST, FISH_WAIT, FISH_BITE, FISH_GAME, FISH_DONE };
 #define FISH_COL_W        38
 #define FISH_METER_DX     (FISH_COL_DX + FISH_COL_W + 12)
 #define FISH_METER_W      12
-#define FISH_CARD_W       228
+#define FISH_CHEST_DX     (FISH_METER_DX + FISH_METER_W + 9)   // the treasure gauge
+#define FISH_CARD_W       236
 #define FISH_CARD_H       150
 #define FISH_WOOD         COLOR_RGB565(164, 104,  52)
 #define FISH_WOOD_LT      COLOR_RGB565(214, 156,  92)
 #define FISH_WOOD_DK      COLOR_RGB565( 84,  48,  22)
+
+static const char *const k_fish_trait_name[FISH_TRAIT_COUNT] = {
+    "Plays dead", "Sticky", "Dasher", "Jumper", "Ghost", "Decoy", "Current", "Heavy", "Shrinker", "Thief", "Frenzy",
+};
+// Fishing xp for levels 1..10 (Stardew's).
+static const int32_t k_fish_level_xp[FISH_LEVEL_MAX] = { 100, 380, 770, 1300, 2150, 3300, 4800, 6900, 10000, 15000 };
+
+int clock_weekday(void);   // CLOCK section: 0 = Monday
+
+typedef struct {        // what's on the player's line (kept with the save: world.txt "rig" lines)
+    item_id_t bait; uint8_t bait_q, bait_n;   // a bait stack (bait_n 0 = none)
+    item_id_t tackle[2];              // ITEM_NONE = an empty slot
+    uint8_t uses[2];                // catches each tackle has left
+} fish_rig_t;
+
+typedef struct {        // everything the gear in use adds up to (fish_fx_get())
+    int   bar;                                    // the catch bar, px (rod, bait, tackle, level)
+    float reel, bite, grip, junk, treasure, rare; // multipliers (1 = normal)
+    int   luck, dbl, quality;                     // luck points (with the day's, times the global), % two fish, grades
+    bool  lead, barbed, sonar, magic, challenge, steady;
+    bool  bait_on;                                // a bait is on the line and the rod takes it
+    int   tackles;                                // tackle slots the rod uses (0..2)
+} fish_fx_t;
+
+typedef struct {        // where and when, for the conditions (fish_cond_ok())
+    int  hour, wday, season, water, depth, level;
+    bool rain, magic;
+    const char *map;
+} fish_ctx_t;
 
 typedef struct {
     int      state;
@@ -15299,44 +18242,405 @@ typedef struct {
     rect_t   drawn;               // the line, bobber and "!" on screen now
     int      aim_x, aim_y;        // the water tile that was tapped (nav_plan())
     uint32_t last_ms;
-    uint8_t  fish;                // the hooked fish
-    uint8_t  rod;                 // the rod it was cast with (its stats: fish_rod_stat())
+    item_id_t  fish;                // the hooked fish (or junk)
+    item_id_t  rod;                 // the rod it was cast with
+    fish_fx_t fx;                 // its gear, as it was cast
+    bool     junk;                // the bite is junk: no fight
+    bool     no_panel;            // the card without the minigame (junk)
     int      px, py;              // the minigame panel's top-left
     int      bar_h;
     float    bar, bar_v;          // the catch bar: bottom edge, px up from the bottom of the water; speed
     float    pos, target, glide;  // the fish: px up; where it's heading; how quickly it gets there (s)
     float    prog, t, reel;       // the catch meter 0..1; seconds in; the reel's turn
-    bool     perfect, inside;
+    float    diff;                // how wildly it swims, 0.01..1.2
+    bool     perfect, inside, was_inside;
+    uint16_t trait;               // its tricks (FISH_TRAIT_*)
+    float    freeze_until, freeze_cool;   // FREEZE: still until; no more freezing until
+    float    dash_at;                     // DASHER: the next dash (it flashes for half a second before)
+    float    jump_at, jump_t, jump_base;  // JUMPER: the next leap; how far through one (0 = in the water); where it left the water
+    float    ghost_at, ghost_until;       // GHOST: hidden from ghost_at to ghost_until
+    float    decoy, decoy_target;         // DECOY: the fake fish, px up; where it's heading
+    float    current, current_at;         // CURRENT: px/s² on the bar; when it turns
+    float    thief_at, thief_flash;       // THIEF: the next snatch; the meter flashing red until
+    bool     chest;                       // a treasure chest is in the water...
+    bool     chest_got;                   // ...and it was won
+    float    chest_at, chest_pos, chest_prog;   // when it sinks in; px up; its gauge 0..1
+    int      chal_n;                      // challenge bait: fish still on (3 down to 1)
+    int      count;                       // fish landed
     uint8_t  quality;
     int      inches;
     int      left;                // 1 = no room in the bag: on the ground; 2 = nowhere: let go
     bool     first;               // the first of its kind (FISH BOOK): "NEW!" on the card
+    item_id_t loot[FISH_LOOT_MAX]; uint8_t loot_n[FISH_LOOT_MAX];   // the chest's things...
+    int      loot_k;
+    int32_t  loot_money;          // ...or money
+    int      level_up;            // > 0: this catch made fishing level N
+    item_id_t  worn[2];             // tackle that wore out on this catch
+    bool     lava;                // cast into lava (only lava fish; the minigame glows orange)
 } fish_t;
-static fish_t s_fish;
-static rect_t s_fish_clip;
-static int    s_fish_force_mut = -1;   // dev link "fish mut N": the next catch's mutation (-1 = rolled)
+static fish_t     s_fish;
+static rect_t     s_fish_clip;
+static fish_rig_t s_rig;
+static int32_t    s_fish_xp;
+static int        s_fish_force_mut   = -1;   // dev link "fish mut N": the next catch's mutation (-1 = rolled)
+static int        s_fish_force_junk  = 0;    // dev link "fish junk": the next bite is junk
+static int        s_fish_force_chest = 0;    // dev link "fish chest": the next fight has a treasure chest
+static uint16_t   s_fish_force_trait = 0;    // dev link "fish trait N": the next fish plays these tricks too
+
+static uint32_t weather_hash(uint32_t day);   // WEATHER section: this save's random number for a day
+static bool     fishbook_caught(item_id_t it);  // FISH BOOK: one of these was ever caught (this save)
 
 static uint32_t fish_now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
 static float    fish_frand(void)  { return (float)(esp_random() & 0xFFFF) / 65536.0f; }
+static float    fish_rand_in(float lo, float hi) { return lo + (hi - lo) * fish_frand(); }
 
 static bool fish_rod_held(void)
 {
-    uint8_t it = inv_held_item();
+    item_id_t it = inv_held_item();
     return it != ITEM_NONE && item_attr(it, ITEM_ATTR_ROD, 0) > 0;
 }
 
 static bool fish_line_out(void) { return s_fish.state == FISH_CAST || s_fish.state == FISH_WAIT || s_fish.state == FISH_BITE; }
 
-// One of the rod's stats (items.h ITEM_ATTR_ROD_*), kept between lo and hi; `def` = a normal rod.
-static int fish_rod_stat(const char *attr, int def, int lo, int hi)
+// ---- fishing level and luck ----
+static int fish_level(void)
 {
-    int v = (int)item_attr(s_fish.rod, attr, def);
-    return v < lo ? lo : v > hi ? hi : v;
+    int l = 0;
+    while (l < FISH_LEVEL_MAX && s_fish_xp >= k_fish_level_xp[l]) l++;
+    return l;
 }
-#define FISH_REEL() fish_rod_stat(ITEM_ATTR_ROD_REEL, 100, 10, 400)   // % the meter fills
-#define FISH_BITE() fish_rod_stat(ITEM_ATTR_ROD_BITE, 100, 10, 400)   // % how soon they bite
-#define FISH_LUCK() fish_rod_stat(ITEM_ATTR_ROD_LUCK, 0, -100, 100)   // rarer fish, better quality
-#define FISH_GRIP() fish_rod_stat(ITEM_ATTR_ROD_GRIP, 100, 10, 400)   // % slower the meter drains
+
+// xp for the next level, or 0 at the top.
+static int32_t fish_level_next_xp(void) { int l = fish_level(); return l < FISH_LEVEL_MAX ? k_fish_level_xp[l] : 0; }
+
+// Adds xp (times the Fishing tab's xp %). Returns the new level if it went up, else 0.
+static int fish_xp_add(int xp)
+{
+    int before = fish_level();
+    int32_t add = (int32_t)xp * k_fishing_cfg.xp_pct / 100;
+    s_fish_xp += add > 0 ? add : (xp > 0 ? 1 : 0);
+    if (s_fish_xp > 999999) s_fish_xp = 999999;
+    int after = fish_level();
+    return after > before ? after : 0;
+}
+
+// The day's luck, -daily_luck..+daily_luck points: the same all day, a new one tomorrow.
+static int fish_day_luck(void)
+{
+    int d = k_fishing_cfg.daily_luck;
+    if (d <= 0) return 0;
+    uint32_t h = weather_hash(clock_day() ^ 0x5F1A7u);
+    return (int)(h % (uint32_t)(2 * d + 1)) - d;
+}
+
+// "great", "good", "so-so", "bad", "awful" — the day's luck in words.
+static const char *fish_day_luck_word(void)
+{
+    int d = k_fishing_cfg.daily_luck, l = fish_day_luck();
+    if (d <= 0) return "steady";
+    int pct = l * 100 / d;
+    return pct >= 60 ? "great" : pct >= 20 ? "good" : pct > -20 ? "so-so" : pct > -60 ? "bad" : "awful";
+}
+
+// ---- the gear: rod, bait, tackle ----
+static int fish_rod_bait_ok(item_id_t rod) { return rod != ITEM_NONE && item_attr(rod, ITEM_ATTR_ROD_BAIT, 0) > 0; }
+static int fish_rod_tackles(item_id_t rod)
+{
+    int n = rod != ITEM_NONE ? (int)item_attr(rod, ITEM_ATTR_ROD_TACKLE, 0) : 0;
+    return n < 0 ? 0 : n > 2 ? 2 : n;
+}
+
+// What rod `rod` with the line's bait and tackle adds up to (the day's luck and the level in too).
+static void fish_fx_get(item_id_t rod, fish_fx_t *fx)
+{
+    float mult[FX_COUNT];
+    int   add[FX_COUNT];
+    bool  on[FX_COUNT];
+    for (int k = 0; k < FX_COUNT; k++) { mult[k] = 1.0f; add[k] = 0; on[k] = false; }
+    item_id_t gear[4] = { rod, ITEM_NONE, ITEM_NONE, ITEM_NONE };
+    int     role[4] = { 0, 1, 2, 2 };
+    memset(fx, 0, sizeof(*fx));
+    fx->bait_on = fish_rod_bait_ok(rod) && s_rig.bait_n > 0 && s_rig.bait != ITEM_NONE;
+    if (fx->bait_on) gear[1] = s_rig.bait;
+    fx->tackles = fish_rod_tackles(rod);
+    for (int k = 0; k < fx->tackles; k++) gear[2 + k] = s_rig.tackle[k];
+    for (int g = 0; g < 4; g++) {
+        if (gear[g] == ITEM_NONE) continue;
+        for (int k = 0; k < FX_COUNT; k++) {
+            int def, v = fish_fx_attr(gear[g], role[g], k, &def);
+            if (v == def) continue;
+            if (k_fish_fx[k].kind == 'p')      mult[k] *= (v < 0 ? 0 : v) / 100.0f;
+            else if (k_fish_fx[k].kind == 'a') add[k] += v - def;
+            else                               on[k] |= v > 0;
+        }
+    }
+    fx->bar      = FISH_BAR_H + add[FX_BAR] + fish_level() * k_fishing_cfg.level_bar;
+    fx->reel     = mult[FX_REEL];
+    fx->bite     = mult[FX_BITE];
+    fx->grip     = mult[FX_GRIP];
+    fx->junk     = mult[FX_JUNK];
+    fx->treasure = mult[FX_TREASURE];
+    fx->rare     = mult[FX_RARE];
+    int luck = (add[FX_LUCK] + fish_day_luck()) * (int)k_fishing_cfg.luck_pct / 100;
+    fx->luck     = luck < -100 ? -100 : luck > 100 ? 100 : luck;
+    fx->dbl      = add[FX_DOUBLE];
+    fx->quality  = add[FX_QUALITY];
+    fx->lead = on[FX_LEAD]; fx->barbed = on[FX_BARBED]; fx->sonar = on[FX_SONAR];
+    fx->magic = on[FX_MAGIC]; fx->challenge = on[FX_CHALLENGE]; fx->steady = on[FX_STEADY];
+    if (fx->bar < 24) fx->bar = 24;
+    if (fx->bar > FISH_WATER_H - 20) fx->bar = FISH_WATER_H - 20;
+}
+
+// The line's luck right now with the held rod (crab pots use it too).
+static int fish_luck_now(item_id_t rod)
+{
+    fish_fx_t fx;
+    fish_fx_get(rod, &fx);
+    return fx.luck;
+}
+
+// A carried stack of bait or tackle dropped on rod `rod` in the bag: onto the
+// line. What was there comes back into *carry (a swap). true = it was gear and it's dealt with.
+static bool fish_rig_attach(inv_slot_t *carry, item_id_t rod)
+{
+    if (!carry->count || item_attr(rod, ITEM_ATTR_ROD, 0) <= 0) return false;
+    bool bait = fish_gear_is(carry->item, 1), tackle = fish_gear_is(carry->item, 2);
+    if (!bait && !tackle) return false;
+    if (bait) {
+        if (!fish_rod_bait_ok(rod)) { message(2500, "The %s doesn't take bait", item_name(rod)); return true; }
+        if (s_rig.bait_n && s_rig.bait == carry->item && s_rig.bait_q == carry->quality) {
+            int room = item_max_stack(carry->item) - s_rig.bait_n, put = room < carry->count ? room : carry->count;
+            if (put <= 0) { message(2000, "The %s's bait is full", item_name(rod)); return true; }
+            s_rig.bait_n += (uint8_t)put;
+            carry->count -= (uint8_t)put;
+            if (!carry->count) carry->item = ITEM_NONE;
+        } else {
+            inv_slot_t old = { s_rig.bait, s_rig.bait_n, s_rig.bait_q };
+            s_rig.bait = carry->item; s_rig.bait_q = carry->quality; s_rig.bait_n = carry->count;
+            *carry = old.count ? old : (inv_slot_t){ ITEM_NONE, 0, QUALITY_STANDARD };
+        }
+        message(2000, "%s x%d on the %s", item_name(s_rig.bait), s_rig.bait_n, item_name(rod));
+        return true;
+    }
+    int slots = fish_rod_tackles(rod);
+    if (!slots) { message(2500, "The %s has no room for tackle", item_name(rod)); return true; }
+    int k = 0;
+    while (k < slots && s_rig.tackle[k] != ITEM_NONE) k++;
+    if (k == slots) k = 0;   // both full: the first comes off
+    item_id_t got = carry->item;
+    inv_slot_t old = { s_rig.tackle[k], (uint8_t)(s_rig.tackle[k] != ITEM_NONE), QUALITY_STANDARD };
+    int uses = (int)item_attr(got, ITEM_ATTR_TACKLE, 20);
+    s_rig.tackle[k] = got;
+    s_rig.uses[k]   = (uint8_t)(uses < 1 ? 1 : uses > 255 ? 255 : uses);
+    if (--carry->count == 0) *carry = old.count ? old : (inv_slot_t){ ITEM_NONE, 0, QUALITY_STANDARD };
+    else if (old.count && inv_add_q(old.item, QUALITY_STANDARD, 1)) ground_drop(old.item, QUALITY_STANDARD, 1);   // (a worn one comes back as new: Stardew's do too)
+    message(2000, "%s on the %s", item_name(got), item_name(rod));
+    return true;
+}
+
+// Takes the line's bait (k = 0) or tackle slot k-1 off into *carry (which is empty). true = something came off.
+static bool fish_rig_take(int k, inv_slot_t *carry)
+{
+    if (carry->count) return false;
+    if (k == 0) {
+        if (!s_rig.bait_n) return false;
+        *carry = (inv_slot_t){ s_rig.bait, s_rig.bait_n, s_rig.bait_q };
+        s_rig.bait_n = 0;
+        s_rig.bait   = ITEM_NONE;
+        return true;
+    }
+    if (k > 2 || s_rig.tackle[k - 1] == ITEM_NONE) return false;
+    *carry = (inv_slot_t){ s_rig.tackle[k - 1], 1, QUALITY_STANDARD };
+    s_rig.tackle[k - 1] = ITEM_NONE;
+    s_rig.uses[k - 1]   = 0;
+    return true;
+}
+
+// A new game, or loading one (world.txt's "rig" and "fishxp" lines come next).
+static void fish_rig_reset(void)
+{
+    memset(&s_rig, 0, sizeof(s_rig));
+    s_fish_xp = 0;
+}
+
+// world_save(): the line and the xp.
+static void fish_rig_write(FILE *f, char *line, size_t n)
+{
+    snprintf(line, n, "fishxp %ld\n", (long)s_fish_xp);
+    fputs(line, f);
+    if (s_rig.bait_n && s_rig.bait != ITEM_NONE && s_rig.bait < item_count) {
+        snprintf(line, n, "rig bait %s %d %d\n", item_get(s_rig.bait)->id, s_rig.bait_n, s_rig.bait_q);
+        fputs(line, f);
+    }
+    for (int k = 0; k < 2; k++) {
+        if (s_rig.tackle[k] == ITEM_NONE || s_rig.tackle[k] >= item_count) continue;
+        snprintf(line, n, "rig tackle %d %s %d\n", k, item_get(s_rig.tackle[k])->id, s_rig.uses[k]);
+        fputs(line, f);
+    }
+}
+
+// The line's bait (k = 0) or tackle k-1 (ITEM_NONE = none), and how many baits / catches it has left.
+static item_id_t fish_rig_item(int k)  { return k == 0 ? (s_rig.bait_n ? s_rig.bait : ITEM_NONE) : k <= 2 ? s_rig.tackle[k - 1] : ITEM_NONE; }
+static int     fish_rig_count(int k) { return k == 0 ? s_rig.bait_n : k <= 2 ? s_rig.uses[k - 1] : 0; }
+
+// world.txt: "rig bait <id> <n> <q>" (k 0) / "rig tackle <slot> <id> <uses>" (k 1, 2) back on the line.
+static void fish_rig_load(int k, const char *id, int n, int q)
+{
+    item_id_t it = item_find(id);
+    if (it == ITEM_NONE || it >= item_count || n <= 0) { ESP_LOGW(TAG, "save: fishing gear \"%s\" isn't in this build — dropped", id); return; }
+    if (k == 0) {
+        s_rig.bait   = it;
+        s_rig.bait_n = (uint8_t)(n > 255 ? 255 : n);
+        s_rig.bait_q = (uint8_t)(q > 0 && q <= 255 && item_quality_ok((uint8_t)q) ? q : QUALITY_STANDARD);
+    } else if (k <= 2) {
+        s_rig.tackle[k - 1] = it;
+        s_rig.uses[k - 1]   = (uint8_t)(n > 255 ? 255 : n);
+    }
+}
+static void fish_rig_load_xp(int xp) { s_fish_xp = xp < 0 ? 0 : xp > 999999 ? 999999 : xp; }
+
+// ---- where and when: the conditions (items.h) ----
+// How far tile (tx,ty) is from the shore, in tiles (1 = next to land; off the map counts as more water).
+static int fish_depth(int tx, int ty)
+{
+    for (int d = 1; d < 9; d++)
+        for (int y = ty - d; y <= ty + d; y++)
+            for (int x = tx - d; x <= tx + d; x++) {
+                if (abs(x - tx) != d && abs(y - ty) != d) continue;   // the ring at distance d
+                if (tile_on_map(x, y) && !tile_fishable(x, y)) return d;
+            }
+    return 9;
+}
+
+// Here and now, for the bobber on water tile (tx,ty) (-1: anywhere — the fish book).
+static void fish_ctx_now(fish_ctx_t *c, int tx, int ty, bool magic)
+{
+    c->hour   = clock_minute_of_day() / 60;
+    c->wday   = clock_weekday();
+    c->season = clock_season();
+    c->rain   = tx >= 0 ? rain_now() : rain_outside_now();
+    c->water  = tx >= 0 ? tile_water_kind(tx, ty) : 0;
+    c->depth  = tx >= 0 ? fish_depth(tx, ty) : 9;
+    c->level  = fish_level();
+    c->magic  = magic;
+    c->map    = tx >= 0 ? current_map_name() : NULL;
+}
+
+static bool fish_hour_in(int hour, int from, int to)
+{
+    return from <= to ? (hour >= from && hour < to) : (hour >= from || hour < to);
+}
+
+// Does item `it` bite (pre "fish") / go in a crab pot (pre "pot") here and now?
+// Only the conditions — that it's a fish, junk or a pot catch at all is the caller's.
+static bool fish_cond_ok(item_id_t it, const char *pre, const fish_ctx_t *c)
+{
+    char n[40];
+    #define FC_ATTR(suffix, def) (snprintf(n, sizeof(n), "%s_%s", pre, suffix), item_attr(it, n, (def)))
+    if (!c->magic) {
+        int from = (int)FC_ATTR("from", 0), to = (int)FC_ATTR("to", 24);
+        int from2 = (int)FC_ATTR("from2", -1), to2 = (int)FC_ATTR("to2", 24);
+        if (!fish_hour_in(c->hour, from, to) && !(from2 >= 0 && fish_hour_in(c->hour, from2, to2))) return false;
+        int weather = (int)FC_ATTR("weather", 0);
+        if ((weather == 1 && !c->rain) || (weather == 2 && c->rain)) return false;
+        int seasons = (int)FC_ATTR("seasons", 0);
+        if (seasons && !((seasons >> c->season) & 1)) return false;
+        int days = (int)FC_ATTR("days", 0);
+        if (days && !((days >> c->wday) & 1)) return false;
+    }
+    int water = (int)FC_ATTR("water", 0);
+    if (water && c->water && !(water & c->water)) return false;
+    if (c->water == 8 && !(water & 8)) return false;   // lava: only what says it lives there ("fish_water" 8)
+    if (c->depth < (int)FC_ATTR("depth", 0)) return false;
+    if (c->level < (int)FC_ATTR("level", 0)) return false;
+    if (FC_ATTR("once", 0) > 0 && fishbook_caught(it)) return false;
+    #undef FC_ATTR
+    if (c->map) {   // "<pre>_map:<name>": only on those maps
+        const item_asset_t *a = item_get(it);
+        int len = snprintf(n, sizeof(n), "%s_map:", pre);
+        bool listed = false, here = false;
+        for (int i = 0; a && i < a->attr_count && !here; i++) {
+            if (strncmp(a->attrs[i].name, n, (size_t)len) != 0 || a->attrs[i].value <= 0) continue;
+            listed = true;
+            here = strcasecmp(a->attrs[i].name + len, c->map) == 0;
+        }
+        if (listed && !here) return false;
+    }
+    return true;
+}
+
+// Can fish `it` bite at this hour, in this weather, this season, at the player's level? (the fish book)
+static bool fish_bites_today(item_id_t it)
+{
+    fish_ctx_t c;
+    fish_ctx_now(&c, -1, -1, false);
+    return item_attr(it, ITEM_ATTR_FISH, 0) > 0 && fish_cond_ok(it, "fish", &c);
+}
+
+// The pools things are picked from.
+enum { POOL_FISH, POOL_JUNK, POOL_POT, POOL_POT_JUNK, POOL_TREASURE };
+
+static bool fish_in_pool(item_id_t it, int pool, const fish_ctx_t *c)
+{
+    switch (pool) {
+    case POOL_FISH:     return item_attr(it, ITEM_ATTR_FISH, 0) > 0 && item_attr(it, ITEM_ATTR_JUNK, 0) <= 0 && fish_cond_ok(it, "fish", c);
+    case POOL_JUNK:     return item_attr(it, ITEM_ATTR_JUNK, 0) > 0 && fish_cond_ok(it, "fish", c);
+    case POOL_POT:      return item_attr(it, ITEM_ATTR_POT, 0) > 0 && item_attr(it, ITEM_ATTR_JUNK, 0) <= 0 && fish_cond_ok(it, "pot", c);
+    case POOL_POT_JUNK: return item_attr(it, ITEM_ATTR_POT, 0) > 0 && item_attr(it, ITEM_ATTR_JUNK, 0) > 0 && fish_cond_ok(it, "pot", c);
+    default:            return item_attr(it, ITEM_ATTR_TREASURE, 0) > 0;
+    }
+}
+
+// How likely `it` is to be the one picked from `pool`: its weight, evened out by
+// luck (+100: a rarity 1 fish is 1/4 as likely as a 16 instead of 1/16) or
+// spread further apart (below 0). Rare-and-up fish times the gear's "rare".
+static uint32_t fish_pool_weight(item_id_t it, int pool, int luck, float rare)
+{
+    int32_t w = item_attr(it, pool == POOL_FISH ? ITEM_ATTR_FISH_RARITY : pool == POOL_JUNK ? ITEM_ATTR_JUNK :
+                              pool == POOL_TREASURE ? ITEM_ATTR_TREASURE : ITEM_ATTR_POT, 10);
+    w = w < 1 ? 1 : w > 1000 ? 1000 : w;
+    if (pool == POOL_JUNK || pool == POOL_POT_JUNK) return (uint32_t)w * 100;   // junk is junk: luck doesn't sort it
+    float k = 1.0f - luck / 200.0f;   // 0.5 .. 1.5
+    int tier = pool == POOL_FISH ? fish_tier_of(it) : (int)item_attr(it, "pot_tier", 1) - 1;
+    float scale = tier >= FISH_TIER_MYTHIC ? 25.0f : 100.0f;   // a Mythic: a quarter of even rarity 1
+    if (tier >= FISH_TIER_RARE) scale *= rare;
+    float v = powf((float)w, k) * scale + 0.5f;
+    return v < 1.0f ? 1 : (uint32_t)v;
+}
+
+// One thing out of `pool` (by weight). ITEM_NONE = nothing in it can be here now.
+static item_id_t fish_pick_pool(int pool, const fish_ctx_t *c, int luck, float rare)
+{
+    uint32_t total = 0;
+    for (int it = 1; it < item_count; it++)
+        if (fish_in_pool((item_id_t)it, pool, c)) total += fish_pool_weight((item_id_t)it, pool, luck, rare);
+    if (!total) return ITEM_NONE;
+    uint32_t r = esp_random() % total;
+    for (int it = 1; it < item_count; it++) {
+        if (!fish_in_pool((item_id_t)it, pool, c)) continue;
+        uint32_t w = fish_pool_weight((item_id_t)it, pool, luck, rare);
+        if (r < w) return (item_id_t)it;
+        r -= w;
+    }
+    return ITEM_NONE;
+}
+
+// What bites the bobber now: a fish, or junk (*junk). ITEM_NONE = nothing at all.
+static item_id_t fish_bite_pick(bool *junk)
+{
+    fish_ctx_t c;
+    fish_ctx_now(&c, s_fish.wx, s_fish.wy, s_fish.fx.magic);
+    const fish_fx_t *fx = &s_fish.fx;
+    float jp = k_fishing_cfg.junk_pct / 100.0f * fx->junk * (1.0f - fx->luck / 200.0f);
+    if (s_fish_force_junk) { jp = 1.0f; s_fish_force_junk = 0; }
+    item_id_t it = ITEM_NONE;
+    *junk = false;
+    if (fish_frand() < jp && (it = fish_pick_pool(POOL_JUNK, &c, fx->luck, 1.0f)) != ITEM_NONE) { *junk = true; return it; }
+    if ((it = fish_pick_pool(POOL_FISH, &c, fx->luck, fx->rare)) != ITEM_NONE) return it;
+    it = fish_pick_pool(POOL_JUNK, &c, fx->luck, 1.0f);   // nothing biting: junk after all
+    *junk = it != ITEM_NONE;
+    return it;
+}
 
 // nav_plan(): a tap on water (tx,ty) with a rod in hand — remembered as where to cast.
 static bool fish_tap_target(int tx, int ty)
@@ -15365,6 +18669,9 @@ static const char *const k_fish_alert[13] = {
 static const char *const k_fish_shape[7] = {   // the fish in the minigame (facing left)
     "...KKKKK.....", "..KBBBBBK..KK", ".KBEBBBBBKKBK", "KBBBBBBBBBBBK", ".KYYYYYYBKKBK", "..KYYYYYK..KK", "...KKKKK.....",
 };
+static const char *const k_fish_chest[9] = {   // a treasure chest in the minigame's water
+    ".KKKKKKKKK.", "KHHHHHHHHHK", "KHHHHHHHHHK", "KKKKKGKKKKK", "KHHHHGHHHHK", "KHHHHHHHHHK", "KHHHHHHHHHK", "KHHHHHHHHHK", "KKKKKKKKKKK",
+};
 
 static uint16_t s_fish_tier_col = 0;   // the hooked fish's tier colour (Rare and up): the "!" and the minigame fish take it
 
@@ -15378,6 +18685,8 @@ static uint16_t fish_pal(char ch)
     case 'B': return s_fish_tier_col ? s_fish_tier_col : COLOR_RGB565(250, 160,  60);
     case 'Y': return COLOR_RGB565(255, 214, 120);
     case 'E': return COLOR_RGB565( 20,  20,  30);
+    case 'H': return COLOR_RGB565(170, 104,  48);
+    case 'G': return COLOR_RGB565(250, 210,  60);
     default:  return 0;
     }
 }
@@ -15399,6 +18708,9 @@ static void fish_px_sprite(int x, int y, const char *const *rows, int h, bool ti
         }
 }
 
+// The sonar's look at what bit: its icon beside the "!" (top-left of a 16x16 + border box).
+static rect_t fish_sonar_rect(void) { return (rect_t){ s_player_x + PLAYER_W / 2 + 8, s_player_y - 20, 18, 18 }; }
+
 // The screen area the line, bobber and "!" take up now (w == 0: nothing out).
 static rect_t fish_view_rect(void)
 {
@@ -15408,7 +18720,10 @@ static rect_t fish_view_rect(void)
     int x0 = (tx < s_fish.bx ? tx : s_fish.bx) - 12, x1 = (tx > s_fish.bx ? tx : s_fish.bx) + 12;
     int y0 = (ty < s_fish.by ? ty : s_fish.by) - 10, y1 = (ty > s_fish.by ? ty : s_fish.by) + 22;   // the line sags; the ripple
     rect_t r = { x0, y0, x1 - x0, y1 - y0 };
-    if (s_fish.state == FISH_BITE) r = rect_union(r, (rect_t){ s_player_x + PLAYER_W / 2 - 6, s_player_y - 16, 12, 14 });
+    if (s_fish.state == FISH_BITE) {
+        r = rect_union(r, (rect_t){ s_player_x + PLAYER_W / 2 - 6, s_player_y - 16, 12, 14 });
+        if (s_fish.fx.sonar) r = rect_union(r, fish_sonar_rect());
+    }
     return rect_clip_screen(r);
 }
 
@@ -15437,10 +18752,23 @@ static void fish_paint_rect(int x, int y, int w, int h)
         int rr = 6 + (int)(s_fish.look % 3) * 2;
         for (int a = 0; a < 48; a++) {
             float ang = a * (6.2831853f / 48);
-            fish_px(s_fish.bx + (int)(cosf(ang) * rr), s_fish.by + 3 + (int)(sinf(ang) * rr / 2), COLOR_RGB565(200, 232, 250), true);
+            fish_px(s_fish.bx + (int)(cosf(ang) * rr), s_fish.by + 3 + (int)(sinf(ang) * rr / 2),
+                    s_fish.lava ? COLOR_RGB565(255, 170, 60) : COLOR_RGB565(200, 232, 250), true);
         }
         fish_px_sprite(s_fish.bx - 3, s_fish.by - 3, k_fish_bobber, 3, true);
         fish_px_sprite(s_player_x + PLAYER_W / 2 - 5, s_player_y - 15, k_fish_alert, 13, false);
+        if (s_fish.fx.sonar && s_fish.fish != ITEM_NONE) {   // the sonar bobber: what it is, in a little dark box
+            static uint16_t spr[GROUND_TILE_PX];
+            rect_t sr = fish_sonar_rect();
+            ground_sprite(s_fish.fish, QUALITY_STANDARD, spr);
+            for (int yy = 0; yy < sr.h; yy++)
+                for (int xx = 0; xx < sr.w; xx++) {
+                    bool edge = xx == 0 || yy == 0 || xx == sr.w - 1 || yy == sr.h - 1;
+                    uint16_t c = edge ? COLOR_RGB565(40, 24, 16) : COLOR_RGB565(30, 60, 90);
+                    if (!edge) { uint16_t s = spr[(yy - 1) * 16 + (xx - 1)]; if (s != FB_TRANSPARENT_COLOR) c = s; }
+                    fish_px(sr.x + xx, sr.y + yy, c, false);
+                }
+        }
     } else {
         fish_px_sprite(s_fish.bx - 3, s_fish.by - 3, k_fish_bobber, 6, true);
     }
@@ -15476,6 +18804,11 @@ static bool fish_on_action(void)
     int fx = s_selected_tile_x, fy = s_selected_tile_y;
     if (!tile_fishable(fx, fy)) return false;
     if (fish_line_out()) return true;
+    int kind = tile_water_kind(fx, fy);
+    if (kind == 8 && item_attr(inv_held_item(), ITEM_ATTR_ROD_LAVA, 0) <= 0) {   // lava: it takes a lava rod
+        message(3000, "%s would burn up in lava - it takes a lava rod", item_name(inv_held_item()));
+        return true;
+    }
     int dx, dy;
     direction_to_delta(s_player_facing, &dx, &dy);
     int want = 1;   // out toward the tapped water, as far as the water and the rod go
@@ -15483,7 +18816,7 @@ static bool fish_on_action(void)
     if (dy && !dx) want += (s_fish.aim_y - fy) * dy;
     if (want > FISH_CAST_TILES) want = FISH_CAST_TILES;
     int n = 1;
-    while (n < want && tile_fishable(fx + dx * n, fy + dy * n)) n++;
+    while (n < want && tile_fishable(fx + dx * n, fy + dy * n) && (tile_water_kind(fx + dx * n, fy + dy * n) == 8) == (kind == 8)) n++;   // not from water out into lava
     s_fish.wx = fx + dx * (n - 1);
     s_fish.wy = fy + dy * (n - 1);
     fish_rod_tip(&s_fish.sx, &s_fish.sy);
@@ -15492,90 +18825,126 @@ static bool fish_on_action(void)
     s_fish.bx = s_fish.sx;
     s_fish.by = s_fish.sy;
     s_fish.rod     = inv_held_item();
+    s_fish.lava    = kind == 8;
+    fish_fx_get(s_fish.rod, &s_fish.fx);
+    s_fish.fish    = ITEM_NONE;
     s_fish_tier_col = 0;
     s_fish.state   = FISH_CAST;
     s_fish.t_ms    = 0;
     s_fish.look    = -1;
     s_fish.last_ms = fish_now_ms();
     nav_cancel();
+    sfx_play("fish_cast");
     return true;
-}
-
-// Can fish `it` bite at this hour, in this weather?
-static bool fish_bites_now(uint8_t it, int hour, bool rain)
-{
-    if (item_attr(it, ITEM_ATTR_FISH, 0) <= 0) return false;
-    int from = (int)item_attr(it, ITEM_ATTR_FISH_FROM, 0), to = (int)item_attr(it, ITEM_ATTR_FISH_TO, 24);
-    bool in = from <= to ? (hour >= from && hour < to) : (hour >= from || hour < to);
-    int weather = (int)item_attr(it, ITEM_ATTR_FISH_WEATHER, 0);
-    return in && !(weather == 1 && !rain) && !(weather == 2 && rain);
-}
-
-// How likely fish `it` is to be the one that bites: its rarity, evened out by
-// the rod's luck (+100: a rarity 1 fish is 1/4 as likely as a 16 instead of
-// 1/16) or spread further apart (below 0: the common ones bite even more).
-static uint32_t fish_weight(uint8_t it)
-{
-    int32_t w = item_attr(it, ITEM_ATTR_FISH_RARITY, 10);
-    w = w < 1 ? 1 : w > 1000 ? 1000 : w;
-    float k = 1.0f - FISH_LUCK() / 200.0f;   // 0.5 .. 1.5
-    float scale = fish_tier_of(it) == FISH_TIER_MYTHIC ? 25.0f : 100.0f;   // a Mythic: a quarter of even rarity 1
-    return (uint32_t)(powf((float)w, k) * scale + 0.5f);
-}
-
-// Which fish bites, out of those that can now (by rarity). ITEM_NONE = none can.
-static uint8_t fish_pick(void)
-{
-    int hour = clock_minute_of_day() / 60;
-    bool rain = rain_now();
-    uint32_t total = 0;
-    for (int it = 1; it < item_count; it++) if (fish_bites_now((uint8_t)it, hour, rain)) total += fish_weight((uint8_t)it);
-    if (!total) return ITEM_NONE;
-    uint32_t r = esp_random() % total;
-    for (int it = 1; it < item_count; it++) {
-        if (!fish_bites_now((uint8_t)it, hour, rain)) continue;
-        uint32_t w = fish_weight((uint8_t)it);
-        if (r < w) return (uint8_t)it;
-        r -= w;
-    }
-    return ITEM_NONE;
 }
 
 static rect_t fish_panel_rect(void) { return (rect_t){ s_fish.px, s_fish.py, FISH_PANEL_W, FISH_PANEL_H }; }
 
+// The catch card's height: taller with a treasure chest's loot, a level up, tackle worn out.
+static int fish_card_h(void)
+{
+    int h = FISH_CARD_H;
+    if (s_fish.loot_k || s_fish.loot_money) h += 30;
+    if (s_fish.level_up || s_fish.worn[0] || s_fish.worn[1]) h += 14;
+    return h;
+}
+
 // The catch card: over the player (under them near the top of the screen).
 static rect_t fish_card_rect(void)
 {
-    int x = s_player_x + PLAYER_W / 2 - FISH_CARD_W / 2, y = s_player_y - FISH_CARD_H - 6;
+    int ch = fish_card_h();
+    int x = s_player_x + PLAYER_W / 2 - FISH_CARD_W / 2, y = s_player_y - ch - 6;
     if (y < 8) y = s_player_y + PLAYER_H + 6;
-    if (y > LCD_V_RES - FISH_CARD_H - 8) y = LCD_V_RES - FISH_CARD_H - 8;
+    if (y > LCD_V_RES - ch - 8) y = LCD_V_RES - ch - 8;
     if (x < 8) x = 8;
     if (x > LCD_H_RES - FISH_CARD_W - 8) x = LCD_H_RES - FISH_CARD_W - 8;
-    return (rect_t){ x, y, FISH_CARD_W, FISH_CARD_H };
+    return (rect_t){ x, y, FISH_CARD_W, ch };
 }
 
 static rect_t fish_ui_rect(void)
 {
-    return s_fish.state == FISH_DONE ? rect_union(fish_panel_rect(), fish_card_rect()) : fish_panel_rect();
+    if (s_fish.state == FISH_DONE) return s_fish.no_panel ? fish_card_rect() : rect_union(fish_panel_rect(), fish_card_rect());
+    return fish_panel_rect();
+}
+
+// The bite was taken: a bait is used (the line's, if the rod takes it).
+static void fish_use_bait(void)
+{
+    if (!s_fish.fx.bait_on || !s_rig.bait_n) return;
+    if (--s_rig.bait_n == 0) {
+        message(2500, "That was your last %s", item_name(s_rig.bait));
+        s_rig.bait = ITEM_NONE;
+    }
+}
+
+// Each tackle in use wears down a catch; worn out, it's gone (named on the card).
+static void fish_wear_tackle(void)
+{
+    s_fish.worn[0] = s_fish.worn[1] = ITEM_NONE;
+    for (int k = 0; k < s_fish.fx.tackles; k++) {
+        if (s_rig.tackle[k] == ITEM_NONE) continue;
+        if (s_rig.uses[k] > 1) { s_rig.uses[k]--; continue; }
+        s_fish.worn[k]  = s_rig.tackle[k];
+        s_rig.tackle[k] = ITEM_NONE;
+        s_rig.uses[k]   = 0;
+    }
+}
+
+static void fish_clear_result(void)
+{
+    memset(s_fish.loot, 0, sizeof(s_fish.loot));
+    memset(s_fish.loot_n, 0, sizeof(s_fish.loot_n));
+    s_fish.loot_k     = 0;
+    s_fish.loot_money = 0;
+    s_fish.level_up   = 0;
+    s_fish.worn[0] = s_fish.worn[1] = ITEM_NONE;
+    s_fish.count      = 1;
+    s_fish.first      = false;
 }
 
 // Hooked: the minigame starts, the bar beside the player.
 static void fish_game_start(void)
 {
-    int bar = (int)item_attr(s_fish.rod, ITEM_ATTR_ROD_BAR, FISH_BAR_H);
-    if (bar < 24) bar = 24;
-    if (bar > FISH_WATER_H - 20) bar = FISH_WATER_H - 20;
-    s_fish.bar_h   = bar;
+    fish_clear_result();
+    const fish_fx_t *fx = &s_fish.fx;
+    s_fish.bar_h   = fx->bar;
     s_fish.bar     = 0;
     s_fish.bar_v   = 0;
-    s_fish.pos     = bar * 0.5f;   // it starts in the bar
+    s_fish.pos     = s_fish.bar_h * 0.5f;   // it starts in the bar
     s_fish.target  = s_fish.pos;
     s_fish.glide   = 0.3f;
     s_fish.prog    = 0.3f;
     s_fish.t       = 0;
     s_fish.reel    = 0;
     s_fish.perfect = true;
-    s_fish.inside  = true;
+    s_fish.inside  = s_fish.was_inside = true;
+    s_fish.junk    = false;
+    s_fish.no_panel = false;
+    float d = (float)item_attr(s_fish.fish, ITEM_ATTR_FISH, 30) * k_fishing_cfg.difficulty_pct / 10000.0f;
+    s_fish.diff  = d < 0.01f ? 0.01f : d > 1.2f ? 1.2f : d;
+    s_fish.trait = (uint16_t)item_attr(s_fish.fish, ITEM_ATTR_FISH_TRAIT, 0) | s_fish_force_trait;
+    s_fish_force_trait = 0;
+    s_fish.freeze_until = s_fish.freeze_cool = 0;
+    s_fish.dash_at     = fish_rand_in(2.0f, 4.0f);
+    s_fish.jump_at     = fish_rand_in(2.5f, 5.0f);
+    s_fish.jump_t      = 0;
+    s_fish.ghost_at    = fish_rand_in(1.5f, 3.5f);
+    s_fish.jump_base   = 0;
+    s_fish.ghost_until = 0;
+    s_fish.decoy       = fish_rand_in(60.0f, FISH_WATER_H - 30.0f);
+    s_fish.decoy_target = s_fish.decoy;
+    s_fish.current     = (esp_random() & 1) ? 260.0f : -260.0f;
+    s_fish.current_at  = fish_rand_in(2.5f, 4.5f);
+    s_fish.thief_at    = 2.5f;
+    s_fish.thief_flash = 0;
+    float tp = k_fishing_cfg.treasure_pct / 100.0f * fx->treasure * (1.0f + fx->luck / 200.0f);
+    s_fish.chest       = s_fish_force_chest || fish_frand() < tp;
+    s_fish_force_chest = 0;
+    s_fish.chest_got   = false;
+    s_fish.chest_at    = fish_rand_in(1.0f, 3.0f);
+    s_fish.chest_pos   = fish_rand_in(24.0f, FISH_WATER_H - 24.0f);
+    s_fish.chest_prog  = 0;
+    s_fish.chal_n      = fx->challenge ? 3 : 1;
     int px = (s_player_x + PLAYER_W / 2 < LCD_H_RES / 2) ? s_player_x + PLAYER_W + 20 : s_player_x - 20 - FISH_PANEL_W;
     int py = s_player_y + PLAYER_H / 2 - FISH_PANEL_H / 2;
     if (px < 8) px = 8;
@@ -15590,15 +18959,45 @@ static void fish_game_start(void)
     if (!ui_begin()) { fish_stop(NULL); return; }
     s_ui_screen   = UI_FISHING;
     s_active_menu = NULL;
-    ESP_LOGI(TAG, "fishing: hooked %s (difficulty %ld)", item_name(s_fish.fish), (long)item_attr(s_fish.fish, ITEM_ATTR_FISH, 0));
+    ESP_LOGI(TAG, "fishing: hooked %s (difficulty %ld, tricks %x, chest %d)", item_name(s_fish.fish),
+             (long)item_attr(s_fish.fish, ITEM_ATTR_FISH, 0), s_fish.trait, s_fish.chest);
+}
+
+// Junk on the line: pulled straight up, into the bag, and a card.
+static void fish_land_junk(void)
+{
+    fish_clear_result();
+    item_id_t it = s_fish.fish; uint8_t q = wet_if_raining(QUALITY_STANDARD);
+    s_fish.junk     = true;
+    s_fish.no_panel = true;
+    s_fish.perfect  = false;
+    s_fish.quality  = q;
+    s_fish.inches   = 0;
+    s_fish.left     = inv_add_q(it, q, 1) == 0 ? 0 : ground_drop(it, q, 1) ? 1 : 2;
+    s_fish.level_up = fish_xp_add(3);
+    s_fish.t        = 0;
+    s_fish.state    = FISH_DONE;
+    s_fish.last_ms  = fish_now_ms();
+    inv_carry_return();
+    fish_refresh();   // (the line comes in)
+    if (!ui_begin()) { s_fish.state = FISH_OFF; return; }
+    s_ui_screen   = UI_FISHING;
+    s_active_menu = NULL;
+    hud_refresh();
+    sfx_play("fish_junk");
+    ESP_LOGI(TAG, "fishing: junk, %s", item_name(it));
 }
 
 // A tap on the game while the line is out: hook a bite, or reel in. true = it was taken.
 static bool fish_tap(void)
 {
     if (!fish_line_out()) return false;
-    if (s_fish.state == FISH_WAIT)      fish_stop(NULL);
-    else if (s_fish.state == FISH_BITE) fish_game_start();
+    if (s_fish.state == FISH_WAIT) fish_stop(NULL);
+    else if (s_fish.state == FISH_BITE) {
+        fish_use_bait();
+        if (s_fish.junk) fish_land_junk();
+        else             fish_game_start();
+    }
     return true;
 }
 
@@ -15629,25 +19028,32 @@ static void fish_tick(void)
         s_fish.by = s_fish.sy + (int)((s_fish.ey - s_fish.sy) * k - arc * 4 * k * (1 - k));
         look = s_fish.bx * 1024 + s_fish.by + 1000000;
         if (k >= 1.0f) {
+            int lo = k_fishing_cfg.bite_min_ms, hi = k_fishing_cfg.bite_max_ms;
+            if (hi <= lo) hi = lo + 1;
             s_fish.state   = FISH_WAIT;
             s_fish.t_ms    = 0;
-            s_fish.wait_ms = FISH_WAIT_MIN_MS + (int32_t)(esp_random() % (FISH_WAIT_MAX_MS - FISH_WAIT_MIN_MS));
+            s_fish.wait_ms = lo + (int32_t)(esp_random() % (uint32_t)(hi - lo));
             if (rain_now()) s_fish.wait_ms = s_fish.wait_ms * 3 / 4;   // they bite better in the rain
-            s_fish.wait_ms = s_fish.wait_ms * 100 / FISH_BITE();      // ...and with a quick-biting rod
+            float bite = s_fish.fx.bite > 0.1f ? s_fish.fx.bite : 0.1f;
+            s_fish.wait_ms = (int32_t)(s_fish.wait_ms / bite);        // ...and with bait, a spinner, a quick rod
+            sfx_play("fish_plop");
         }
     } else if (s_fish.state == FISH_WAIT) {
         look = (s_fish.t_ms / FISH_BOB_MS) & 1;
         s_fish.bx = s_fish.ex;
         s_fish.by = s_fish.ey + (int)look;
         if (s_fish.t_ms >= s_fish.wait_ms) {
-            s_fish.fish = fish_pick();
-            if (s_fish.fish == ITEM_NONE) { fish_stop("Not even a nibble... nothing bites here at this hour"); return; }
-            int tier = fish_tier_of(s_fish.fish);   // a Rare or better shows in the "!"'s colour
+            bool junk;
+            s_fish.fish = fish_bite_pick(&junk);
+            if (s_fish.fish == ITEM_NONE) { fish_stop("Not even a nibble... nothing bites here now"); return; }
+            s_fish.junk = junk;
+            int tier = junk ? 0 : fish_tier_of(s_fish.fish);   // a Rare or better shows in the "!"'s colour
             s_fish_tier_col = tier >= FISH_TIER_RARE ? k_fish_tier[tier].col : 0;
             s_fish.state = FISH_BITE;
             s_fish.t_ms  = 0;
             s_fish.by    = s_fish.ey + 2;
             look = 100;
+            sfx_play("fish_bite");
         }
     } else if (s_fish.state == FISH_BITE) {
         look = 100 + (s_fish.t_ms / 120) % 3;
@@ -15657,19 +19063,21 @@ static void fish_tick(void)
 }
 
 // ---- UI_FISHING: the minigame, then the catch card ----
-// The fish (or its outline) from k_fish_shape, `scale` px a pixel; mono != 0 = all one colour.
-static void fish_ui_shape(int x, int y, int scale, uint16_t mono)
+// The fish (or its outline) from k_fish_shape, `scale` px a pixel; mono != 0 = all one colour; flip = facing right.
+static void fish_ui_shape_ex(int x, int y, int scale, uint16_t mono, bool flip)
 {
     for (int r = 0; r < 7; r++)
         for (int c = 0; k_fish_shape[r][c]; c++) {
             uint16_t col = fish_pal(k_fish_shape[r][c]);
-            if (col) fill_rect(x + c * scale, y + r * scale, scale, scale, mono ? mono : col);
+            int cc = flip ? 12 - c : c;
+            if (col) fill_rect(x + cc * scale, y + r * scale, scale, scale, mono ? mono : col);
         }
 }
+static void fish_ui_shape(int x, int y, int scale, uint16_t mono) { fish_ui_shape_ex(x, y, scale, mono, false); }
 
 // The item's held art, twice the size if it fits, centred on (cx,cy) — as
 // stack quality q shows it (a mutation recoloured, at animation frame f).
-static void fish_ui_icon(int cx, int cy, uint8_t item, int max, uint8_t q, uint8_t f)
+static void fish_ui_icon(int cx, int cy, item_id_t item, int max, uint8_t q, uint8_t f)
 {
     const item_asset_t *a = item_get(item);
     if (!a || !a->passive.frame_count) return;
@@ -15693,9 +19101,9 @@ static int fish_chip(int x, int y, const char *text, uint16_t col)
 static void fish_draw_card(void)
 {
     rect_t r = fish_card_rect();
-    uint8_t it = s_fish.fish, q = s_fish.quality, mut = QUALITY_MUT(q), grade = QUALITY_GRADE(q);
+    item_id_t it = s_fish.fish; uint8_t q = s_fish.quality, mut = QUALITY_MUT(q), grade = QUALITY_GRADE(q);
     draw_leather_panel(r.x, r.y, r.w, r.h);
-    draw_text_centered(r.x, r.y + 12, r.w, mut ? "MUTATED CATCH!" : "CAUGHT!", INV_COL_TEXT, INV_COL_SHINE);
+    draw_text_centered(r.x, r.y + 12, r.w, s_fish.junk ? "JUNK..." : mut ? "MUTATED CATCH!" : "CAUGHT!", INV_COL_TEXT, INV_COL_SHINE);
     if (s_fish.first) {   // a new kind: it's in the fish book now
         fill_round_rect(r.x + r.w - 46, r.y + 10, 34, 13, 3, COLOR_RGB565(200, 50, 40), 255);
         draw_text(r.x + r.w - 41, r.y + 13, "NEW!", 1, COLOR_WHITE);
@@ -15718,31 +19126,75 @@ static void fish_draw_card(void)
     draw_quality_star(wx + 3, wy + 52 - 10, q);
     draw_mutation_badge(wx + 52 - 9, wy + 3, q);
     draw_wet_badge(wx + 3, wy + 3, q);
+    if (s_fish.count > 1) {   // two (wild bait) or more (challenge bait)
+        char x2[16];
+        snprintf(x2, sizeof(x2), "x%d", s_fish.count);
+        draw_text(wx + 52 - text_width(x2, 2) - 2, wy + 52 - 16, x2, 2, INV_COL_GOLD);
+    }
     // the name, then chips: tier and quality, the mutation and wetness, then size and worth
     int tx = r.x + 80, tw = r.w - 92;
     draw_text_clip(tx, r.y + 38, item_name(it), text_width(item_name(it), 2) <= tw ? 2 : 1, INV_COL_TEXT, tw);
-    int tier = fish_tier_of(it), cx = tx;
-    cx += fish_chip(cx, r.y + 58, k_fish_tier[tier].name, k_fish_tier[tier].col) + 4;
-    if (grade != QUALITY_STANDARD && grade < QUALITY_COUNT && cx + text_width(item_quality_name(grade), 1) + 8 <= r.x + r.w - 10)
-        fish_chip(cx, r.y + 58, item_quality_name(grade), k_quality_col[grade]);
     char t[48];
-    if (mut && mut < MUT_COUNT) {
-        int pct = item_mutation_price_pct(mut);
-        if (pct % 100) snprintf(t, sizeof(t), "%s x%d.%d", item_mutation_name(mut), pct / 100, pct % 100 / 10);
-        else           snprintf(t, sizeof(t), "%s x%d", item_mutation_name(mut), pct / 100);
-        cx = tx + fish_chip(tx, r.y + 74, t, k_mut_col[mut]) + 4;
+    int cx = tx, y = r.y + 58;
+    if (s_fish.junk) {
+        draw_text(tx, y + 2, "Better luck next cast.", 1, INV_COL_TEXT_DIM);
     } else {
-        cx = tx;
+        int tier = fish_tier_of(it);
+        cx += fish_chip(cx, y, k_fish_tier[tier].name, k_fish_tier[tier].col) + 4;
+        if (grade != QUALITY_STANDARD && grade < QUALITY_COUNT && cx + text_width(item_quality_name(grade), 1) + 8 <= r.x + r.w - 10)
+            fish_chip(cx, y, item_quality_name(grade), k_quality_col[grade]);
+        if (mut && mut < MUT_COUNT) {
+            int pct = item_mutation_price_pct(mut);
+            if (pct % 100) snprintf(t, sizeof(t), "%s x%d.%d", item_mutation_name(mut), pct / 100, pct % 100 / 10);
+            else           snprintf(t, sizeof(t), "%s x%d", item_mutation_name(mut), pct / 100);
+            cx = tx + fish_chip(tx, y + 16, t, k_mut_col[mut]) + 4;
+        } else {
+            cx = tx;
+        }
+        if (QUALITY_IS_WET(q)) fish_chip(cx, y + 16, "Wet", COLOR_RGB565(120, 190, 255));   // caught in the rain (WET ITEMS)
+        bool row2 = mut || QUALITY_IS_WET(q);   // that second row of chips is there: the lines below move down
+        int32_t worth = item_sell_price_q(it, q);
+        if (worth > 0) snprintf(t, sizeof(t), "%d in  -  $%ld", s_fish.inches, (long)worth);
+        else           snprintf(t, sizeof(t), "%d in", s_fish.inches);
+        draw_text(tx, r.y + (row2 ? 92 : 76), t, 1, INV_COL_TEXT);
+        if (s_fish.perfect) draw_text(tx, r.y + (row2 ? 104 : 88), "PERFECT!", 1, INV_COL_GOLD);
     }
-    if (QUALITY_IS_WET(q)) fish_chip(cx, r.y + 74, "Wet", COLOR_RGB565(120, 190, 255));   // caught in the rain (WET ITEMS)
-    bool row2 = mut || QUALITY_IS_WET(q);   // that second row of chips is there: the lines below move down
-    int32_t worth = item_sell_price_q(it, q);
-    if (worth > 0) snprintf(t, sizeof(t), "%d in  -  $%ld", s_fish.inches, (long)worth);
-    else           snprintf(t, sizeof(t), "%d in", s_fish.inches);
-    draw_text(tx, r.y + (row2 ? 92 : 76), t, 1, INV_COL_TEXT);
-    if (s_fish.perfect) draw_text(tx, r.y + (row2 ? 104 : 88), "PERFECT!", 1, INV_COL_GOLD);
+    // the chest's loot, a row of icons
+    y = r.y + FISH_CARD_H - 30;
+    if (s_fish.loot_k || s_fish.loot_money) {
+        draw_text(r.x + 16, y + 9, "TREASURE:", 1, INV_COL_GOLD);
+        int lx = r.x + 16 + text_width("TREASURE:", 1) + 8;
+        for (int k = 0; k < s_fish.loot_k; k++) {
+            inv_draw_slot_well(lx, y, 26);
+            draw_item_icon_q(lx + 13, y + 13, s_fish.loot[k], QUALITY_STANDARD);
+            if (s_fish.loot_n[k] > 1) draw_count(lx + 25, y + 25, s_fish.loot_n[k]);
+            lx += 30;
+        }
+        if (s_fish.loot_money) {
+            snprintf(t, sizeof(t), "$%ld", (long)s_fish.loot_money);
+            draw_coin(lx + 8, y + 13);
+            draw_text(lx + 18, y + 9, t, 1, INV_COL_TEXT);
+        }
+        y += 30;
+    }
+    if (s_fish.level_up) {
+        snprintf(t, sizeof(t), "LEVEL UP!  Fishing level %d", s_fish.level_up);
+        draw_text_centered(r.x, y + 2, r.w, t, INV_COL_GOLD, INV_COL_EDGE);
+    } else if (s_fish.worn[0] || s_fish.worn[1]) {
+        snprintf(t, sizeof(t), "Your %s wore out", item_name(s_fish.worn[0] ? s_fish.worn[0] : s_fish.worn[1]));
+        draw_text_centered(r.x, y + 2, r.w, t, INV_COL_DOWN, INV_COL_SHINE);
+    }
     const char *foot = s_fish.left == 2 ? "No room - you let it go" : s_fish.left == 1 ? "No room in your bag - it's on the ground" : "TAP TO CONTINUE";
     draw_text_clip(r.x + (r.w - text_width(foot, 1)) / 2, r.y + r.h - 18, foot, 1, INV_COL_TEXT_DIM, r.w - 16);
+}
+
+// The bar's height now (a shrinker's shrinks as the fight goes on).
+static int fish_bar_now(void)
+{
+    if (!(s_fish.trait & FISH_TRAIT_SHRINK)) return s_fish.bar_h;
+    float k = 1.0f - 0.4f * (s_fish.t / 20.0f > 1.0f ? 1.0f : s_fish.t / 20.0f);
+    int h = (int)(s_fish.bar_h * k);
+    return h < 20 ? 20 : h;
 }
 
 static void fish_draw(void)
@@ -15754,37 +19206,73 @@ static void fish_draw(void)
     for (int x = px + 9; x < px + W - 6; x += 11) fill_rect(x, py + 6, 1, H - 12, COLOR_RGB565(146, 90, 44));
     draw_round_rect(px, py, W, H, 8, 2, FISH_WOOD_DK);
     draw_round_rect(px + 3, py + 3, W - 6, H - 6, 6, 1, FISH_WOOD_LT);
-    fish_ui_shape(px + (W - 26) / 2, py + 12, 2, FISH_WOOD_DK);   // a carved fish on the cap
+    if (s_fish.fx.sonar) fish_ui_icon(px + W / 2, py + 20, s_fish.fish, 30, QUALITY_STANDARD, 0);   // the sonar: you know what it is
+    else                 fish_ui_shape(px + (W - 26) / 2, py + 12, 2, FISH_WOOD_DK);                  // a carved fish on the cap
+    for (int k = 0; k < s_fish.chal_n && s_fish.fx.challenge; k++)                                   // challenge bait: fish still on
+        fish_ui_shape(px + 8, py + 8 + k * 9, 1, COLOR_RGB565(255, 214, 120));
     // the water
     const int cx = px + FISH_COL_DX, cy = py + FISH_COL_DY, CH = FISH_WATER_H;
     fill_rect(cx - 3, cy - 3, FISH_COL_W + 6, CH + 6, FISH_WOOD_DK);
-    for (int r = 0; r < CH; r++) {
+    for (int r = 0; r < CH; r++) {   // water: light blue to deep; lava: bright orange to dark red
         int k = r * 255 / CH;
-        fill_rect(cx, cy + r, FISH_COL_W, 1, COLOR_RGB565((96 * (255 - k) + 20 * k) / 255, (176 * (255 - k) + 62 * k) / 255, (220 * (255 - k) + 124 * k) / 255));
+        if (s_fish.lava) fill_rect(cx, cy + r, FISH_COL_W, 1, COLOR_RGB565((255 * (255 - k) + 120 * k) / 255, (190 * (255 - k) + 16 * k) / 255, (60 * (255 - k) + 8 * k) / 255));
+        else             fill_rect(cx, cy + r, FISH_COL_W, 1, COLOR_RGB565((96 * (255 - k) + 20 * k) / 255, (176 * (255 - k) + 62 * k) / 255, (220 * (255 - k) + 124 * k) / 255));
     }
-    for (int i = 0; i < 5; i++) {   // bubbles drifting up
+    for (int i = 0; i < 5; i++) {   // bubbles drifting up (embers in lava)
         float sp = 22.0f + i * 7.0f;
         int yy = CH - 4 - (int)fmodf(s_fish.t * sp + i * 61.0f, (float)(CH - 8));
         int xx = 4 + (i * 9) % (FISH_COL_W - 10) + (int)(sinf(s_fish.t * 3.0f + i) * 2.0f);
-        fill_round_rect(cx + xx, cy + yy, 3, 3, 1, COLOR_RGB565(196, 232, 250), 150);
+        fill_round_rect(cx + xx, cy + yy, 3, 3, 1, s_fish.lava ? COLOR_RGB565(255, 236, 140) : COLOR_RGB565(196, 232, 250), 150);
+    }
+    if (s_fish.trait & FISH_TRAIT_CURRENT) {   // the current: chevrons down the side, pointing the way it pushes
+        int dir = s_fish.current > 0 ? -1 : 1, off = (int)(s_fish.t * 40.0f) % 24;
+        for (int yy = off; yy < CH - 6; yy += 24)
+            for (int i = 0; i < 4; i++) {
+                fill_rect(cx + 2 + i, cy + yy + (dir < 0 ? i : 3 - i), 1, 1, COLOR_RGB565(220, 240, 255));
+                fill_rect(cx + FISH_COL_W - 3 - i, cy + yy + (dir < 0 ? i : 3 - i), 1, 1, COLOR_RGB565(220, 240, 255));
+            }
+    }
+    // the treasure chest (while it's to be won)
+    if (s_fish.chest && !s_fish.chest_got && s_fish.t >= s_fish.chest_at) {
+        int chy = cy + CH - (int)s_fish.chest_pos - 5;
+        for (int r = 0; r < 9; r++)
+            for (int c = 0; k_fish_chest[r][c]; c++) {
+                uint16_t col = fish_pal(k_fish_chest[r][c]);
+                if (col) fill_rect(cx + (FISH_COL_W - 11) / 2 + c, chy + r, 1, 1, col);
+            }
     }
     // the catch bar: brighter with the fish in it
-    int bh = s_fish.bar_h, by = cy + CH - (int)s_fish.bar - bh;
+    int bh = fish_bar_now(), by = cy + CH - (int)s_fish.bar - bh;
     fill_round_rect(cx + 1, by, FISH_COL_W - 2, bh, 3, s_fish.inside ? COLOR_RGB565(110, 232, 90) : COLOR_RGB565(70, 170, 70), s_fish.inside ? 210 : 150);
     fill_rect(cx + 3, by + 1, FISH_COL_W - 6, 2, COLOR_RGB565(196, 255, 170));
     fill_rect(cx + 3, by + bh - 3, FISH_COL_W - 6, 2, COLOR_RGB565(40, 120, 40));
-    // the fish, shaking while it's caught in the bar
-    int jx = s_fish.inside ? (int)((esp_random() % 3)) - 1 : 0;
-    fish_ui_shape(cx + (FISH_COL_W - 13) / 2 + jx, cy + CH - (int)s_fish.pos - 4, 1, 0);
-    // the catch meter: red, yellow, green as it fills
+    // the decoy (facing right — the real one faces left)
+    if (s_fish.trait & FISH_TRAIT_DECOY)
+        fish_ui_shape_ex(cx + (FISH_COL_W - 13) / 2, cy + CH - (int)s_fish.decoy - 4, 1, 0, true);
+    // the fish, shaking while it's caught in the bar; a ghost fades out; a dasher flashes before it goes
+    bool hidden = (s_fish.trait & FISH_TRAIT_GHOST) && s_fish.ghost_until > 0 && s_fish.t < s_fish.ghost_until;
+    if (!hidden) {
+        int jx = s_fish.inside ? (int)((esp_random() % 3)) - 1 : 0;
+        bool warn = (s_fish.trait & FISH_TRAIT_DASHER) && s_fish.dash_at - s_fish.t < 0.5f && ((int)(s_fish.t * 12) & 1);
+        int fy = cy + CH - (int)s_fish.pos - 4;
+        fish_ui_shape(cx + (FISH_COL_W - 13) / 2 + jx, fy, 1, warn ? COLOR_WHITE : 0);
+    }
+    // the catch meter: red, yellow, green as it fills (red flashes: a thief took some)
     const int mx = px + FISH_METER_DX;
     fill_rect(mx - 3, cy - 3, FISH_METER_W + 6, CH + 6, FISH_WOOD_DK);
-    fill_rect(mx, cy, FISH_METER_W, CH, COLOR_RGB565(34, 22, 14));
+    fill_rect(mx, cy, FISH_METER_W, CH, s_fish.t < s_fish.thief_flash ? COLOR_RGB565(120, 20, 20) : COLOR_RGB565(34, 22, 14));
     float p = s_fish.prog < 0 ? 0 : s_fish.prog > 1 ? 1 : s_fish.prog;
     int fh = (int)(p * CH);
     uint16_t mc = p < 0.33f ? COLOR_RGB565(222, 64, 40) : p < 0.66f ? COLOR_RGB565(236, 200, 60) : COLOR_RGB565(96, 214, 80);
     fill_rect(mx, cy + CH - fh, FISH_METER_W, fh, mc);
     fill_rect(mx + 1, cy + CH - fh, 2, fh, COLOR_RGB565(250, 250, 220));
+    // the chest's gauge, gold, beside the meter
+    if (s_fish.chest && s_fish.t >= s_fish.chest_at) {
+        const int gx = px + FISH_CHEST_DX, gh = CH / 2;
+        fill_rect(gx - 2, cy + CH - gh - 2, 7, gh + 4, FISH_WOOD_DK);
+        int gf = s_fish.chest_got ? gh : (int)(s_fish.chest_prog * gh);
+        fill_rect(gx, cy + CH - gf, 3, gf, INV_COL_GOLD);
+    }
     // the reel, spinning while the fish is in the bar
     int rx = cx + FISH_COL_W / 2, ry = py + H - 18;
     fill_round_rect(rx - 10, ry - 10, 21, 21, 10, COLOR_RGB565(120, 72, 36), 255);
@@ -15793,20 +19281,55 @@ static void fish_draw(void)
     for (int k = 2; k <= 8; k++) fill_rect(rx + (int)(cosf(s_fish.reel) * k), ry + (int)(sinf(s_fish.reel) * k), 2, 2, FISH_WOOD_LT);
     fill_round_rect(rx + (int)(cosf(s_fish.reel) * 8) - 2, ry + (int)(sinf(s_fish.reel) * 8) - 2, 5, 5, 2, COLOR_RGB565(240, 220, 160), 255);
     if (s_fish.t < 2.5f) draw_text(mx - 10, ry - 4, "HOLD", 1, INV_COL_SHINE);
+    else if (s_fish.chest_got && s_fish.t < s_fish.chest_at + 30.0f) draw_text(mx - 4, ry - 4, "$!", 1, INV_COL_GOLD);
+}
+
+// A treasure chest won: 1-3 things from the "treasure" items (by weight, luck helps), or money if there are none.
+static void fish_open_chest(void)
+{
+    int luck = s_fish.fx.luck;
+    int n = 1 + (fish_frand() < 0.35f + luck / 300.0f) + (fish_frand() < 0.12f + luck / 400.0f);
+    fish_ctx_t c;
+    fish_ctx_now(&c, -1, -1, true);
+    for (int k = 0; k < n && s_fish.loot_k < FISH_LOOT_MAX; k++) {
+        item_id_t it = fish_pick_pool(POOL_TREASURE, &c, luck, 1.0f);
+        if (it == ITEM_NONE) break;
+        int max = (int)item_attr(it, ITEM_ATTR_TREASURE_MAX, 1);
+        max = max < 1 ? 1 : max > item_max_stack(it) ? item_max_stack(it) : max;
+        int cnt = 1 + (int)(esp_random() % (uint32_t)max);
+        int j = 0;
+        while (j < s_fish.loot_k && s_fish.loot[j] != it) j++;
+        if (j == s_fish.loot_k) { s_fish.loot[j] = it; s_fish.loot_n[j] = 0; s_fish.loot_k++; }
+        s_fish.loot_n[j] = (uint8_t)(s_fish.loot_n[j] + cnt > 255 ? 255 : s_fish.loot_n[j] + cnt);
+    }
+    if (!s_fish.loot_k) {   // nothing to find: coins
+        s_fish.loot_money = (int32_t)((20 + esp_random() % 131) * (100 + (luck > 0 ? luck : 0)) / 100);
+        money_add(s_fish.loot_money);
+    }
+    for (int k = 0; k < s_fish.loot_k; k++) {
+        int spill = inv_add_q(s_fish.loot[k], QUALITY_STANDARD, s_fish.loot_n[k]);
+        if (spill > 0 && !ground_drop(s_fish.loot[k], QUALITY_STANDARD, spill))
+            ESP_LOGW(TAG, "fishing: %d x %s from the chest didn't fit anywhere — lost", spill, item_name(s_fish.loot[k]));
+    }
+    sfx_play("fish_treasure");
 }
 
 // Caught: into the bag (or onto the ground), and the card.
 static void fish_caught(void)
 {
-    uint8_t it = s_fish.fish;
+    item_id_t it = s_fish.fish;
+    const fish_fx_t *fx = &s_fish.fx;
     uint8_t q  = item_roll_quality(it, esp_random());
-    int luck = FISH_LUCK();   // a lucky rod: luck% of the time a second roll, the better one counts (unlucky: the worse)
+    int luck = fx->luck;   // a lucky line: luck% of the time a second roll, the better one counts (unlucky: the worse)
     if (luck != 0 && (int)(esp_random() % 100) < abs(luck)) {
         uint8_t q2 = item_roll_quality(it, esp_random());
         if (luck > 0 ? q2 > q : q2 < q) q = q2;
     }
-    if (s_fish.perfect && item_has_quality(it) && q + 1 < QUALITY_COUNT) q++;   // (q is just the grade until the mutation below)
-    // a mutation (MUTATIONS): the fish's own "mut", more likely for a perfect catch, in the rain, with a lucky rod
+    if (item_has_quality(it)) {   // (q is just the grade until the mutation below)
+        int g = q + (s_fish.perfect && k_fishing_cfg.perfect_grade ? 1 : 0) + fx->quality;
+        q = (uint8_t)(g < 0 ? 0 : g >= QUALITY_COUNT ? QUALITY_COUNT - 1 : g);
+    }
+    // a mutation (MUTATIONS): the fish's own "mut", more likely for a perfect catch, in the rain, with luck
     float boost = (s_fish.perfect ? 2.0f : 1.0f) * (rain_now() ? 1.25f : 1.0f) * (luck >= 0 ? 1.0f + luck / 100.0f : 1.0f + luck / 200.0f);
     uint8_t mut = s_fish_force_mut >= 0 ? (uint8_t)s_fish_force_mut : mut_roll(it, boost);
     s_fish_force_mut = -1;
@@ -15816,16 +19339,33 @@ static void fish_caught(void)
     if (hi < lo) hi = lo;
     int in = lo + (int)(esp_random() % (uint32_t)(hi - lo + 1));
     if (s_fish.perfect && in < (lo + hi + 1) / 2) in = (lo + hi + 1) / 2;   // a perfect catch is a good one
+    int count = fx->challenge ? s_fish.chal_n : 1;
+    if (fx->dbl > 0 && (int)(esp_random() % 100) < fx->dbl) count++;   // wild bait: two on the hook
+    s_fish.count   = count;
     s_fish.quality = q;
     s_fish.inches  = in;
     s_fish.first   = fishbook_record(it, q, in);   // FISH BOOK
-    s_fish.left    = inv_add_q(it, q, 1) == 0 ? 0 : ground_drop(it, q, 1) ? 1 : 2;
+    for (int k = 1; k < count; k++) fishbook_record(it, q, in);
+    int spill = inv_add_q(it, q, count);
+    s_fish.left = spill == 0 ? 0 : ground_drop(it, q, spill) ? 1 : 2;
+    // xp, Stardew's way: (grade + 1) * 3 + difficulty / 3; perfect x2.4; a legend x5
+    int diff = (int)item_attr(it, ITEM_ATTR_FISH, 30);
+    float xp = (QUALITY_GRADE(q) + 1) * 3 + diff / 3.0f;
+    if (s_fish.perfect) xp *= 2.4f;
+    if (fish_tier_of(it) >= FISH_TIER_LEGENDARY || item_attr(it, ITEM_ATTR_FISH_ONCE, 0) > 0) xp *= 5.0f;
+    s_fish.level_up = fish_xp_add((int)(xp * count + 0.5f));
+    fish_wear_tackle();
+    if (s_fish.chest_got) fish_open_chest();
     s_fish.state   = FISH_DONE;
     s_fish.t       = 0;
+    s_ui_full_redraw  = true;   // (the card can be taller than the minigame's area)
     s_ui_needs_redraw = true;
+    hud_refresh();
+    sfx_play("fish_catch");
     char ql[32];
     quality_label(q, ql, sizeof(ql));
-    ESP_LOGI(TAG, "fishing: caught %s%s%s, %d in%s", ql, ql[0] ? " " : "", item_name(it), in, s_fish.perfect ? " (perfect)" : "");
+    ESP_LOGI(TAG, "fishing: caught %d x %s%s%s, %d in%s%s", count, ql, ql[0] ? " " : "", item_name(it), in, s_fish.perfect ? " (perfect)" : "",
+             s_fish.chest_got ? " + a chest" : "");
 }
 
 // The minigame (or the card) is over: back to the world, the line comes in.
@@ -15835,6 +19375,45 @@ static void fish_close(const char *why)
     ui_close();
     fish_refresh();
     if (why) message(2500, "%s", why);
+}
+
+// The fish's tricks (FISH_TRAIT_*), once a frame of the fight. d = how wildly it swims now.
+static void fish_tricks(float dt, float d)
+{
+    uint16_t tr = s_fish.trait;
+    float t = s_fish.t;
+    if ((tr & FISH_TRAIT_FREEZE) && s_fish.inside && !s_fish.was_inside && t >= s_fish.freeze_cool) {   // caught in the bar: plays dead...
+        s_fish.freeze_until = t + 0.8f;
+        s_fish.freeze_cool  = t + 3.0f;
+    }
+    if (s_fish.freeze_until > 0 && t >= s_fish.freeze_until) {   // ...then bolts, the other way
+        s_fish.freeze_until = 0;
+        s_fish.target = s_fish.pos > FISH_WATER_H / 2 ? 8.0f : FISH_WATER_H - 8.0f;
+        s_fish.glide  = 0.07f;
+    }
+    if ((tr & FISH_TRAIT_DASHER) && t >= s_fish.dash_at) {   // a dash right across the water
+        s_fish.target  = s_fish.pos > FISH_WATER_H / 2 ? fish_rand_in(6, 40) : fish_rand_in(FISH_WATER_H - 40, FISH_WATER_H - 6);
+        s_fish.glide   = 0.06f;
+        s_fish.dash_at = t + fish_rand_in(2.2f, 4.5f) * (1.2f - d * 0.5f);
+    }
+    if ((tr & FISH_TRAIT_JUMPER) && s_fish.jump_t == 0 && t >= s_fish.jump_at && s_fish.pos > FISH_WATER_H * 0.55f) { s_fish.jump_t = 0.0001f; s_fish.jump_base = s_fish.pos; }
+    if (s_fish.jump_t > 0) {   // a leap: up out of the water and back, over 0.9 s
+        s_fish.jump_t += dt / 0.9f;
+        if (s_fish.jump_t >= 1.0f) { s_fish.jump_t = 0; s_fish.jump_at = t + fish_rand_in(3.0f, 6.0f); s_fish.pos = s_fish.target = s_fish.jump_base; }
+    }
+    if (tr & FISH_TRAIT_GHOST) {   // gone from sight for 1.2 s, every 2-4 s
+        if (s_fish.ghost_until > 0 && t >= s_fish.ghost_until)  { s_fish.ghost_until = 0; s_fish.ghost_at = t + fish_rand_in(2.0f, 4.0f); }
+        else if (s_fish.ghost_until == 0 && t >= s_fish.ghost_at) s_fish.ghost_until = t + 1.2f;
+    }
+    if (tr & FISH_TRAIT_DECOY) {   // the fake one wanders on its own
+        if (fish_frand() < 1.2f * dt) s_fish.decoy_target = fish_rand_in(10, FISH_WATER_H - 10);
+        s_fish.decoy += (s_fish.decoy_target - s_fish.decoy) * (1.0f - expf(-dt / 0.35f));
+    }
+    if ((tr & FISH_TRAIT_CURRENT) && t >= s_fish.current_at) { s_fish.current = -s_fish.current; s_fish.current_at = t + fish_rand_in(2.5f, 4.5f); }
+    if ((tr & FISH_TRAIT_THIEF) && t >= s_fish.thief_at) {   // out of the bar when it comes round: a bite out of the meter
+        s_fish.thief_at = t + 2.5f;
+        if (!s_fish.inside && t > FISH_GRACE_S) { s_fish.prog -= 0.08f; s_fish.thief_flash = t + 0.3f; }
+    }
 }
 
 static void update_fishing_touch(const input_frame_t *in)
@@ -15852,50 +19431,215 @@ static void update_fishing_touch(const input_frame_t *in)
     }
     if (s_fish.state != FISH_GAME) { fish_close(NULL); return; }
     s_fish.t += dt;
+    const fish_fx_t *fx = &s_fish.fx;
+    uint16_t tr = s_fish.trait;
+    int bh = fish_bar_now();
 
-    // the catch bar: held, it rises; let go, it sinks (and bounces a little off the bottom)
-    s_fish.bar_v += (in->touch_active ? FISH_LIFT : -FISH_LIFT) * dt;
+    // the catch bar: held, it rises; let go, it sinks (and bounces a little off the bottom — not with a lead bobber)
+    float lift = FISH_LIFT, sink = FISH_LIFT * ((tr & FISH_TRAIT_HEAVY) ? 1.6f : 1.0f);
+    s_fish.bar_v += (in->touch_active ? lift : -sink) * dt;
+    if (tr & FISH_TRAIT_CURRENT) s_fish.bar_v += s_fish.current * dt;
+    if ((tr & FISH_TRAIT_STICKY) && s_fish.inside) s_fish.bar_v *= expf(-dt * 9.0f);   // glued: it barely moves
+    if (fx->barbed && s_fish.inside) s_fish.bar_v += (s_fish.pos - (s_fish.bar + bh * 0.5f)) * 14.0f * dt;   // a barbed hook: it follows the fish
     if (s_fish.bar_v >  FISH_SPEED_MAX) s_fish.bar_v =  FISH_SPEED_MAX;
     if (s_fish.bar_v < -FISH_SPEED_MAX) s_fish.bar_v = -FISH_SPEED_MAX;
     s_fish.bar += s_fish.bar_v * dt;
-    float top = (float)(FISH_WATER_H - s_fish.bar_h);
-    if (s_fish.bar < 0)   { s_fish.bar = 0;   s_fish.bar_v = s_fish.bar_v < -80.0f ? -s_fish.bar_v * 0.4f : 0; }
+    float top = (float)(FISH_WATER_H - bh);
+    if (s_fish.bar < 0)   { s_fish.bar = 0;   s_fish.bar_v = (!fx->lead && s_fish.bar_v < -80.0f) ? -s_fish.bar_v * 0.4f : 0; }
     if (s_fish.bar > top) { s_fish.bar = top; if (s_fish.bar_v > 0) s_fish.bar_v = 0; }
 
     // the fish: now and then it heads somewhere new — further and more often the harder it is
-    uint8_t it = s_fish.fish;
-    float d = (float)item_attr(it, ITEM_ATTR_FISH, 30) / 100.0f;
-    if (d < 0.01f) d = 0.01f;
-    if (d > 1.0f) d = 1.0f;
+    item_id_t it = s_fish.fish;
+    float d = s_fish.diff * ((tr & FISH_TRAIT_FRENZY) ? 1.0f + 0.7f * (s_fish.prog > 0 ? s_fish.prog : 0) : 1.0f);
     int move = (int)item_attr(it, ITEM_ATTR_FISH_MOVE, 0);
     if (move < 0 || move > 4) move = 0;
     static const float k_rate[5]  = { 1.0f, 0.6f, 1.6f, 1.0f, 1.0f };     // mixed, smooth, darting, sinker, floater
     static const float k_glide[5] = { 0.30f, 0.65f, 0.10f, 0.30f, 0.30f };
-    if (fish_frand() < (0.35f + d * 1.8f) * k_rate[move] * dt) {
-        float spread = FISH_WATER_H * (0.15f + d * 0.6f);
+    fish_tricks(dt, d);
+    bool frozen = s_fish.freeze_until > 0;
+    if (!frozen && s_fish.jump_t == 0 && fish_frand() < (0.35f + d * 1.8f) * k_rate[move] * dt) {
+        float spread = FISH_WATER_H * (0.15f + (d > 1.0f ? 1.0f : d) * 0.6f);
         s_fish.target = s_fish.pos + (fish_frand() * 2.0f - 1.0f) * spread;
-        s_fish.glide  = k_glide[move] * (1.25f - d * 0.6f);
+        s_fish.glide  = k_glide[move] * (1.25f - (d > 1.0f ? 1.0f : d) * 0.6f);
         if (s_fish.glide < 0.05f) s_fish.glide = 0.05f;
     }
     if (move == 3) s_fish.target -= 45.0f * dt;   // a sinker keeps to the bottom...
     if (move == 4) s_fish.target += 45.0f * dt;   // ...a floater to the top
     if (s_fish.target < 4) s_fish.target = 4;
     if (s_fish.target > FISH_WATER_H - 4) s_fish.target = FISH_WATER_H - 4;
-    s_fish.pos += (s_fish.target - s_fish.pos) * (1.0f - expf(-dt / s_fish.glide));
+    if (s_fish.jump_t > 0) {   // in the air: a hop up out of the water (into the cap), and back
+        float base = s_fish.jump_base, peak = FISH_WATER_H + 26.0f - base;   // up out of the water, into the cap, and back to where it left
+        s_fish.pos = base + 4.0f * peak * s_fish.jump_t * (1.0f - s_fish.jump_t);
+    } else if (!frozen) {
+        s_fish.pos += (s_fish.target - s_fish.pos) * (1.0f - expf(-dt / s_fish.glide));
+    }
 
-    // the catch meter
-    s_fish.inside = s_fish.pos >= s_fish.bar && s_fish.pos <= s_fish.bar + s_fish.bar_h;
-    float fill = FISH_FILL_S * FISH_REEL() / 100.0f, drain = FISH_DRAIN_S * 100.0f / FISH_GRIP();   // the rod's reel and grip
+    // the catch meter (a fish out of the water isn't in the bar)
+    s_fish.was_inside = s_fish.inside;
+    s_fish.inside = s_fish.pos <= FISH_WATER_H && s_fish.pos >= s_fish.bar && s_fish.pos <= s_fish.bar + bh;
+    if (fx->challenge && s_fish.was_inside && !s_fish.inside && s_fish.t > FISH_GRACE_S && s_fish.chal_n > 1) s_fish.chal_n--;
+    // the chest: in the water from chest_at; its gauge fills while the bar holds it
+    bool on_chest = false;
+    if (s_fish.chest && !s_fish.chest_got && s_fish.t >= s_fish.chest_at) {
+        on_chest = s_fish.chest_pos >= s_fish.bar && s_fish.chest_pos <= s_fish.bar + bh;
+        s_fish.chest_prog += (on_chest ? 0.55f : -0.25f) * dt;
+        if (s_fish.chest_prog < 0) s_fish.chest_prog = 0;
+        if (s_fish.chest_prog >= 1.0f) { s_fish.chest_got = true; sfx_play("fish_chest"); }
+    }
+    float fill = FISH_FILL_S * fx->reel, drain = FISH_DRAIN_S / (fx->grip > 0.1f ? fx->grip : 0.1f);   // the gear's reel and grip
     if (s_fish.t > FISH_GRACE_S) {
         if (!s_fish.inside) s_fish.perfect = false;
-        s_fish.prog += (s_fish.inside ? fill : -drain) * dt;
+        if (s_fish.inside)                       s_fish.prog += fill * dt;
+        else if (!(fx->steady && on_chest))      s_fish.prog -= drain * dt;   // a treasure hunter: it waits while you get the chest
     } else if (s_fish.inside) {
         s_fish.prog += fill * dt;
     }
     s_fish.reel += (s_fish.inside ? 10.0f : 3.0f) * dt;
     s_ui_needs_redraw = true;
-    if (s_fish.prog >= 1.0f)      fish_caught();
-    else if (s_fish.prog <= 0.0f) fish_close("The fish got away...");
+    if (s_fish.prog >= 1.0f) fish_caught();
+    else if (s_fish.prog <= 0.0f) { sfx_play("fish_escape"); fish_close("The fish got away..."); }
+}
+
+// ============================================================
+//  CRAB POTS — a prop with "crab_pot 1" (items.h) put in the water: on
+//  Fishable tiles only (place_ok()). Tap it holding bait: one goes in, and by
+//  the next 6:00 am it has caught something — picked when it's baited, from
+//  the items with "pot" (pot_roll(): their pot_ conditions there and then,
+//  the bait's effects, luck; now and then junk — the Fishing tab's
+//  pot_junk_pct). While it waits it's like a machine at work (placed_t.mk_*,
+//  MACHINES): saved the same way, and once ready its catch bobs over it
+//  (machine_paint_rect()). A tap takes the catch — holding bait, it's baited
+//  again at once. Empty hands on an empty pot pick it up. With
+//  pot_needs_bait 0 an unbaited pot fishes too (it starts when put down or emptied).
+// ============================================================
+static bool pot_of(const place_geom_t *g)
+{
+    return g->kind == PLACE_PROP && item_attr(g->what, ITEM_ATTR_CRAB_POT, 0) > 0;
+}
+
+// The game minute of the next 6:00 am after now.
+static int32_t pot_next_morning(void)
+{
+    int32_t day = (int32_t)clock_day() + (clock_minute_of_day() >= 6 * 60 ? 1 : 0);
+    return day * FARM_DAY_MIN + 6 * 60;
+}
+
+// Pot s_place[i] starts fishing, with `bait` in it (ITEM_NONE: none): what it'll have caught by morning.
+static void pot_roll(int i, item_id_t bait)
+{
+    placed_t *p = &s_place[i];
+    fish_fx_t fx;
+    memset(&fx, 0, sizeof(fx));
+    fx.junk = fx.rare = 1.0f;
+    for (int k = 0; bait != ITEM_NONE && k < FX_COUNT; k++) {   // the bait's effects only
+        int def, v = fish_fx_attr(bait, 1, k, &def);
+        if (v == def) continue;
+        if (k == FX_JUNK) fx.junk = v / 100.0f;
+        else if (k == FX_RARE) fx.rare = v / 100.0f;
+        else if (k == FX_LUCK) fx.luck = v - def;
+        else if (k == FX_DOUBLE) fx.dbl = v - def;
+        else if (k == FX_QUALITY) fx.quality = v - def;
+        else if (k == FX_MAGIC) fx.magic = v > 0;
+    }
+    int luck = (fx.luck + fish_day_luck()) * (int)k_fishing_cfg.luck_pct / 100;
+    luck = luck < -100 ? -100 : luck > 100 ? 100 : luck;
+    fish_ctx_t c;
+    fish_ctx_now(&c, p->g.tx, p->g.ty, fx.magic);
+    c.depth = 9;   // (a pot doesn't care how deep)
+    float jp = k_fishing_cfg.pot_junk_pct / 100.0f * fx.junk * (1.0f - luck / 200.0f);
+    item_id_t got = ITEM_NONE;
+    if (fish_frand() < jp) got = fish_pick_pool(POOL_POT_JUNK, &c, luck, 1.0f);
+    if (got == ITEM_NONE) got = fish_pick_pool(POOL_POT, &c, luck, fx.rare);
+    if (got == ITEM_NONE) got = fish_pick_pool(POOL_POT_JUNK, &c, luck, 1.0f);
+    if (got == ITEM_NONE) { message(3000, "Nothing lives in this water for a %s to catch", place_name(&p->g)); return; }
+    uint8_t q = item_roll_quality(got, esp_random());
+    if (luck > 0 && (int)(esp_random() % 100) < luck) { uint8_t q2 = item_roll_quality(got, esp_random()); if (q2 > q) q = q2; }
+    if (item_has_quality(got) && fx.quality) { int g = q + fx.quality; q = (uint8_t)(g >= QUALITY_COUNT ? QUALITY_COUNT - 1 : g); }
+    int n = 1 + (fx.dbl > 0 && (int)(esp_random() % 100) < fx.dbl);
+    machine_set(i, got, n, QUALITY_MAKE(q, MUT_NONE), pot_next_morning());
+}
+
+// The walk to pot s_place[i] arrived: take the catch (and bait it again), bait it, or pick it up.
+static void pot_on_action(int i)
+{
+    placed_t *p = &s_place[i];
+    const char *name = place_name(&p->g);
+    item_id_t held = inv_held_item();
+    bool baiting = held != ITEM_NONE && fish_gear_is(held, 1);
+    if (p->mk_count) {
+        if (!machine_ready(p)) { message(2500, "The %s is set - check it after 6 am", name); return; }
+        item_id_t item = p->mk_item; uint8_t q = p->mk_quality;
+        int n = p->mk_count, spill = inv_add_q(item, q, n);
+        if (spill == n) { message(2000, "No room for %s", item_name(item)); return; }
+        if (spill > 0 && !ground_drop(item, q, spill)) ESP_LOGW(TAG, "crab pot: %d x %s didn't fit anywhere — lost", spill, item_name(item));
+        machine_set(i, ITEM_NONE, 0, QUALITY_STANDARD, 0);
+        int lvl = fish_xp_add(5);
+        if (lvl) message(3000, "Got %s%s! Fishing level %d!", n > 1 ? "2 " : "", item_name(item), lvl);
+        else     message(2500, "Got %s%s from the %s!", n > 1 ? "2 " : "", item_name(item), name);
+        sfx_play("crab_pot");
+        hud_refresh();
+        if (!baiting) {
+            if (!k_fishing_cfg.pot_needs_bait) pot_roll(i, ITEM_NONE);
+            return;
+        }
+    }
+    if (baiting) {
+        inv_slot_t *s = &s_inv[s_inv_held];
+        item_id_t bait = s->item;
+        if (--s->count == 0) *s = (inv_slot_t){ ITEM_NONE, 0, QUALITY_STANDARD };
+        hud_refresh();
+        pot_roll(i, bait);
+        if (p->mk_count) message(2000, "Baited the %s with %s", name, item_name(bait));
+        else             inv_add(bait, 1);   // (nothing to catch here: the bait back)
+        return;
+    }
+    if (held == ITEM_NONE) { place_pick_up(i); return; }
+    message(2500, k_fishing_cfg.pot_needs_bait ? "Hold bait and tap the %s to bait it" : "The %s is fishing", name);
+}
+
+// A crab pot was just put down (place_put()): with no bait needed, it starts at once.
+static void pot_placed(int i)
+{
+    if (!k_fishing_cfg.pot_needs_bait && i >= 0 && pot_of(&s_place[i].g)) pot_roll(i, ITEM_NONE);
+}
+
+// "Hooks a fish 1.5x sooner. Less junk." — what a bait, tackle or rod does (the shop's card, the bag's).
+static void fish_gear_text(item_id_t item, char *out, size_t n)
+{
+    out[0] = '\0';
+    size_t len = 0;
+    for (int role = 0; role < 3; role++) {
+        if (!fish_gear_is(item, role)) continue;
+        if (role == 0) len += (size_t)snprintf(out + len, n - len, "%s%s", fish_rod_bait_ok(item) ? "Takes bait. " : "No bait. ",
+                                               fish_rod_tackles(item) ? (fish_rod_tackles(item) == 2 ? "2 tackle slots. " : "1 tackle slot. ") : "");
+        if (role == 2 && len < n) len += (size_t)snprintf(out + len, n - len, "Lasts %ld catches. ", (long)item_attr(item, ITEM_ATTR_TACKLE, 20));
+        for (int k = 0; k < FX_COUNT && len < n; k++) {
+            int def, v = fish_fx_attr(item, role, k, &def);
+            if (v == def) continue;
+            const char *w = NULL;
+            char b[40];
+            switch (k) {
+            case FX_BAR:       snprintf(b, sizeof(b), "Bar %+dpx", v - def); w = b; break;
+            case FX_REEL:      snprintf(b, sizeof(b), "Reels %d%%", v); w = b; break;
+            case FX_BITE:      snprintf(b, sizeof(b), "Bites %d.%dx sooner", v / 100, v % 100 / 10); w = b; break;
+            case FX_LUCK:      snprintf(b, sizeof(b), "Luck %+d", v); w = b; break;
+            case FX_GRIP:      snprintf(b, sizeof(b), "Slips %d%% slower", v - 100); w = b; break;
+            case FX_JUNK:      w = v < 100 ? "Less junk" : "More junk"; break;
+            case FX_TREASURE:  snprintf(b, sizeof(b), "Treasure x%d.%d", v / 100, v % 100 / 10); w = b; break;
+            case FX_DOUBLE:    snprintf(b, sizeof(b), "%d%% two fish", v); w = b; break;
+            case FX_QUALITY:   snprintf(b, sizeof(b), "+%d quality", v); w = b; break;
+            case FX_RARE:      w = "Rare fish bite more"; break;
+            case FX_LEAD:      w = "Bar won't bounce"; break;
+            case FX_BARBED:    w = "Bar sticks to the fish"; break;
+            case FX_SONAR:     w = "Shows the fish"; break;
+            case FX_MAGIC:     w = "Any season, hour, weather"; break;
+            case FX_CHALLENGE: w = "Up to 3 fish if you keep it in"; break;
+            case FX_STEADY:    w = "Meter holds while you get treasure"; break;
+            }
+            if (w) len += (size_t)snprintf(out + len, n - len, "%s. ", w);
+        }
+    }
+    if (len && out[len - 1] == ' ') out[len - 1] = '\0';
 }
 
 // ============================================================
@@ -15943,8 +19687,8 @@ typedef struct {
 #define BOOK_COL_HEAD COLOR_RGB565(120,  60,  20)   // section headings
 #define BOOK_COL_OK   COLOR_RGB565( 60, 140,  50)   // "biting now"
 
-static fishbook_t *s_book;            // PSRAM, one per item id
-static uint8_t     s_book_list[256];  // every fish, in book order (tier, then price)
+static fishbook_t *s_book;            // PSRAM, one per compiled-in item id (item_count)
+static item_id_t  *s_book_list;       // PSRAM, item_count: every fish, in book order (tier, then price)
 static int         s_book_n;
 static int         s_book_page   = -1;   // -1 = the grid; else which of s_book_list is open
 static int         s_book_scroll;        // the grid's first row shown
@@ -15953,9 +19697,10 @@ static int         s_book_drag_x, s_book_drag_y, s_book_drag_scroll;
 
 static bool book_alloc(void)
 {
-    if (!s_book) s_book = heap_caps_calloc(256, sizeof(fishbook_t), MALLOC_CAP_SPIRAM);
-    if (!s_book) ESP_LOGE(TAG, "fish book: out of PSRAM");
-    return s_book != NULL;
+    if (!s_book) s_book = heap_caps_calloc(item_count, sizeof(fishbook_t), MALLOC_CAP_SPIRAM);
+    if (!s_book_list) s_book_list = heap_caps_calloc(item_count, sizeof(item_id_t), MALLOC_CAP_SPIRAM);
+    if (!s_book || !s_book_list) ESP_LOGE(TAG, "fish book: out of PSRAM");
+    return s_book && s_book_list;
 }
 
 static void book_path(char *out, size_t n, const char *dir) { snprintf(out, n, "%s/fishbook.txt", dir); }
@@ -15963,7 +19708,7 @@ static void book_path(char *out, size_t n, const char *dir) { snprintf(out, n, "
 // A brand-new game: nothing caught.
 static void fishbook_reset(void)
 {
-    if (s_book) memset(s_book, 0, 256 * sizeof(fishbook_t));
+    if (s_book) memset(s_book, 0, item_count * sizeof(fishbook_t));
 }
 
 static void book_save(void)
@@ -15974,9 +19719,9 @@ static void book_save(void)
     mapsave_make_dirs(path);
     FILE *f = fopen(path, "w");
     if (!f) { ESP_LOGW(TAG, "fish book: can't write %s", path); return; }
-    for (int it = 1; it < 256; it++) {
+    for (int it = 1; it < item_count; it++) {
         const fishbook_t *b = &s_book[it];
-        const item_asset_t *a = item_get((uint8_t)it);
+        const item_asset_t *a = item_get((item_id_t)it);
         if (!b->caught || !a) continue;
         fprintf(f, "fish %s caught %u biggest %u best %lu bestq %u muts %u grades %u wet %d day %ld\n", a->id, b->caught, b->biggest,
                 (unsigned long)b->best, b->best_q, b->muts, b->grades, b->wet, (long)b->first_day);
@@ -16002,8 +19747,8 @@ static void fishbook_load(const char *dir)
         long day;
         if (sscanf(line, "fish %31s caught %u biggest %u best %lu bestq %u muts %u grades %u wet %d day %ld",
                    id, &caught, &biggest, &best, &bestq, &muts, &grades, &wet, &day) != 9) continue;
-        uint8_t it = item_find(id);
-        if (it == ITEM_NONE) { ESP_LOGW(TAG, "fish book: \"%s\" isn't in this build", id); continue; }
+        item_id_t it = item_find(id);
+        if (it == ITEM_NONE || it >= item_count) { ESP_LOGW(TAG, "fish book: \"%s\" isn't in this build", id); continue; }
         s_book[it] = (fishbook_t){ .caught = (uint16_t)caught, .biggest = (uint16_t)biggest, .best = (uint32_t)best,
                                    .best_q = (uint8_t)(item_quality_ok((uint8_t)bestq) ? bestq : 0), .muts = (uint16_t)muts,
                                    .grades = (uint8_t)grades, .wet = wet != 0, .first_day = (int32_t)day };
@@ -16013,10 +19758,13 @@ static void fishbook_load(const char *dir)
     ESP_LOGI(TAG, "fish book: %d kinds caught (%s)", n, path);
 }
 
+// Has one of `it` ever been caught in this save? (FISHING: a legend bites once.)
+static bool fishbook_caught(item_id_t it) { return s_book && it < item_count && s_book[it].caught > 0; }
+
 // fish_caught(): one more of `it`, at quality byte q, `inches` long. true = the first of its kind.
-static bool fishbook_record(uint8_t it, uint8_t q, int inches)
+static bool fishbook_record(item_id_t it, uint8_t q, int inches)
 {
-    if (!book_alloc()) return false;
+    if (!book_alloc() || it >= item_count) return false;
     fishbook_t *b = &s_book[it];
     bool first = b->caught == 0;
     uint32_t worth = (uint32_t)item_sell_price_q(it, q);
@@ -16036,10 +19784,10 @@ static void book_build_list(void)
 {
     s_book_n = 0;
     for (int it = 1; it < item_count; it++)
-        if (item_attr((uint8_t)it, ITEM_ATTR_FISH, 0) > 0) s_book_list[s_book_n++] = (uint8_t)it;
+        if (item_attr((item_id_t)it, ITEM_ATTR_FISH, 0) > 0) s_book_list[s_book_n++] = (item_id_t)it;
     for (int i = 1; i < s_book_n; i++)   // insertion sort: a few dozen fish
         for (int j = i; j > 0; j--) {
-            uint8_t a = s_book_list[j - 1], b = s_book_list[j];
+            item_id_t a = s_book_list[j - 1], b = s_book_list[j];
             int ta = fish_tier_of(a), tb = fish_tier_of(b);
             if (ta < tb || (ta == tb && item_sell_price(a) <= item_sell_price(b))) break;
             s_book_list[j - 1] = b;
@@ -16072,7 +19820,7 @@ static bool fishbook_open(void) { return fishbook_open_at(-1); }
 
 // Chance of each mutation (out[MUT_*]) on one catch of `it`, before fishing's
 // bonuses: mut_roll()'s odds, worked out instead of rolled.
-static void book_mut_odds(uint8_t it, float out[MUT_COUNT])
+static void book_mut_odds(item_id_t it, float out[MUT_COUNT])
 {
     float m = (float)item_attr(it, ITEM_ATTR_MUT, 100) / 100.0f, none = 1.0f;
     if (m > 50.0f) m = 50.0f;
@@ -16112,7 +19860,7 @@ static const char *book_hour(int h, char *out, size_t n)
 }
 
 // A fish's art, `k` px a pixel, centred on (cx,cy): as quality byte q shows it, or all one dark colour (not caught yet).
-static void book_icon(int cx, int cy, uint8_t it, int k, uint8_t q, bool shadow)
+static void book_icon(int cx, int cy, item_id_t it, int k, uint8_t q, bool shadow)
 {
     const item_asset_t *a = item_get(it);
     if (!a || !a->passive.frame_count || !a->passive.pixels) return;
@@ -16169,7 +19917,7 @@ static void book_draw_grid(void)
     int kinds = 0, total = 0, big_it = 0, best_it = 0, most_it = 0;
     uint16_t muts = 0;
     for (int i = 0; i < s_book_n; i++) {
-        uint8_t it = s_book_list[i];
+        item_id_t it = s_book_list[i];
         const fishbook_t *b = &s_book[it];
         if (!b->caught) continue;
         kinds++;
@@ -16188,7 +19936,7 @@ static void book_draw_grid(void)
     for (int k = 0; k < BOOK_ROWS * BOOK_COLS; k++) {
         int i = s_book_scroll * BOOK_COLS + k;
         if (i >= s_book_n) break;
-        uint8_t it = s_book_list[i];
+        item_id_t it = s_book_list[i];
         const fishbook_t *b = &s_book[it];
         int x = BOOK_GRID_X + (k % BOOK_COLS) * (BOOK_CELL + BOOK_GAP), y = BOOK_GRID_Y + (k / BOOK_COLS) * (BOOK_CELL + BOOK_GAP);
         inv_draw_slot_well(x, y, BOOK_CELL);
@@ -16223,6 +19971,12 @@ static void book_draw_grid(void)
         snprintf(t, sizeof(t), "Most caught:    %s, x%u", item_name(most_it), s_book[most_it].caught);
         draw_text(rx, ry + 26, t, 1, INV_COL_TEXT);
     }
+    int32_t next = fish_level_next_xp();   // today, and the player's fishing level (FISHING)
+    if (next) snprintf(t, sizeof(t), "%s %d - luck %s - Fishing level %d (%ld/%ld xp)", k_season_name[clock_season()], clock_season_day(),
+                       fish_day_luck_word(), fish_level(), (long)s_fish_xp, (long)next);
+    else      snprintf(t, sizeof(t), "%s %d - luck %s - Fishing level %d (max)", k_season_name[clock_season()], clock_season_day(),
+                       fish_day_luck_word(), fish_level());
+    draw_text_clip(rx, ry + 41, t, 1, BOOK_COL_HEAD, pw - 44);
     draw_text_centered(px, BOOK_Y + BOOK_H - 26, pw, "TAP A FISH TO READ ABOUT IT", INV_COL_TEXT_DIM, INV_COL_SHINE);
 }
 
@@ -16230,7 +19984,7 @@ static void book_draw_grid(void)
 static void book_draw_page(void)
 {
     const int px = BOOK_X, pw = BOOK_W;
-    uint8_t it = s_book_list[s_book_page];
+    item_id_t it = s_book_list[s_book_page];
     const fishbook_t *b = &s_book[it];
     int tier = fish_tier_of(it);
     char t[96], u[32];
@@ -16246,7 +20000,7 @@ static void book_draw_page(void)
     draw_text(tx + 4, wy + 25, k_fish_tier[tier].name, 1, k_fish_tier[tier].col);
     snprintf(t, sizeof(t), "Sells for $%ld", (long)item_sell_price(it));
     draw_text(tx + cw + 8, wy + 25, t, 1, INV_COL_TEXT);
-    bool now = fish_bites_now(it, clock_minute_of_day() / 60, rain_now());
+    bool now = fish_bites_today(it);
     draw_text(tx, wy + 42, now ? "Biting right now!" : "Not biting right now", 1, now ? BOOK_COL_OK : INV_COL_TEXT_DIM);
     snprintf(t, sizeof(t), "No. %d of %d", s_book_page + 1, s_book_n);
     draw_text(px + pw - 16 - text_width(t, 1), wy + 42, t, 1, INV_COL_TEXT_DIM);
@@ -16258,23 +20012,71 @@ static void book_draw_page(void)
     fill_rect(lx, cy + 10, pw / 2 - 30, 1, INV_COL_TEXT_DIM);
     fill_rect(rx, cy + 10, pw / 2 - 26, 1, INV_COL_TEXT_DIM);
     int y = cy + 16;
+    const int L1 = 12, cw1 = pw / 2 - 26;   // the left column: a line each, clipped to its half
     int from = (int)item_attr(it, ITEM_ATTR_FISH_FROM, 0), to = (int)item_attr(it, ITEM_ATTR_FISH_TO, 24);
-    char h1[12], h2[12];
-    if (from == 0 && to == 24) snprintf(t, sizeof(t), "When:    any time of day");
-    else                       snprintf(t, sizeof(t), "When:    %s - %s", book_hour(from, h1, sizeof(h1)), book_hour(to, h2, sizeof(h2)));
-    draw_text(lx, y, t, 1, INV_COL_TEXT); y += L;
+    int from2 = (int)item_attr(it, ITEM_ATTR_FISH_FROM2, -1), to2 = (int)item_attr(it, ITEM_ATTR_FISH_TO2, 24);
+    char h1[12], h2[12], h3[12], h4[12];
+    if (from == 0 && to == 24)  snprintf(t, sizeof(t), "When:    any time of day");
+    else if (from2 >= 0)        snprintf(t, sizeof(t), "When:    %s-%s, %s-%s", book_hour(from, h1, sizeof(h1)), book_hour(to, h2, sizeof(h2)),
+                                         book_hour(from2, h3, sizeof(h3)), book_hour(to2, h4, sizeof(h4)));
+    else                        snprintf(t, sizeof(t), "When:    %s - %s", book_hour(from, h1, sizeof(h1)), book_hour(to, h2, sizeof(h2)));
+    draw_text_clip(lx, y, t, 1, INV_COL_TEXT, cw1); y += L1;
+    int seasons = (int)item_attr(it, ITEM_ATTR_FISH_SEASONS, 0) & 15, days = (int)item_attr(it, ITEM_ATTR_FISH_DAYS, 0) & 127;
+    if (!seasons || seasons == 15) snprintf(t, sizeof(t), "Season:  all year");
+    else {
+        int len = snprintf(t, sizeof(t), "Season: ");
+        for (int k = 0; k < 4; k++) if ((seasons >> k) & 1) len += snprintf(t + len, sizeof(t) - len, " %.3s", k_season_name[k]);
+    }
+    if (days && days != 127) {
+        static const char *const k_day2[7] = { "Mo", "Tu", "We", "Th", "Fr", "Sa", "Su" };
+        int len = (int)strlen(t);
+        len += snprintf(t + len, sizeof(t) - len, ",");
+        for (int k = 0; k < 7 && len < (int)sizeof(t) - 4; k++) if ((days >> k) & 1) len += snprintf(t + len, sizeof(t) - len, " %s", k_day2[k]);
+    }
+    draw_text_clip(lx, y, t, 1, INV_COL_TEXT, cw1); y += L1;
     int weather = (int)item_attr(it, ITEM_ATTR_FISH_WEATHER, 0);
-    draw_text(lx, y, weather == 1 ? "Weather: rainy days only" : weather == 2 ? "Weather: dry days only" : "Weather: any", 1, INV_COL_TEXT); y += L;
-    draw_text(lx, y, "Where:   any Fishable water", 1, INV_COL_TEXT); y += L;
+    draw_text(lx, y, weather == 1 ? "Weather: rainy days only" : weather == 2 ? "Weather: dry days only" : "Weather: any", 1, INV_COL_TEXT); y += L1;
+    {   // where: the water kinds and the maps
+        int water = (int)item_attr(it, ITEM_ATTR_FISH_WATER, 0) & 15, len = snprintf(t, sizeof(t), "Where:  ");
+        static const char *const k_water[4] = { "pond", "river", "ocean", "lava" };
+        if (!water || water == 7) len += snprintf(t + len, sizeof(t) - len, " any water");
+        for (int k = 0; k < 4 && water && water != 7; k++) if ((water >> k) & 1) len += snprintf(t + len, sizeof(t) - len, " %s", k_water[k]);
+        const item_asset_t *a = item_get(it);
+        bool first = true;
+        for (int i = 0; a && i < a->attr_count && len < (int)sizeof(t) - 4; i++) {
+            const char *nm = a->attrs[i].name;
+            if (strncmp(nm, ITEM_ATTR_FISH_MAP, strlen(ITEM_ATTR_FISH_MAP)) != 0 || a->attrs[i].value <= 0) continue;
+            len += snprintf(t + len, sizeof(t) - len, "%s%s", first ? " - in " : ", ", nm + strlen(ITEM_ATTR_FISH_MAP));
+            first = false;
+        }
+        draw_text_clip(lx, y, t, 1, INV_COL_TEXT, cw1); y += L1;
+    }
+    int need_lvl = (int)item_attr(it, ITEM_ATTR_FISH_LEVEL, 0), need_depth = (int)item_attr(it, ITEM_ATTR_FISH_DEPTH, 0);
+    bool once = item_attr(it, ITEM_ATTR_FISH_ONCE, 0) > 0;
+    if (need_lvl || need_depth || once) {
+        int len = snprintf(t, sizeof(t), "Needs: ");
+        if (need_lvl)   len += snprintf(t + len, sizeof(t) - len, " level %d", need_lvl);
+        if (need_depth) len += snprintf(t + len, sizeof(t) - len, "%s %d+ tiles out", need_lvl ? "," : "", need_depth);
+        if (once)       snprintf(t + len, sizeof(t) - len, "%s only one", need_lvl || need_depth ? "," : "");
+        draw_text_clip(lx, y, t, 1, need_lvl > fish_level() ? INV_COL_DOWN : INV_COL_TEXT, cw1); y += L1;
+    }
     int32_t w = item_attr(it, ITEM_ATTR_FISH_RARITY, 10);
     float rel = (float)(w < 1 ? 1 : w) / 10.0f * (tier == FISH_TIER_MYTHIC ? 0.25f : 1.0f);
     const char *often = rel >= 1.5f ? "very often" : rel >= 0.75f ? "often" : rel >= 0.35f ? "sometimes" : rel >= 0.15f ? "rarely" : rel >= 0.06f ? "very rarely" : "almost never";
     snprintf(t, sizeof(t), "Bites:   %s", often);
-    draw_text(lx, y, t, 1, INV_COL_TEXT); y += L;
+    draw_text(lx, y, t, 1, INV_COL_TEXT); y += L1;
     static const char *const k_swims[5] = { "a mix of everything", "smooth glides", "sudden darts", "keeps to the bottom", "keeps to the top" };
     int move = (int)item_attr(it, ITEM_ATTR_FISH_MOVE, 0);
     snprintf(t, sizeof(t), "Swims:   %s", k_swims[move >= 0 && move < 5 ? move : 0]);
-    draw_text(lx, y, t, 1, INV_COL_TEXT); y += L;
+    draw_text(lx, y, t, 1, INV_COL_TEXT); y += L1;
+    int traits = (int)item_attr(it, ITEM_ATTR_FISH_TRAIT, 0);
+    if (traits) {
+        int len = snprintf(t, sizeof(t), "Tricks: ");
+        bool first = true;
+        for (int k = 0; k < FISH_TRAIT_COUNT && len < (int)sizeof(t) - 4; k++)
+            if ((traits >> k) & 1) { len += snprintf(t + len, sizeof(t) - len, "%s%s", first ? " " : ", ", k_fish_trait_name[k]); first = false; }
+        draw_text_clip(lx, y, t, 1, COLOR_RGB565(150, 60, 30), cw1); y += L1;
+    }
     int diff = (int)item_attr(it, ITEM_ATTR_FISH, 30);
     diff = diff < 1 ? 1 : diff > 100 ? 100 : diff;
     draw_text(lx, y, "Fight:", 1, INV_COL_TEXT);
@@ -16282,8 +20084,8 @@ static void book_draw_page(void)
     fill_round_rect(bx, y, bw, 7, 2, INV_COL_SLOT_DK, 255);
     fill_round_rect(bx, y, bw * diff / 100 < 3 ? 3 : bw * diff / 100, 7, 2,
                     diff < 35 ? COLOR_RGB565(96, 200, 80) : diff < 65 ? COLOR_RGB565(236, 190, 60) : diff < 85 ? COLOR_RGB565(232, 120, 50) : COLOR_RGB565(220, 50, 50), 255);
-    snprintf(t, sizeof(t), "%d", diff);
-    draw_text(bx + bw + 6, y, t, 1, INV_COL_TEXT); y += L;
+    snprintf(t, sizeof(t), "%d", (int)item_attr(it, ITEM_ATTR_FISH, 30));
+    draw_text(bx + bw + 6, y, t, 1, INV_COL_TEXT); y += L1;
     snprintf(t, sizeof(t), "Size:    %ld - %ld in", (long)item_attr(it, ITEM_ATTR_FISH_MIN, 5), (long)item_attr(it, ITEM_ATTR_FISH_MAX, 20));
     draw_text(lx, y, t, 1, INV_COL_TEXT);
 
@@ -16316,7 +20118,7 @@ static void book_draw_page(void)
     book_mut_odds(it, odds);
     int found = 0;
     for (int m = 1; m < MUT_COUNT; m++) found += (b->muts >> m) & 1;
-    const int my = BOOK_Y + 240;
+    const int my = BOOK_Y + 268;
     snprintf(t, sizeof(t), "MUTATIONS  %d/%d found", found, MUT_COUNT - 1);
     draw_text(lx, my, t, 1, BOOK_COL_HEAD);
     int32_t mult = item_attr(it, ITEM_ATTR_MUT, 100);
@@ -16336,7 +20138,7 @@ static void book_draw_page(void)
         book_odds_text(odds[m], u, sizeof(u));
         draw_text(x + pw / 2 - 30 - text_width(u, 1), yy, u, 1, INV_COL_TEXT_DIM);
     }
-    draw_text(lx, my + 17 + 5 * 14 + 2, "Odds per catch. A perfect catch x2, rain x1.25, a lucky rod up to x2.", 1, INV_COL_TEXT_DIM);
+    draw_text(lx, my + 17 + 5 * 14 + 2, "Odds per catch. A perfect catch x2, rain x1.25, luck up to x2.", 1, INV_COL_TEXT_DIM);
 
     // leafing through
     book_arrow_button(BOOK_PREV_X, BOOK_NAV_Y, true, s_book_page > 0);
@@ -16407,7 +20209,9 @@ static void update_fishbook_touch(const input_frame_t *in)
 }
 
 #if DEV_LINK_ENABLED
-// "fish" (the state), "fish bite" (the waiting bobber gets a bite now), "fish catch" (the minigame is won now).
+// "fish" (the state), "fish bite" (the waiting bobber gets a bite now), "fish catch" (the minigame is won now),
+// "fish junk" / "fish chest" / "fish trait N" (the next bite is junk / has a chest / plays tricks N),
+// "fish level N" / "fish xp N", "fish rig" (the line, luck, season), "fish pots [done]", "fish here" (the odds).
 static void fish_dev_cmd(char *args)
 {
     while (*args == ' ') args++;
@@ -16415,11 +20219,53 @@ static void fish_dev_cmd(char *args)
     else if (strcmp(args, "catch") == 0 && s_fish.state == FISH_GAME) { s_fish.prog = 1.0f; dev_out("@@OK"); }
     else if (strncmp(args, "book", 4) == 0)                            { dev_out(fishbook_open_at(args[4] ? atoi(args + 4) : -1) ? "@@OK book" : "@@ERR no book"); }
     else if (strncmp(args, "mut", 3) == 0)                             { s_fish_force_mut = atoi(args + 3) % MUT_COUNT; dev_out("@@OK next catch: %s", item_mutation_name((uint8_t)s_fish_force_mut)); }
+    else if (strcmp(args, "junk") == 0)                                { s_fish_force_junk = 1; dev_out("@@OK the next bite is junk"); }
+    else if (strcmp(args, "chest") == 0)                               { s_fish_force_chest = 1; dev_out("@@OK the next fight has a chest"); }
+    else if (strncmp(args, "trait", 5) == 0)                           { s_fish_force_trait = (uint16_t)strtol(args + 5, NULL, 0); dev_out("@@OK next fish's tricks: 0x%x", s_fish_force_trait); }
+    else if (strncmp(args, "xp", 2) == 0)                              { s_fish_xp = atoi(args + 2); dev_out("@@OK fishing level %d (%ld xp)", fish_level(), (long)s_fish_xp); }
+    else if (strncmp(args, "level", 5) == 0) {
+        int l = atoi(args + 5);
+        s_fish_xp = l <= 0 ? 0 : k_fish_level_xp[(l > FISH_LEVEL_MAX ? FISH_LEVEL_MAX : l) - 1];
+        dev_out("@@OK fishing level %d (%ld xp)", fish_level(), (long)s_fish_xp);
+    }
+    else if (strcmp(args, "rig") == 0) {
+        dev_out("@@RIG bait=%s x%d tackle=%s(%d) %s(%d) luck=%d day_luck=%d season=%s day=%d level=%d xp=%ld",
+                s_rig.bait_n ? item_name(s_rig.bait) : "-", s_rig.bait_n, s_rig.tackle[0] ? item_name(s_rig.tackle[0]) : "-", s_rig.uses[0],
+                s_rig.tackle[1] ? item_name(s_rig.tackle[1]) : "-", s_rig.uses[1], fish_luck_now(inv_held_item()), fish_day_luck(),
+                k_season_name[clock_season()], clock_season_day(), fish_level(), (long)s_fish_xp);
+    }
+    else if (strncmp(args, "pots", 4) == 0) {   // "fish pots": the crab pots here; "fish pots done": ready now
+        bool done = strstr(args, "done") != NULL;
+        int n = 0;
+        for (int i = 0; i < PLACE_MAX; i++) {
+            placed_t *p = &s_place[i];
+            if (!pot_of(&p->g)) continue;
+            if (done && p->mk_count && !machine_ready(p)) p->mk_done = machine_now();   // machine_tick() shows it
+            dev_out("@@POT %d tile=%d,%d catch=%s x%d ready=%d", i, p->g.tx, p->g.ty, p->mk_count ? item_name(p->mk_item) : "-", p->mk_count, machine_ready(p));
+            n++;
+        }
+        dev_out("@@OK %d crab pots", n);
+    }
+    else if (strncmp(args, "here", 4) == 0) {   // "fish here": what could bite the faced water now, with the odds
+        fish_ctx_t c;
+        int tx = s_selected_tile_x, ty = s_selected_tile_y;
+        if (!tile_fishable(tx, ty)) { dev_out("@@ERR face water"); return; }
+        fish_fx_t fx;
+        fish_fx_get(inv_held_item(), &fx);
+        fish_ctx_now(&c, tx, ty, fx.magic);
+        uint32_t total = 0;
+        for (int it = 1; it < item_count; it++) if (fish_in_pool((item_id_t)it, POOL_FISH, &c)) total += fish_pool_weight((item_id_t)it, POOL_FISH, fx.luck, fx.rare);
+        for (int it = 1; it < item_count; it++)
+            if (fish_in_pool((item_id_t)it, POOL_FISH, &c))
+                dev_out("@@BITE %s %ld%%", item_get((item_id_t)it)->id, (long)(fish_pool_weight((item_id_t)it, POOL_FISH, fx.luck, fx.rare) * 100 / (total ? total : 1)));
+        dev_out("@@OK water=%d depth=%d season=%s hour=%d luck=%d bar=%d", c.water, c.depth, k_season_name[c.season], c.hour, fx.luck, fx.bar);
+    }
     else if (strncmp(args, "hook ", 5) == 0) {   // "fish hook ID": that fish on the line now, no water needed (holding a rod)
-        uint8_t it = item_find(args + 5);
+        item_id_t it = item_find(args + 5);
         if (it == ITEM_NONE || item_attr(it, ITEM_ATTR_FISH, 0) <= 0) { dev_out("@@ERR no fish %s", args + 5); return; }
         if (!fish_rod_held())                                          { dev_out("@@ERR hold a rod"); return; }
         s_fish.rod  = inv_held_item();
+        fish_fx_get(s_fish.rod, &s_fish.fx);
         s_fish.fish = it;
         int tier = fish_tier_of(it);
         s_fish_tier_col = tier >= FISH_TIER_RARE ? k_fish_tier[tier].col : 0;
@@ -16474,8 +20320,8 @@ static void npc_dev_cmd(char *args)
             const visitor_t *v = &s_vis[i];
             if (v->state == VIS_FREE) continue;
             const npc_t *n = npc_of(i);
-            dev_out("@@NPC %d %s %s st=%d traits=%x budget=%ld value=%lu at=%s/%u offer=%lu item=%s slot=%d,%d,%d lot=%d body=%s",
-                    i, v->name, v->look, v->state, v->traits, (long)v->budget, (unsigned long)v->value, v->map, v->inst,
+            dev_out("@@NPC %d %s %s seed=%lu st=%d traits=%x budget=%ld value=%lu at=%s/%u offer=%lu item=%s slot=%d,%d,%d lot=%d body=%s",
+                    i, v->name, v->look, (unsigned long)v->seed, v->state, v->traits, (long)v->budget, (unsigned long)v->value, v->map, v->inst,
                     (unsigned long)v->offer, v->item ? item_name(v->item) : "-", v->tx, v->ty, v->slot, v->lot,
                     n ? (n->mode == BODY_IN ? "in" : n->mode == BODY_BROWSE ? "browse" : n->mode == BODY_WAIT ? "wait" : "out") : "-");
         }
@@ -16911,6 +20757,373 @@ static void update_menu(const input_frame_t *in)
 {
     update_menu_touch(s_active_menu, in);
 }
+
+// ============================================================
+//  CRAFTING — the hammer tab on top of the inventory (UI_CRAFT), laid out
+//  like Stardew Valley's crafting page: every recipe as an icon along the
+//  top (faded when the bag doesn't hold its ingredients), the bag under them,
+//  and the picked recipe's card beside it — its ingredients, with how many
+//  the bag has of each (red = not enough). Tap a recipe to see it, tap it
+//  again to craft one. The backpack tab goes back to the inventory.
+//  A recipe is attributes on the item it makes (items.h, the Item Editor's
+//  Crafting card): "craft:<ingredient id>" N for each ingredient, and
+//  "craft_makes" N (none = 1). Crafting takes the ingredients from the bag,
+//  the cheapest stacks first (a Gold one only when nothing plainer is left),
+//  and adds what it makes at Standard quality. Every recipe is known from
+//  the start. Plays "craft" (sounds/sound effects/craft.wav).
+// ============================================================
+#define CRAFT_MAX       64                       // recipes (items with one) shown
+#define CRAFT_ROWS      2                        // recipe rows on screen (more: drag them up)
+#define CRAFT_GRID_H    (CRAFT_ROWS * (INV_CELL + INV_CELL_GAP) - INV_CELL_GAP)
+#define CRAFT_SEP_H     16                       // between the recipes and the bag
+#define CRAFT_BAG_H     (INV_ROWS * (INV_CELL + INV_CELL_GAP) - INV_CELL_GAP + INV_SPLIT_H + INV_CELL)
+#define CRAFT_PANEL_X   INV_PANEL_X
+#define CRAFT_PANEL_W   INV_PANEL_W
+#define CRAFT_PANEL_H   (INV_PAD + INV_HEADER_H + CRAFT_GRID_H + CRAFT_SEP_H + CRAFT_BAG_H + INV_INFO_H + INV_PAD / 2)
+#define CRAFT_PANEL_Y   ((LCD_V_RES - CRAFT_PANEL_H) / 2 + INV_TAB_RISE / 2)   // a little low: room for the tabs
+#define CRAFT_GRID_X    INV_GRID_X
+#define CRAFT_GRID_Y    (CRAFT_PANEL_Y + INV_PAD + INV_HEADER_H)
+#define CRAFT_BAG_Y     (CRAFT_GRID_Y + CRAFT_GRID_H + CRAFT_SEP_H)
+#define CRAFT_INFO_Y    (CRAFT_BAG_Y + CRAFT_BAG_H + 8)
+#define CRAFT_BTN_Y     (CRAFT_PANEL_Y + 10)
+#define CRAFT_CLOSE_X   (CRAFT_PANEL_X + CRAFT_PANEL_W - 10 - INV_BTN)
+#define CRAFT_TIP_W     180                      // the recipe card
+#define CRAFT_TIP_ROW   24
+#define CRAFT_COL_TIP   COLOR_RGB565(250, 228, 182)   // Stardew's tooltip parchment
+#define CRAFT_COL_SHORT COLOR_RGB565(190,  40,  30)   // not enough of an ingredient
+#define CRAFT_COL_HAS   COLOR_RGB565( 70, 150,  60)   // a bag slot holding an ingredient
+
+typedef struct {
+    item_id_t     item;                        // what it makes
+    uint8_t     makes;                       // how many one craft gives
+    uint8_t     n;                           // ingredients
+    item_id_t   in[ITEM_CRAFT_IN_MAX];       // ITEM_NONE = an id no item has (the recipe can't be made)
+    uint16_t    need[ITEM_CRAFT_IN_MAX];
+    const char *in_id[ITEM_CRAFT_IN_MAX];    // the id as written (for "no such item")
+} recipe_t;
+
+EXT_RAM_BSS_ATTR static recipe_t s_craft[CRAFT_MAX];   // PSRAM: only looked at while the tab is open
+static int  s_craft_n        = 0;
+static int  s_craft_sel      = -1;           // the picked recipe, -1 = none
+static int  s_craft_scroll   = 0;            // recipe rows scrolled off the top
+static bool s_craft_dragging = false, s_craft_dragged = false;
+static int  s_craft_drag_x, s_craft_drag_y, s_craft_drag_scroll;
+static char s_craft_said[48];                // the info line after a craft ("" = the usual hint)
+
+static rect_t craft_rect(void)      { return (rect_t){ CRAFT_PANEL_X, CRAFT_PANEL_Y, CRAFT_PANEL_W, CRAFT_PANEL_H }; }
+static rect_t craft_tabs_rect(void) { return inv_tabs_rect(CRAFT_PANEL_Y); }
+static int    craft_rows(void)       { return (s_craft_n + HOTBAR_SLOTS - 1) / HOTBAR_SLOTS; }
+static int    craft_max_scroll(void) { return craft_rows() > CRAFT_ROWS ? craft_rows() - CRAFT_ROWS : 0; }
+
+// Every item with a recipe, in item order.
+static void craft_build(void)
+{
+    const size_t plen = strlen(ITEM_ATTR_CRAFT_PREFIX);
+    s_craft_n = 0;
+    for (int it = 1; it < item_count && s_craft_n < CRAFT_MAX; it++) {
+        const item_asset_t *a = item_get((item_id_t)it);
+        if (!a) continue;
+        recipe_t *r = &s_craft[s_craft_n];
+        r->n = 0;
+        for (uint8_t i = 0; i < a->attr_count && r->n < ITEM_CRAFT_IN_MAX; i++) {
+            const char *name = a->attrs[i].name;
+            if (strncmp(name, ITEM_ATTR_CRAFT_PREFIX, plen) != 0 || a->attrs[i].value <= 0) continue;
+            r->in_id[r->n] = name + plen;
+            r->in[r->n]    = item_find(name + plen);
+            r->need[r->n]  = (uint16_t)(a->attrs[i].value > 999 ? 999 : a->attrs[i].value);
+            r->n++;
+        }
+        if (!r->n) continue;
+        int makes = (int)item_attr((item_id_t)it, ITEM_ATTR_CRAFT_MAKES, 1);
+        r->item  = (item_id_t)it;
+        r->makes = (uint8_t)(makes < 1 ? 1 : makes > 99 ? 99 : makes);
+        s_craft_n++;
+    }
+}
+
+static int bag_count_of(const inv_slot_t *bag, item_id_t item)
+{
+    int n = 0;
+    for (int i = 0; i < INV_SLOTS; i++) if (bag[i].count > 0 && bag[i].item == item) n += bag[i].count;
+    return n;
+}
+
+// Takes `count` of `item` out of bag[], the cheapest stacks first.
+static void craft_take(inv_slot_t *bag, item_id_t item, int count)
+{
+    while (count > 0) {
+        int best = -1;
+        int32_t best_price = 0;
+        for (int i = 0; i < INV_SLOTS; i++) {
+            if (bag[i].count == 0 || bag[i].item != item) continue;
+            int32_t p = item_sell_price_q(item, bag[i].quality);
+            if (best < 0 || p < best_price || (p == best_price && bag[i].quality < bag[best].quality)) { best = i; best_price = p; }
+        }
+        if (best < 0) return;
+        int take = count < bag[best].count ? count : bag[best].count;
+        bag[best].count -= take;
+        count -= take;
+        if (bag[best].count == 0) bag[best].item = ITEM_NONE;
+    }
+}
+
+// Room in bag[] for `count` more of `item` at Standard quality?
+static bool craft_room(const inv_slot_t *bag, item_id_t item, int count)
+{
+    int max = item_max_stack(item);
+    for (int i = 0; i < INV_SLOTS && count > 0; i++) {
+        if (bag[i].count == 0) count -= max;
+        else if (bag[i].item == item && bag[i].quality == QUALITY_STANDARD) count -= max - bag[i].count;
+    }
+    return count <= 0;
+}
+
+// Can recipe k be made from the bag right now? If not, why (into why, may be NULL).
+static bool craft_can(int k, char *why, size_t n)
+{
+    const recipe_t *r = &s_craft[k];
+    static inv_slot_t bag[INV_SLOTS];   // static: off the game task's stack
+    memcpy(bag, s_inv, sizeof(bag));
+    for (int i = 0; i < r->n; i++) {
+        if (r->in[i] == ITEM_NONE) { if (why) snprintf(why, n, "No item called '%s'", r->in_id[i]); return false; }
+        int have = bag_count_of(bag, r->in[i]);
+        if (have < r->need[i]) { if (why) snprintf(why, n, "Need %d more %s", r->need[i] - have, item_name(r->in[i])); return false; }
+        craft_take(bag, r->in[i], r->need[i]);
+    }
+    if (!craft_room(bag, r->item, r->makes)) { if (why) snprintf(why, n, "No room in your bag"); return false; }
+    return true;
+}
+
+// Crafts recipe k once. false = it couldn't (why says it).
+static bool craft_make(int k, char *why, size_t n)
+{
+    if (k < 0 || k >= s_craft_n) { if (why) snprintf(why, n, "No such recipe"); return false; }
+    if (!craft_can(k, why, n)) return false;
+    const recipe_t *r = &s_craft[k];
+    for (int i = 0; i < r->n; i++) craft_take(s_inv, r->in[i], r->need[i]);
+    inv_add(r->item, r->makes);
+    sfx_play("craft");
+    if (r->makes > 1) snprintf(s_craft_said, sizeof(s_craft_said), "Crafted %s x%d", item_name(r->item), r->makes);
+    else              snprintf(s_craft_said, sizeof(s_craft_said), "Crafted %s", item_name(r->item));
+    s_ui_needs_redraw = true;
+    return true;
+}
+
+static bool craft_open(void)
+{
+#if ESPNOW_CAMERA_ENABLED
+    if (camera_owns_screen()) return false;
+#endif
+    if (s_ui_screen == UI_KEYBOARD) return false;
+    craft_build();
+    inv_carry_return();
+    if (!ui_begin()) return false;
+    s_ui_screen      = UI_CRAFT;
+    s_active_menu    = NULL;
+    s_craft_sel      = s_craft_sel < s_craft_n ? s_craft_sel : -1;   // the last one picked stays picked
+    s_craft_scroll   = s_craft_scroll > craft_max_scroll() ? craft_max_scroll() : s_craft_scroll;
+    s_craft_dragging = false;
+    s_craft_said[0]  = '\0';
+    return true;
+}
+
+static void craft_cell_xy(int k, int *x, int *y)
+{
+    int row = k / HOTBAR_SLOTS - s_craft_scroll;
+    *x = CRAFT_GRID_X + (k % HOTBAR_SLOTS) * (INV_CELL + INV_CELL_GAP);
+    *y = CRAFT_GRID_Y + row * (INV_CELL + INV_CELL_GAP);
+}
+
+static void craft_bag_cell_xy(int row, int col, int *x, int *y)
+{
+    *x = CRAFT_GRID_X + col * (INV_CELL + INV_CELL_GAP);
+    *y = CRAFT_BAG_Y + row * (INV_CELL + INV_CELL_GAP) + (row == INV_ROWS ? INV_SPLIT_H - INV_CELL_GAP : 0);
+}
+
+// An item's art centred on (cx,cy) in a recipe cell: small art at 2x, like Stardew's recipe icons.
+static void craft_icon(int cx, int cy, item_id_t it)
+{
+    const item_asset_t *a = item_get(it);
+    if (a && a->passive.frame_count && a->passive.pixels && a->passive.w * 2 <= INV_CELL && a->passive.h * 2 <= INV_CELL)
+        book_icon(cx, cy, it, 2, QUALITY_STANDARD, false);
+    else
+        draw_item_icon(cx, cy, it);
+}
+
+// The picked recipe's card (Stardew's hover box): beside its icon, over the bag.
+static void craft_draw_tip(int k)
+{
+    const recipe_t *r = &s_craft[k];
+    int cx, cy;
+    craft_cell_xy(k, &cx, &cy);
+    int w = CRAFT_TIP_W, h = 46 + r->n * CRAFT_TIP_ROW + 4;
+    int x = cx + INV_CELL + 6;
+    if (x + w > CRAFT_PANEL_X + CRAFT_PANEL_W - 8) x = cx - 6 - w;
+    if (x < CRAFT_PANEL_X + 8) x = CRAFT_PANEL_X + 8;
+    int y = cy < CRAFT_GRID_Y ? CRAFT_GRID_Y : cy;
+    if (y + h > CRAFT_INFO_Y - 4) y = CRAFT_INFO_Y - 4 - h;
+    fill_round_rect(x + 3, y + 3, w, h, 6, INV_COL_SLOT_DK, 120);   // shadow
+    fill_round_rect(x, y, w, h, 6, CRAFT_COL_TIP, 255);
+    draw_round_rect(x, y, w, h, 6, 2, INV_COL_EDGE);
+    draw_text_clip(x + 9, y + 9, item_name(r->item), 2, INV_COL_SHINE, w - 18);
+    draw_text_clip(x + 8, y + 8, item_name(r->item), 2, INV_COL_TEXT, w - 18);
+    char sub[32];
+    if (r->makes > 1) snprintf(sub, sizeof(sub), "Recipe - makes %d", r->makes);
+    else              snprintf(sub, sizeof(sub), "Recipe");
+    draw_text(x + 8, y + 27, sub, 1, INV_COL_TEXT_DIM);
+    fill_rect(x + 6, y + 39, w - 12, 1, INV_COL_SLOT_LT);
+    for (int i = 0; i < r->n; i++) {
+        int  ry   = y + 44 + i * CRAFT_TIP_ROW;
+        bool real = r->in[i] != ITEM_NONE;
+        int  have = real ? inv_count_of(r->in[i]) : 0;
+        uint16_t col = !real || have < r->need[i] ? CRAFT_COL_SHORT : INV_COL_TEXT;
+        if (real) draw_item_icon(x + 18, ry + CRAFT_TIP_ROW / 2, r->in[i]);
+        else      draw_text(x + 14, ry + 8, "?", 1, CRAFT_COL_SHORT);
+        char cnt[24];
+        snprintf(cnt, sizeof(cnt), "%d/%d", have > 999 ? 999 : have, (int)r->need[i]);
+        int cw = text_width(cnt, 1);
+        draw_text_clip(x + 34, ry + 8, real ? item_name(r->in[i]) : r->in_id[i], 1, col, w - 34 - cw - 14);
+        draw_text(x + w - 8 - cw, ry + 8, cnt, 1, col);
+    }
+}
+
+static void craft_draw(void)
+{
+    const int px = CRAFT_PANEL_X, py = CRAFT_PANEL_Y, pw = CRAFT_PANEL_W;
+    inv_draw_tabs(py, INV_TAB_CRAFT, false);
+    draw_leather_panel(px, py, pw, CRAFT_PANEL_H);
+    inv_draw_tabs(py, INV_TAB_CRAFT, true);
+    draw_text_centered(px + INV_BTN + 16, py + 17, pw - 2 * (INV_BTN + 16), "CRAFTING", INV_COL_TEXT, INV_COL_SHINE);
+    draw_close_button(CRAFT_CLOSE_X, CRAFT_BTN_Y, INV_BTN, false, COLOR_WHITE);
+    int title_right = px + pw / 2 + text_width("CRAFTING", 2) / 2;
+    inv_draw_money(CRAFT_CLOSE_X - 8, CRAFT_BTN_Y + INV_BTN / 2, CRAFT_CLOSE_X - 8 - title_right - 8);
+
+    // the recipes: lit = can be made now, faded = can't
+    for (int k = s_craft_scroll * HOTBAR_SLOTS; k < s_craft_n && k < (s_craft_scroll + CRAFT_ROWS) * HOTBAR_SLOTS; k++) {
+        int x, y;
+        craft_cell_xy(k, &x, &y);
+        craft_icon(x + INV_CELL / 2, y + INV_CELL / 2, s_craft[k].item);
+        if (s_craft[k].makes > 1) draw_count(x + INV_CELL - 2, y + INV_CELL - 2, s_craft[k].makes);
+        if (!craft_can(k, NULL, 0)) fill_round_rect(x, y, INV_CELL, INV_CELL, 4, INV_COL_PANEL, 120);
+        if (k == s_craft_sel) draw_round_rect(x - 3, y - 3, INV_CELL + 6, INV_CELL + 6, 6, 2, COLOR_WHITE);
+    }
+    if (s_craft_n == 0)
+        draw_text_centered(px, CRAFT_GRID_Y + CRAFT_GRID_H / 2 - 7, pw, "NO RECIPES YET", INV_COL_TEXT_DIM, INV_COL_SHINE);
+    if (craft_max_scroll() > 0) {   // a scroll bar down the right edge
+        int bar_h = CRAFT_GRID_H * CRAFT_ROWS / craft_rows();
+        int bar_y = CRAFT_GRID_Y + (CRAFT_GRID_H - bar_h) * s_craft_scroll / craft_max_scroll();
+        fill_rect(px + pw - 9, CRAFT_GRID_Y, 3, CRAFT_GRID_H, INV_COL_SLOT_LT);
+        fill_rect(px + pw - 9, bar_y, 3, bar_h, INV_COL_SLOT_DK);
+    }
+    fill_rect(CRAFT_GRID_X, CRAFT_BAG_Y - CRAFT_SEP_H / 2, INV_GRID_W, 1, INV_COL_SLOT_DK);
+    fill_rect(CRAFT_GRID_X, CRAFT_BAG_Y - CRAFT_SEP_H / 2 + 1, INV_GRID_W, 1, INV_COL_SHINE);
+
+    // the bag (just to look at), the picked recipe's ingredients ringed in green
+    const recipe_t *sel = s_craft_sel >= 0 ? &s_craft[s_craft_sel] : NULL;
+    for (int row = 0; row <= INV_ROWS; row++)
+        for (int col = 0; col < HOTBAR_SLOTS; col++) {
+            int x, y;
+            craft_bag_cell_xy(row, col, &x, &y);
+            const inv_slot_t *s = &s_inv[inv_cell_slot(row, col)];
+            inv_draw_slot(x, y, INV_CELL, s, false);
+            for (int i = 0; sel && s->count && i < sel->n; i++)
+                if (sel->in[i] == s->item) { draw_round_rect(x - 2, y - 2, INV_CELL + 4, INV_CELL + 4, 5, 2, CRAFT_COL_HAS); break; }
+        }
+    int div_y = CRAFT_BAG_Y + INV_ROWS * (INV_CELL + INV_CELL_GAP) - INV_CELL_GAP + (INV_SPLIT_H - 7) / 2;
+    int lbl_w = text_width("HOTBAR", 1);
+    draw_text(CRAFT_GRID_X, div_y, "HOTBAR", 1, INV_COL_TEXT_DIM);
+    fill_rect(CRAFT_GRID_X + lbl_w + 6, div_y + 3, INV_GRID_W - lbl_w - 6, 1, INV_COL_TEXT_DIM);
+
+    // the info line
+    char why[48];
+    const char *msg;
+    if (s_craft_said[0])                    msg = s_craft_said;
+    else if (s_craft_n == 0)                msg = "ADD ONE IN THE ITEM EDITOR";
+    else if (!sel)                          msg = "TAP A RECIPE";
+    else if (craft_can(s_craft_sel, why, sizeof(why))) msg = "TAP IT AGAIN TO CRAFT";
+    else                                    msg = why;
+    draw_text_centered(CRAFT_GRID_X, CRAFT_INFO_Y, INV_GRID_W, msg, INV_COL_TEXT, INV_COL_SHINE);
+
+    if (sel) craft_draw_tip(s_craft_sel);   // last: it lies over the bag
+}
+
+// Tap a recipe to pick it, tap the picked one to craft it; drag the recipes
+// to scroll them. The backpack tab goes back to the inventory, the X closes.
+static void update_craft_touch(const input_frame_t *in)
+{
+    if (in->touch_pressed_edge && !in->touch_menu_btn) {
+        int tx = in->touch_x, ty = in->touch_y;
+        s_craft_dragging = false;
+        if (pt_in(tx, ty, CRAFT_CLOSE_X - 6, CRAFT_BTN_Y - 6, INV_BTN + 12, INV_BTN + 12)) { ui_close(); return; }
+        if (inv_tab_at(CRAFT_PANEL_Y, tx, ty) == INV_TAB_BAG) { ui_open_inventory(); return; }
+        if (pt_in(tx, ty, CRAFT_GRID_X - 2, CRAFT_GRID_Y - 2, INV_GRID_W + 4, CRAFT_GRID_H + 4)) {
+            s_craft_dragging    = true;   // it counts as a tap when the finger lifts without having dragged
+            s_craft_dragged     = false;
+            s_craft_drag_x      = tx;
+            s_craft_drag_y      = ty;
+            s_craft_drag_scroll = s_craft_scroll;
+        } else if (s_craft_sel >= 0) {    // anywhere else: put the recipe card away
+            s_craft_sel = -1;
+            s_craft_said[0] = '\0';
+            s_ui_needs_redraw = true;
+        }
+        return;
+    }
+    if (!s_craft_dragging) return;
+    if (in->touch_active) {
+        int s = s_craft_drag_scroll - (in->touch_y - s_craft_drag_y) / (INV_CELL + INV_CELL_GAP);
+        int max = craft_max_scroll();
+        if (abs(in->touch_y - s_craft_drag_y) > 10) s_craft_dragged = true;
+        s = s < 0 ? 0 : s > max ? max : s;
+        if (s != s_craft_scroll) { s_craft_scroll = s; s_ui_needs_redraw = true; }
+        return;
+    }
+    s_craft_dragging = false;   // lifted
+    if (s_craft_dragged) return;
+    int col = (s_craft_drag_x - CRAFT_GRID_X) / (INV_CELL + INV_CELL_GAP);
+    int row = (s_craft_drag_y - CRAFT_GRID_Y) / (INV_CELL + INV_CELL_GAP);
+    if (col < 0 || col >= HOTBAR_SLOTS || row < 0 || row >= CRAFT_ROWS) return;
+    int k = (s_craft_scroll + row) * HOTBAR_SLOTS + col;
+    if (k >= s_craft_n) return;
+    if (k == s_craft_sel) {
+        char why[48];
+        if (!craft_make(k, why, sizeof(why))) snprintf(s_craft_said, sizeof(s_craft_said), "%s", why);
+    } else {
+        s_craft_sel = k;
+        s_craft_said[0] = '\0';
+    }
+    s_ui_needs_redraw = true;
+}
+
+#if DEV_LINK_ENABLED
+// "craft" / "craft list": every recipe, @@CRAFT <id> <0/1 can make now> <makes> <ingredient>:<need>:<have> ...
+// "craft open": the crafting tab. "craft ID": crafts one of item ID now (from the bag, like the tab does).
+static void craft_dev_cmd(char *args)
+{
+    while (*args == ' ') args++;
+    craft_build();
+    if (!args[0] || strcmp(args, "list") == 0) {
+        for (int k = 0; k < s_craft_n; k++) {
+            const recipe_t *r = &s_craft[k];
+            char line[160];
+            int  len = snprintf(line, sizeof(line), "@@CRAFT %s %d %d", item_get(r->item)->id, craft_can(k, NULL, 0) ? 1 : 0, r->makes);
+            for (int i = 0; i < r->n && len < (int)sizeof(line); i++)
+                len += snprintf(line + len, sizeof(line) - len, " %s:%d:%d", r->in_id[i], r->need[i], r->in[i] ? inv_count_of(r->in[i]) : 0);
+            dev_out("%s", line);
+        }
+        dev_out("@@END %d", s_craft_n);
+    } else if (strcmp(args, "open") == 0) {
+        dev_out(craft_open() ? "@@OK crafting" : "@@ERR can't open it now");
+    } else {
+        int k = -1;
+        for (int i = 0; i < s_craft_n && k < 0; i++) if (strcmp(item_get(s_craft[i].item)->id, args) == 0) k = i;
+        char why[48];
+        if (k < 0) dev_out("@@ERR no recipe for %s", args);
+        else if (craft_make(k, why, sizeof(why))) { hud_refresh(); dev_out("@@OK %s", s_craft_said); }
+        else dev_out("@@ERR %s", why);
+    }
+}
+#endif
 
 // ============================================================
 //  POP-UP KEYBOARD — text_input_open() asks the user to type something.
@@ -17632,7 +21845,7 @@ static void ui_redraw(void)
     rect_t msg_old = s_msg_ui_rect;
     rect_t msg_new = (s_msg_active && msg_render()) ? s_msg_img_rect : (rect_t){ 0, 0, 0, 0 };
 
-    rect_t rects[5];
+    rect_t rects[6];
     int       n = 0;
     if (s_ui_full_redraw) {
         rects[n++] = (rect_t){ 0, 0, LCD_H_RES, LCD_V_RES };
@@ -17640,6 +21853,10 @@ static void ui_redraw(void)
         if (s_ui_screen == UI_INVENTORY) {
             rects[n++] = (rect_t){ INV_PANEL_X, INV_PANEL_Y, INV_PANEL_W, INV_PANEL_H };
             rects[n++] = (rect_t){ INV_CARD_X, INV_CARD_Y, INV_CARD_W, INV_CARD_H };   // the item card (or nothing)
+            if (!s_inv_sell_mode) rects[n++] = inv_tabs_rect(INV_PANEL_Y);
+        } else if (s_ui_screen == UI_CRAFT) {
+            rects[n++] = craft_rect();
+            rects[n++] = craft_tabs_rect();
         } else if (s_ui_screen == UI_SHOP) {
             rects[n++] = (rect_t){ SHOP_PANEL_X, SHOP_PANEL_Y, SHOP_PANEL_W, SHOP_PANEL_H };
             rects[n++] = (rect_t){ SHOP_PANEL_X, SHOP_CARD_Y, SHOP_PANEL_W, SHOP_CARD_H };
@@ -17678,6 +21895,7 @@ static void ui_redraw(void)
     else if (s_ui_screen == UI_SLEEP) sleep_draw();
     else if (s_ui_screen == UI_FISHING) fish_draw();
     else if (s_ui_screen == UI_FISHBOOK) fishbook_draw();
+    else if (s_ui_screen == UI_CRAFT) craft_draw();
     else                             draw_menu();
     if (msg_new.w > 0) msg_blit();               // last: messages go over the panel
     ui_target_pop(live);
@@ -17712,6 +21930,8 @@ static void ui_update(const input_frame_t *in)
         update_fishing_touch(in);
     } else if (s_ui_screen == UI_FISHBOOK) {
         update_fishbook_touch(in);
+    } else if (s_ui_screen == UI_CRAFT) {
+        update_craft_touch(in);
     } else if (s_ui_screen == UI_MENU) {
         update_menu(in);
         if (s_ui_screen == UI_MENU && s_active_menu == &s_menu_registry[MENU_DEV]) dev_menu_tick();
@@ -17737,8 +21957,10 @@ static void restore_scene(void)
         memcpy(s_fb, s_map_pixels, (size_t)LCD_H_RES * LCD_V_RES * sizeof(uint16_t));
         anim_draw_all_current();
         nav_trail_paint_rect(0, 0, LCD_H_RES, LCD_V_RES);
+        trough_paint_rect(0, 0, LCD_H_RES, LCD_V_RES);
         ranch_paint_rect(0, 0, LCD_H_RES, LCD_V_RES);
         machine_paint_rect(0, 0, LCD_H_RES, LCD_V_RES);
+        farmfx_paint_rect(0, 0, LCD_H_RES, LCD_V_RES);
         npc_paint_rect(0, 0, LCD_H_RES, LCD_V_RES);
     } else {
         draw_static_scene();
@@ -18764,7 +22986,7 @@ static const legendary_t *s_capture_legendary;   // the last item made got this 
 // Turns the picked object into an item called `name` and puts it in the
 // inventory. Returns the item, or ITEM_NONE (logged) if it couldn't. Its price:
 // the eBay price times the AI's traits; with no eBay price, the PHOTO APPRAISAL's.
-static uint8_t capture_make_item(const char *name)
+static item_id_t capture_make_item(const char *name)
 {
     if (s_capture_sel < 0 || s_capture_sel >= s_capture_boxes.count) return ITEM_NONE;
     static photo_stats_t st;
@@ -18777,7 +22999,7 @@ static uint8_t capture_make_item(const char *name)
     int     n     = capture_value(s_capture_sel) ? capture_ai_attrs(s_capture_sel, attrs)
                                                  : photo_appraise(&st, box, attrs, &price);
     s_capture_legendary = legendary_roll(attrs, &n, 1, ITEM_PHOTO_ATTR_MAX);   // rare: right after the price, so it's listed first
-    uint8_t item  = item_add_photo(name, icon, (uint16_t)w, (uint16_t)h, attrs, (uint8_t)n);
+    item_id_t item  = item_add_photo(name, icon, (uint16_t)w, (uint16_t)h, attrs, (uint8_t)n);
     if (item == ITEM_NONE) {
         ESP_LOGW(TAG, "item: too many photo items this session");
         heap_caps_free(icon);
@@ -18840,7 +23062,7 @@ static void capture_view_update(const input_frame_t *in)
     if (s_capture_keep) {               // named on the keyboard: make it, then show where it went
         s_capture_keep = false;
         int kept = s_capture_sel;   // capture_close() below forgets the pick
-        uint8_t item = capture_make_item(s_capture_item_name);
+        item_id_t item = capture_make_item(s_capture_item_name);
         if (item == ITEM_NONE) { live_draw_hint("COULD NOT MAKE THE ITEM"); return; }
         capture_close();
         ui_open_inventory();
@@ -18927,6 +23149,34 @@ static uint8_t   s_clock_row_inset[CLOCK_H];          // rounded corners: pixels
 int clock_weekday(void)       { return (int)(s_clock_day % 7); }
 int clock_minute_of_day(void) { return (int)s_clock_min; }
 static uint32_t clock_day(void) { return s_clock_day; }
+
+// SEASONS: once per game frame (after tp_travel()). A new season says so, and
+// the map the player is on loads again when it has art for the new season
+// (or had art for the old one) — the player stays where they are.
+static int s_season_seen = -1;   // the season season_tick() last saw (-1: a game just started or loaded)
+static void season_tick(void)
+{
+    if (!s_map_loaded) return;
+    int season = clock_season();
+    if (s_season_seen < 0) { s_season_seen = season; return; }   // a game just started or loaded: no fanfare
+    if (season == s_season_seen || s_ui_screen != UI_NONE) return;
+    s_season_seen = season;
+    message(4000, "%s has begun! (Year %d)", k_season_name[season], clock_year());
+    static char base[MAP_PATH_MAX], want_buf[MAP_PATH_MAX];
+    if (!map_path_for(current_map_name(), base, sizeof(base))) return;
+    const char *want = season_map_path(base, want_buf, sizeof(want_buf));
+    if (strcmp(want, s_map_path) == 0) return;   // the same file: nothing to swap
+    int x = s_player_x, y = s_player_y;
+    direction_t face = s_player_facing;
+    ESP_LOGI(TAG, "season: %s -> %s", s_map_path, want);
+    nav_cancel();
+    s_load_inst_next = s_map_inst;        // inside a building: the same inside
+    if (!load_map(base)) return;
+    s_player_x = x; s_player_y = y; s_player_facing = face;
+    player_draw_fresh();
+    draw_touch_menu_button();
+    hud_draw_overlay();
+}
 static int clock_minute_part(int n) { int p = (int)(s_clock_us * n / 1000000); return p < 0 ? 0 : p >= n ? n - 1 : p; }   // which nth of this game minute
 
 // ============================================================
@@ -19036,7 +23286,7 @@ static bool ledger_prune(void)
     return true;
 }
 
-static void ledger_add(bool sell, uint8_t item, uint8_t quality, int count, uint32_t amount, const char *who, const char *where)
+static void ledger_add(bool sell, item_id_t item, uint8_t quality, int count, uint32_t amount, const char *who, const char *where)
 {
     if (!ledger_alloc() || count <= 0) return;
     bool rewrite = s_ledger_pruned_day != (int32_t)clock_day() && ledger_prune();
@@ -19458,7 +23708,7 @@ static bool photos_get_str(FILE *f, char *out, size_t max)
 }
 
 // One photo item's record (see above). slot = its bag slot, or PHOTOS_ON_SHELF.
-static void photos_put_item(FILE *f, int slot, uint8_t item, uint8_t quality)
+static void photos_put_item(FILE *f, int slot, item_id_t item, uint8_t quality)
 {
     const item_asset_t *a = item_get(item);
     fputc(slot, f); fputc(1, f); fputc(quality, f);
@@ -19483,7 +23733,7 @@ static bool photos_save(void)
     snprintf(tmp, sizeof(tmp), "%s/photos.new", s_save_dir);
     int count = 0;
     for (int i = 0; i < INV_SLOTS; i++) if (s_inv[i].count && s_inv[i].item >= item_count) count++;
-    for (int it = item_count; it < 255 && item_get((uint8_t)it); it++) count += item_photo_shelved((uint8_t)it);
+    for (int it = item_count; it < ITEM_ID_MAX && item_get((item_id_t)it); it++) count += item_photo_shelved((item_id_t)it);
     if (count == 0) { unlink(path); return true; }   // none: no file
     FILE *f = fopen(tmp, "wb");
     if (!f) return false;
@@ -19491,8 +23741,8 @@ static bool photos_save(void)
     fputc(count, f);
     for (int i = 0; i < INV_SLOTS; i++)
         if (s_inv[i].count && s_inv[i].item >= item_count) photos_put_item(f, i, s_inv[i].item, s_inv[i].quality);
-    for (int it = item_count; it < 255 && item_get((uint8_t)it); it++)   // on shelves, on any map (SHELVES): their quality is in the map's save
-        if (item_photo_shelved((uint8_t)it)) photos_put_item(f, PHOTOS_ON_SHELF, (uint8_t)it, QUALITY_STANDARD);
+    for (int it = item_count; it < ITEM_ID_MAX && item_get((item_id_t)it); it++)   // on shelves, on any map (SHELVES): their quality is in the map's save
+        if (item_photo_shelved((item_id_t)it)) photos_put_item(f, PHOTOS_ON_SHELF, (item_id_t)it, QUALITY_STANDARD);
     bool ok = !ferror(f);
     if (fclose(f) != 0) ok = false;
     if (ok) {
@@ -19542,7 +23792,7 @@ static void photos_load(int slot)
         size_t px = (size_t)wh[0] * wh[1];
         uint16_t *icon = ok ? heap_caps_malloc(px * sizeof(uint16_t), MALLOC_CAP_SPIRAM) : NULL;
         if (!icon || fread(icon, sizeof(uint16_t), px, f) != px) { heap_caps_free(icon); break; }
-        uint8_t item = item_add_photo(name, icon, wh[0], wh[1], attrs, (uint8_t)kept);
+        item_id_t item = item_add_photo(name, icon, wh[0], wh[1], attrs, (uint8_t)kept);
         if (item == ITEM_NONE) { heap_caps_free(icon); break; }
         photo_kind_set(item, kind);
         if (pid && item_find_photo(pid) == ITEM_NONE) item_photo_set_pid(item, pid);   // (a clash keeps the new random one)
@@ -19589,11 +23839,16 @@ static bool world_save(void)
         snprintf(line, sizeof(line), "player %d %d %d\nmoney %lu\nheld %d\nweather %lu\n",
                  s_player_x, s_player_y, (int)s_player_facing, (unsigned long)s_money, s_inv_held, (unsigned long)s_weather_seed);
         fputs(line, f);
+        if (s_can_water >= 0) {            // the watering can, not full (FARMING)
+            snprintf(line, sizeof(line), "can water %d\n", s_can_water);
+            fputs(line, f);
+        }
         for (int i = 0; i < INV_SLOTS; i++) {
             if (s_inv[i].count == 0 || s_inv[i].item >= item_count) continue;   // empty, or a photo item
             snprintf(line, sizeof(line), "item %d %s %d %d\n", i, item_get(s_inv[i].item)->id, s_inv[i].count, s_inv[i].quality);
             fputs(line, f);
         }
+        fish_rig_write(f, line, sizeof(line));   // the fishing line's bait and tackle, the fishing xp (FISHING)
         ok = !ferror(f);
         if (fclose(f) != 0) ok = false;
     }
@@ -19605,6 +23860,7 @@ static bool world_save(void)
     warned = !ok;
     if (ok) ok = photos_save();            // the bag's photo items (PHOTO ITEMS in the save)
     if (ok && s_mkt_dirty) ok = market_save();   // shoppers and auction lots, with the bag they came from (MARKET)
+    if (ok && s_farm_dirty) ok = farm_save();    // the barns and their animals (FARM)
     return ok;
 }
 
@@ -19632,10 +23888,13 @@ static bool world_read(int slot, bool apply, world_info_t *info)
         s_load_inst_next = 0;            // unless it says the player is inside a building ("inst")
         memset(s_inv, 0, sizeof(s_inv));
         item_custom_reset();             // the save's own photo items come back from photos.bin, below
+        s_season_seen = -1;              // the save's season starts quietly (SEASONS)
         s_photo_kinds_n = 0;
         s_inv_held = 0;
         s_money    = 0;
         s_weather_seed = 0;              // a save from before the weather: the same rain as any other such save
+        s_can_water    = -1;             // ...or from before the watering can ran dry: full
+        fish_rig_reset();                // ...or from before bait and fishing levels: none (FISHING)
     }
     int day = -1, minute = -1;
     while (fgets(line, sizeof(line), f)) {
@@ -19656,16 +23915,24 @@ static bool world_read(int slot, bool apply, world_info_t *info)
                 s_player_y = v[1];
             }
             if (v[2] >= DIR_CENTER && v[2] <= DIR_DOWN_RIGHT && v[2] != DIR_CENTER) s_player_facing = (direction_t)v[2];
+        } else if (mapsave_match(word, nw, "can water #", v, &any)) {
+            s_can_water = (int16_t)(v[0] < 0 ? -1 : v[0] > 9999 ? 9999 : v[0]);
         } else if (mapsave_match(word, nw, "weather #", v, &any)) {
             s_weather_seed = (uint32_t)v[0];
         } else if (mapsave_match(word, nw, "inst #", v, &any)) {
             if (v[0] > 0 && v[0] < 65535) s_load_inst_next = (uint16_t)v[0];   // the map below is that building's inside
+        } else if (mapsave_match(word, nw, "fishxp #", v, &any)) {   // FISHING
+            fish_rig_load_xp(v[0]);
+        } else if (mapsave_match(word, nw, "rig bait * # #", v, &any)) {
+            fish_rig_load(0, any, v[0], v[1]);
+        } else if (mapsave_match(word, nw, "rig tackle # * #", v, &any)) {
+            if (v[0] >= 0 && v[0] < 2) fish_rig_load(1 + v[0], any, v[1], 0);
         } else if (mapsave_match(word, nw, "money #", v, &any)) {
             s_money = (uint32_t)(v[0] < 0 ? 0 : v[0] > MONEY_MAX ? MONEY_MAX : v[0]);
         } else if (mapsave_match(word, nw, "held #", v, &any)) {
             if (v[0] >= 0 && v[0] < HOTBAR_SLOTS) s_inv_held = v[0];
         } else if (mapsave_match(word, nw, "item # * #", v, &any) || mapsave_match(word, nw, "item # * # #", v, &any)) {
-            uint8_t item = item_find(any), q = (nw > 4 && v[2] > 0 && v[2] <= 255 && item_quality_ok((uint8_t)v[2])) ? (uint8_t)v[2] : QUALITY_STANDARD;
+            item_id_t item = item_find(any); uint8_t q = (nw > 4 && v[2] > 0 && v[2] <= 255 && item_quality_ok((uint8_t)v[2])) ? (uint8_t)v[2] : QUALITY_STANDARD;
             if (item == ITEM_NONE) ESP_LOGW(TAG, "save: bag item \"%s\" isn't in this build — dropped", any);
             else if (v[0] >= 0 && v[0] < INV_SLOTS && v[1] > 0)
                 s_inv[v[0]] = (inv_slot_t){ .item = item, .count = (uint8_t)(v[1] < item_max_stack(item) ? v[1] : item_max_stack(item)), .quality = q };
@@ -19686,6 +23953,7 @@ static bool world_read(int slot, bool apply, world_info_t *info)
         sold_load(slot);                   // what was sold today (one of each kind a day)
         photos_load(slot);                 // the photo items, back in their bag slots
         buildings_load(dir);               // the buildings the player put up (PLACEMENT)
+        farm_load(dir);                    // their barns' animals, doors, troughs and the silos' hay (FARM) — after buildings.txt
         ledger_load(dir);                  // the last 20 days of buying and selling (LEDGER)
         fishbook_load(dir);                // every fish caught (FISH BOOK)
         market_load(dir);                 // shoppers, offers, auction lots (MARKET) — after photos.bin: it names its items
@@ -19705,22 +23973,26 @@ static void world_new(void)
     s_photo_kinds_n = 0;
     s_load_inst_next = 0;
     buildings_reset();                  // nothing built yet (PLACEMENT)
+    farm_reset();                       // no barn animals, no hay (FARM)
     market_reset();                     // no shoppers, nothing at auction (MARKET)
     ledger_reset();                     // nothing bought or sold (LEDGER)
     fishbook_reset();                   // no fish caught (FISH BOOK)
+    fish_rig_reset();                   // no bait or tackle on the line, fishing level 0 (FISHING)
     memset(s_inv, 0, sizeof(s_inv));
     item_custom_reset();                // no photo items from another game
+    s_season_seen   = -1;               // Spring 1, Year 1 (SEASONS)
     s_inv_held      = 0;
     s_money         = MONEY_START;
     s_weather_seed  = esp_random() & 0x7FFFFFFF;   // this world's own rainy days (31 bits: the save reads it as an int)
+    s_can_water     = -1;                          // a full watering can (FARMING)
     s_player_x      = LCD_H_RES / 2;
     s_player_y      = LCD_V_RES / 2;
     s_player_facing = DIR_DOWN;
     // Starter items so there is something to hold (slot 0 is held by default).
     // Item IDs aren't known at compile time (see items.h) — author items with
     // these exact ids in the Item Editor and they'll be picked up here.
-    uint8_t starter_axe = item_find("axe"), starter_pickaxe = item_find("pickaxe"), starter_hoe = item_find("hoe");
-    uint8_t starter_rod = item_find("fishing_rod"), starter_can = item_find("watering_can"), starter_scythe = item_find("scythe");
+    item_id_t starter_axe = item_find("axe"), starter_pickaxe = item_find("pickaxe"), starter_hoe = item_find("hoe");
+    item_id_t starter_rod = item_find("fishing_rod"), starter_can = item_find("watering_can"), starter_scythe = item_find("scythe");
     if (starter_axe != ITEM_NONE)     inv_add(starter_axe, 1);
     if (starter_pickaxe != ITEM_NONE) inv_add(starter_pickaxe, 1);
     if (starter_hoe != ITEM_NONE)     inv_add(starter_hoe, 1);
@@ -19773,7 +24045,8 @@ static void clock_tick(void)
 static int32_t clock_key(void)
 {
     int32_t shown = (int32_t)(s_clock_min / CLOCK_STEP_MIN * CLOCK_STEP_MIN);
-    return ((int32_t)clock_weekday() * MIN_PER_DAY + shown) * (NIGHT_STAGES + 1) + s_night_shown;
+    int32_t key = ((int32_t)clock_weekday() * MIN_PER_DAY + shown) * (NIGHT_STAGES + 1) + s_night_shown;
+    return key * (SEASON_DAYS * 4) + clock_season() * SEASON_DAYS + clock_season_day() - 1;   // (SEASONS)
 }
 
 // The dial: sky by the hour, a sun (low at dawn/dusk) or a moon and stars,
@@ -19837,9 +24110,20 @@ static bool clock_render(void)
     fill_rect(30, 9, 1, CLOCK_H - 18, INV_COL_SLOT_DK);   // engraved divider
     fill_rect(31, 9, 1, CLOCK_H - 18, INV_COL_SHINE);
 
-    const char *day = k_weekday_short[clock_weekday()];
+    char day[4];   // "Mon" — the dot made room for the season (SEASONS)
+    snprintf(day, sizeof(day), "%.3s", k_weekday_short[clock_weekday()]);
     draw_text(36, 9, day, 2, INV_COL_SHINE);
     draw_text(35, 8, day, 2, INV_COL_TEXT);
+
+    // SEASONS: the season (in its colour) over its day, right of the weekday
+    static const uint16_t k_season_col[4] = {
+        COLOR_RGB565(56, 140, 48), COLOR_RGB565(196, 116, 16), COLOR_RGB565(170, 66, 20), COLOR_RGB565(40, 104, 186),
+    };
+    char sd[4];
+    int  sx = 35 + text_width(day, 2) + 4;
+    snprintf(sd, sizeof(sd), "%d", clock_season_day());
+    draw_text(sx, 8, k_season_short[clock_season()], 1, k_season_col[clock_season()]);
+    draw_text(sx, 16, sd, 1, INV_COL_TEXT);
 
     char t[8];
     snprintf(t, sizeof(t), "%d:%02d", hour % 12 == 0 ? 12 : hour % 12, minute);
@@ -19915,9 +24199,19 @@ static void clock_world_tick(void)
 //  (map_repaint_rect(), which also cleans the player's cached background),
 //  right before the new ones go on. So nothing else keeps a stale drop:
 //  whatever painted over one in between is put back from the map too.
+//
+//  Sprinkler spray (SPRINKLERS + SCARECROWS) goes the same way, in the same
+//  arrays after the rain's drops (so one never wipes the other): from 6:00
+//  to 7:00 each sprinkler that watered this morning throws drops in an arc
+//  from its nozzle to random spots in its square — a 3x3 blob in the air —
+//  and each lands with the rain's splash (cells 1-3).
 // ============================================================
 #define RAIN_DAY_CHANCE 25       // % of game days with a rain spell
 #define RAIN_DROPS      64       // drops in the air at once in full rain (each costs a small repaint per frame)
+#define SPRAY_DROPS     48       // sprinkler drops in the air at once, all the sprinklers together (likewise)
+#define FX_DROPS        (RAIN_DROPS + SPRAY_DROPS)
+#define FX_CELL_SPRAY   4        // s_rain_at[].cell of a sprinkler's drop in the air (0-3: the rain sheet's cells)
+#define SPRAY_SPLASH_MS 70       // each of its 3 splash frames
 #define RAIN_FALL_PX_S  520      // fall speed, px per second; the streak art slants 7 px left per 16 down
 #define RAIN_SPLASH_MS  70       // each of the 3 splash frames
 #define RAIN_RAMP_MS    2500     // how long the rain takes to build up / die away
@@ -19936,9 +24230,20 @@ typedef struct {
     uint32_t t_ms;              // when it appeared (falling) / landed (splashing)
 } rain_drop_t;
 
-static rain_drop_t s_rain[RAIN_DROPS];
-static rect_t      s_rain_drawn[RAIN_DROPS];   // where each is drawn (w == 0: nowhere), on screen and clipped to it
-static struct { int16_t ox, oy; int8_t cell; } s_rain_at[RAIN_DROPS];   // ...and its cell's top-left and sheet cell
+typedef struct {                // a sprinkler's drop
+    bool     live, splashing;
+    int16_t  sx, sy, ex, ey;    // from the nozzle to where it lands, px
+    int16_t  peak;              // how high its arc rises, px
+    uint16_t fly_ms;
+    uint32_t t_ms;              // when it left the nozzle / landed
+} spray_drop_t;
+
+static rain_drop_t  s_rain[RAIN_DROPS];
+static spray_drop_t s_spray[SPRAY_DROPS];
+static rect_t      s_rain_drawn[FX_DROPS];   // where each is drawn (w == 0: nowhere), on screen and clipped to it — the rain's, then the spray's
+static struct { int16_t ox, oy; int8_t cell; } s_rain_at[FX_DROPS];   // ...and its cell's top-left and sheet cell (FX_CELL_SPRAY: a spray drop)
+static int16_t     s_spray_src[PLACE_MAX];    // the sprinklers spraying this frame (spray_begin())...
+static int         s_spray_src_n, s_spray_weight;   // ...how many, and the drops they want together
 static int         s_rain_force   = -1;        // Dev Tools: -1 auto, 0 never, 1 always (not saved)
 static int         s_rain_was_on  = -1;        // last frame's rain_now(); -1 = not known yet (no message for it)
 static int32_t     s_rain_level   = 0;         // 0..RAIN_RAMP_MS: how much of the rain is falling
@@ -19984,6 +24289,26 @@ static bool rain_fell(int32_t day, int upto_min)
     int start, len;
     if (rain_spell(day, &start, &len) && start < upto_min) return true;
     return rain_spell(day - 1, &start, &len) && start + len > MIN_PER_DAY;   // yesterday's, from midnight on
+}
+
+// rain_fell() for the world outdoors, whichever map the player is on (FARM: did a barn's animals stay in?).
+static bool rain_fell_outdoors(int32_t day, int upto_min)
+{
+    if (s_rain_force >= 0) return s_rain_force;
+    int start, len;
+    if (upto_min <= 0) return false;
+    if (rain_spell(day, &start, &len) && start < upto_min) return true;
+    return rain_spell(day - 1, &start, &len) && start + len > MIN_PER_DAY;
+}
+
+// rain_now() for the world outdoors, whichever map the player is on (inside a barn too).
+static bool rain_outside_now(void)
+{
+    if (s_rain_force >= 0) return s_rain_force;
+    int32_t day = (int32_t)s_clock_day;
+    int     min = (int)s_clock_min, start, len;
+    if (rain_spell(day, &start, &len) && min >= start && min < start + len) return true;
+    return rain_spell(day - 1, &start, &len) && min + MIN_PER_DAY < start + len;
 }
 
 // Is it raining on the loaded map right now?
@@ -20070,6 +24395,112 @@ static void rain_move(int i, uint32_t now, int want)
     s_rain_at[i].cell = (int8_t)cell;
 }
 
+// ---- sprinkler spray (SPRINKLERS + SCARECROWS) ----
+static void spray_clear(void)   // a new map: the old one's drops are gone
+{
+    memset(s_spray, 0, sizeof(s_spray));
+    s_spray_src_n = s_spray_weight = 0;
+}
+
+static int spray_drops_for(int range) { return 4 + 3 * range; }   // one sprinkler's drops in the air at once
+
+// Once per frame, before spray_move(): the sprinklers on the loaded map
+// spraying now (they watered this morning, and it's not 7:00 yet). Returns
+// how many drops they want in the air.
+static int spray_begin(void)
+{
+    s_spray_src_n = s_spray_weight = 0;
+    int m = clock_minute_of_day();
+    if (m < FARM_MORNING_MIN || m >= SPRINKLE_END_MIN) return 0;
+    int32_t today = (int32_t)clock_day();
+    for (int i = 0; i < PLACE_MAX; i++) {
+        const placed_t *p = &s_place[i];
+        int r = sprinkler_range(&p->g);
+        if (!r || !p->baked || p->sprayed_day != today) continue;
+        s_spray_src[s_spray_src_n++] = (int16_t)i;
+        s_spray_weight += spray_drops_for(r);
+    }
+    return s_spray_weight > SPRAY_DROPS ? SPRAY_DROPS : s_spray_weight;
+}
+
+// A new drop from one of them picked at random (a bigger one more often), to
+// a random spot in its square. false = none is spraying.
+static bool spray_spawn(spray_drop_t *d, uint32_t now)
+{
+    if (s_spray_weight <= 0 || s_spray_src_n == 0) return false;
+    int pick = (int)(esp_random() % (uint32_t)s_spray_weight), k = 0;
+    for (; k < s_spray_src_n - 1; k++) {
+        int w = spray_drops_for(sprinkler_range(&s_place[s_spray_src[k]].g));
+        if (pick < w) break;
+        pick -= w;
+    }
+    const place_geom_t *g = &s_place[s_spray_src[k]].g;
+    int r = sprinkler_range(g), dx, dy;
+    do {
+        dx = (int)(esp_random() % (uint32_t)(2 * r + 1)) - r;
+        dy = (int)(esp_random() % (uint32_t)(2 * r + 1)) - r;
+    } while (dx == 0 && dy == 0);
+    int tx = dx < 0 ? g->tx + dx : dx > 0 ? g->tx + g->fw - 1 + dx : g->tx + (int)(esp_random() % g->fw);
+    int ty = dy < 0 ? g->ty + dy : dy > 0 ? g->ty + g->fh - 1 + dy : g->ty + (int)(esp_random() % g->fh);
+    int dist = abs(dx) > abs(dy) ? abs(dx) : abs(dy);
+    *d = (spray_drop_t){ .live = true, .sx = (int16_t)(g->ax + g->aw / 2), .sy = (int16_t)(g->ay + g->ah / 3),
+                         .ex = (int16_t)(tx * TILE_SIZE + 3 + (int)(esp_random() % 10)), .ey = (int16_t)(ty * TILE_SIZE + 4 + (int)(esp_random() % 10)),
+                         .peak = (int16_t)(8 + 5 * dist), .fly_ms = (uint16_t)(240 + 90 * dist + (int)(esp_random() % 80)), .t_ms = now };
+    return true;
+}
+
+// Moves spray drop k on (or ends it, or starts it if the sprinklers want
+// `want` in the air): as rain_move(), into s_rain_drawn[] / s_rain_at[] at RAIN_DROPS + k.
+static void spray_move(int k, uint32_t now, int want)
+{
+    spray_drop_t *d = &s_spray[k];
+    int i = RAIN_DROPS + k, ox, oy, cell;
+    s_rain_drawn[i].w = 0;
+    if (!d->live && (k >= want || !spray_spawn(d, now))) return;
+    if (!d->splashing) {
+        uint32_t t = now - d->t_ms;
+        if (t < d->fly_ms) {   // in the air: along the arc
+            float f = (float)t / d->fly_ms;
+            int x = d->sx + (int)((d->ex - d->sx) * f), y = d->sy + (int)((d->ey - d->sy) * f - 4.0f * d->peak * f * (1.0f - f));
+            s_rain_drawn[i]   = rect_clip_screen((rect_t){ x - 1, y - 1, 3, 3 });
+            s_rain_at[i].ox   = (int16_t)(x - 1);
+            s_rain_at[i].oy   = (int16_t)(y - 1);
+            s_rain_at[i].cell = FX_CELL_SPRAY;
+            return;
+        }
+        d->splashing = true;
+        d->t_ms = now;
+    }
+    int frame = (int)((now - d->t_ms) / SPRAY_SPLASH_MS);
+    if (frame >= 3) { d->live = false; return; }   // splash over: another one from the next frame, if they still want it
+    ox = d->ex - RAIN_CELL / 2; oy = d->ey - RAIN_CELL / 2; cell = 1 + frame;
+    s_rain_drawn[i]   = rect_clip_screen((rect_t){ ox, oy, RAIN_CELL, RAIN_CELL });
+    s_rain_at[i].ox   = (int16_t)ox;
+    s_rain_at[i].oy   = (int16_t)oy;
+    s_rain_at[i].cell = (int8_t)cell;
+}
+
+// A spray drop in the air: a 3x3 blob with its top-left at (ox,oy), only inside `clip`, skipping the HUD.
+static void spray_draw_drop(int ox, int oy, rect_t clip)
+{
+    static const uint8_t k_a[9] = { 0, 140, 0, 140, 230, 140, 0, 140, 0 };
+    for (int k = 0; k < 9; k++) {
+        int x = ox + k % 3, y = oy + k / 3;
+        if (!k_a[k] || x < clip.x || y < clip.y || x >= clip.x + clip.w || y >= clip.y + clip.h || ui_overlay_covers(x, y)) continue;
+        uint16_t c = k == 4 ? COLOR_RGB565(235, 245, 255) : COLOR_RGB565(140, 195, 250);
+        if (s_night_shown) c = night_px(&s_night_lut, c);
+        uint16_t *p = &s_fb[y * LCD_H_RES + x];
+        *p = rgb565_blend(*p, c, k_a[k]);
+    }
+}
+
+// Draws drop j (the rain's or a sprinkler's) where it is now, inside `clip`.
+static void fx_draw(int j, rect_t clip)
+{
+    if (s_rain_at[j].cell == FX_CELL_SPRAY) spray_draw_drop(s_rain_at[j].ox, s_rain_at[j].oy, clip);
+    else                                    rain_draw_cell(s_rain_at[j].cell, s_rain_at[j].ox, s_rain_at[j].oy, clip);
+}
+
 // Once per game frame, LAST (after everything else in the world is drawn):
 // moves every drop on. Each drop is ONE repaint, off screen (compose): the
 // area holding where it was and where it is now goes back to the world from
@@ -20093,12 +24524,14 @@ static void weather_tick(void)
     if (s_rain_level < 0) s_rain_level = 0;
     if (s_rain_level > RAIN_RAMP_MS) s_rain_level = RAIN_RAMP_MS;
     int want = (int)((int64_t)s_rain_level * RAIN_DROPS / RAIN_RAMP_MS);   // drops allowed in the air
+    int spray_want = spray_begin();                                        // ...and sprinkler drops (SPRINKLERS + SCARECROWS)
 
     rect_t marker = { s_marker_x, s_marker_y, NAV_MARKER_SIZE, NAV_MARKER_SIZE };
     bool   marker_up = s_marker_on && s_marker_frame >= 0;
-    for (int i = 0; i < RAIN_DROPS; i++) {
+    for (int i = 0; i < FX_DROPS; i++) {
         rect_t was = s_rain_drawn[i];
-        rain_move(i, now, want);
+        if (i < RAIN_DROPS) rain_move(i, now, want);
+        else                spray_move(i - RAIN_DROPS, now, spray_want);
         rect_t u = rect_union(was, s_rain_drawn[i]);
         if (u.w <= 0) continue;
         bool with_marker = false;
@@ -20117,7 +24550,7 @@ static void weather_tick(void)
         for (int j = 0; j <= i; j++) {
             rect_t r = s_rain_drawn[j];
             if (r.w && anim_rects_overlap(r.x, r.y, r.w, r.h, u.x, u.y, u.w, u.h))
-                PROF(PROF_RAIN_DRAW, rain_draw_cell(s_rain_at[j].cell, s_rain_at[j].ox, s_rain_at[j].oy, u));
+                PROF(PROF_RAIN_DRAW, fx_draw(j, u));
         }
         PROF(PROF_RAIN_COMPOSE, compose_end());
     }
@@ -20303,8 +24736,10 @@ static void world_repaint_all(void)
     memcpy(s_fb, s_map_pixels, (size_t)LCD_H_RES * LCD_V_RES * sizeof(uint16_t));
     anim_draw_all_current();
     nav_trail_paint_rect(0, 0, LCD_H_RES, LCD_V_RES);
+    trough_paint_rect(0, 0, LCD_H_RES, LCD_V_RES); // hay in the troughs...
     ranch_paint_rect(0, 0, LCD_H_RES, LCD_V_RES);  // the farm animals...
     machine_paint_rect(0, 0, LCD_H_RES, LCD_V_RES); // ready machines' icons...
+    farmfx_paint_rect(0, 0, LCD_H_RES, LCD_V_RES);  // crows...
     npc_paint_rect(0, 0, LCD_H_RES, LCD_V_RES);   // the shoppers, in the new tint
     player_draw_fresh();           // in the new stage's tint
     hud_draw_overlay();
@@ -20392,13 +24827,13 @@ static void night_tick(void)
 // The item in the player's hands changed (a hotbar tap, the inventory, a
 // pickup): a short message with its name and up to 3 traits. Not on a
 // game's first frame (s_held_seen_ok), nor for empty hands.
-static uint8_t s_held_seen    = ITEM_NONE;
+static item_id_t s_held_seen    = ITEM_NONE;
 static uint8_t s_held_seen_q  = 0;        // its quality byte: another mutation of the same item counts as a change
 static bool    s_held_seen_ok = false;
 
 static void held_item_tick(void)
 {
-    uint8_t held = inv_held_item(), q = held != ITEM_NONE ? s_inv[s_inv_held].quality : 0;
+    item_id_t held = inv_held_item(); uint8_t q = held != ITEM_NONE ? s_inv[s_inv_held].quality : 0;
     if (s_held_seen_ok && held == s_held_seen && q == s_held_seen_q) return;
     if (s_held_seen_ok && held != ITEM_NONE) {
         char line[MSG_TEXT_MAX];
@@ -20483,6 +24918,7 @@ void update_input(void)
     shelf_tick();             // a restocked shelf shows its stock; customers buy from shelves
     aqua_tick();              // fish swimming in aquariums on this map (AQUARIUMS)
     machine_tick();           // a machine that just finished shows its output (MACHINES)
+    crow_tick();              // crows peck where they ate a crop, and fly off (SPRINKLERS + SCARECROWS)
     PROF(PROF_MARKET,
          ranch_tick();        // farm animals wander, graze, lay, sleep (ANIMALS) — repainted with the shoppers below
          market_tick());      // shoppers and bidders (MARKET), here and on every other map
@@ -20506,15 +24942,17 @@ void update_input(void)
 // ============================================================
 //  SLEEP — a bed. Either something drawn into the map with the "bed" asset
 //  action (Map Editor: the asset's Actions…), or a bed prop the player put
-//  down: an item with "bed 1" (assets/items/bed.c — sold in the Build shop).
-//  Tapping one walks the player next to it and asks "Go to bed?". SLEEP fades
+//  down: an item with "bed 1" (assets/items/bed.c and the other beds — sold
+//  in the Build shop). Tapping one walks the player next to it and asks "Go
+//  to bed?" — or, a bed with a sheet layer, into it (BEDS in PLACEMENT): it
+//  asks once they lie in it. SLEEP fades
 //  out and the player wakes at 6:00 am: the next morning, or this one if it's
 //  still before 6. A midnight slept through ends that day as if it was
 //  played: crops in watered farmland grow a day and the farmland dries
 //  (FARMING, farm_catch_up()), and rain that fell in the night waters it.
 //  Maps the player isn't on catch up the same way when they next load. The
 //  shops and auctions just carry on from the new time (MARKET). The world is
-//  saved on waking. A bed prop's dialog has PICK UP instead of NOT YET.
+//  saved on waking. A bed prop's dialog has a PICK UP button too.
 // ============================================================
 #define SLEEP_W        320
 #define SLEEP_H        180
@@ -20523,8 +24961,8 @@ void update_input(void)
 #define SLEEP_BTN_W    120
 #define SLEEP_BTN_H    30
 #define SLEEP_BTN_Y    (SLEEP_Y + SLEEP_H - SLEEP_BTN_H - 14)
-#define SLEEP_YES_X    (SLEEP_X + 20)
-#define SLEEP_NO_X     (SLEEP_X + SLEEP_W - 20 - SLEEP_BTN_W)
+#define SLEEP_BTN3_W   92      // a bed prop's three buttons: SLEEP, NOT YET, PICK UP
+#define SLEEP_BTN3_GAP 10
 #define SLEEP_CLOSE_X  (SLEEP_X + SLEEP_W - 10 - INV_BTN)
 
 static int s_sleep_prop = -1;   // UI_SLEEP: the bed prop tapped (s_place[] index), -1 = a bed in the map
@@ -20548,11 +24986,26 @@ bool bed_open(void) { return sleep_open(-1); }
 
 static rect_t sleep_rect(void) { return (rect_t){ SLEEP_X, SLEEP_Y, SLEEP_W, SLEEP_H }; }
 
-static void sleep_button(int x, const char *label, uint16_t col)
+// The dialog's buttons: SLEEP, NOT YET (and PICK UP for a bed prop), left to right.
+static int sleep_btn_count(void) { return s_sleep_prop >= 0 ? 3 : 2; }
+static int sleep_btn_w(void)     { return sleep_btn_count() == 3 ? SLEEP_BTN3_W : SLEEP_BTN_W; }
+static int sleep_btn_x(int k)
 {
-    fill_round_rect(x, SLEEP_BTN_Y, SLEEP_BTN_W, SLEEP_BTN_H, 6, col, 255);
-    draw_round_rect(x, SLEEP_BTN_Y, SLEEP_BTN_W, SLEEP_BTN_H, 6, 2, INV_COL_EDGE);
-    draw_text_centered(x, SLEEP_BTN_Y + 8, SLEEP_BTN_W, label, COLOR_WHITE, INV_COL_EDGE);
+    if (sleep_btn_count() == 3) return SLEEP_X + (SLEEP_W - 3 * SLEEP_BTN3_W - 2 * SLEEP_BTN3_GAP) / 2 + k * (SLEEP_BTN3_W + SLEEP_BTN3_GAP);
+    return k == 0 ? SLEEP_X + 20 : SLEEP_X + SLEEP_W - 20 - SLEEP_BTN_W;
+}
+
+static void sleep_button(int k, const char *label, uint16_t col)
+{
+    int x = sleep_btn_x(k), w = sleep_btn_w();
+    fill_round_rect(x, SLEEP_BTN_Y, w, SLEEP_BTN_H, 6, col, 255);
+    draw_round_rect(x, SLEEP_BTN_Y, w, SLEEP_BTN_H, 6, 2, INV_COL_EDGE);
+    draw_text_centered(x, SLEEP_BTN_Y + 8, w, label, COLOR_WHITE, INV_COL_EDGE);
+}
+
+static bool sleep_btn_hit(int k, int tx, int ty)
+{
+    return pt_in(tx, ty, sleep_btn_x(k) - 4, SLEEP_BTN_Y - 4, sleep_btn_w() + 8, SLEEP_BTN_H + 8);
 }
 
 static void sleep_draw(void)
@@ -20574,8 +25027,9 @@ static void sleep_draw(void)
         snprintf(t, sizeof(t), "%d crop%s here still need%s water!", dry, dry == 1 ? "" : "s", dry == 1 ? "s" : "");
         draw_text_clip(SLEEP_X + 16, SLEEP_Y + 92, t, 1, INV_COL_DOWN, SLEEP_W - 32);
     }
-    sleep_button(SLEEP_YES_X, "SLEEP", COLOR_RGB565(70, 160, 80));
-    sleep_button(SLEEP_NO_X, s_sleep_prop >= 0 ? "PICK UP" : "NOT YET", INV_COL_DOWN);
+    sleep_button(0, "SLEEP", COLOR_RGB565(70, 160, 80));
+    sleep_button(1, "NOT YET", INV_COL_DOWN);
+    if (s_sleep_prop >= 0) sleep_button(2, "PICK UP", COLOR_RGB565(150, 110, 60));
 }
 
 // Fades out, moves the clock to the wake-up time, plays the night (crops,
@@ -20590,8 +25044,11 @@ static void sleep_now(void)
     s_clock_min = CLOCK_START_MIN;
     s_clock_us  = 0;
     if (farm_catch_up(true, false)) mapsave_mark_dirty();                 // the midnight slept through
+    herd_catch_up(true, false);                                           // ...for the barn animals too (FARM)
+    herd_settle(false);                                                   // (the ones here come out of their doors)
     if (rain_fell((int32_t)s_clock_day, s_clock_min + 1)) soil_rain(false);   // rain after midnight
-    night_release_hold();                                                 // the loader's stage is for the old time
+    farm_morning(true, false, false, CROW_PCT);                           // 6:00: sprinklers, crows (SPRINKLERS + SCARECROWS)
+    night_release_hold();                                                // the loader's stage is for the old time
     int want = night_stage_wanted();
     if (want != s_night_shown && night_arena() && night_read_stage(want, s_hold_buf)) night_copy_arena(want);
     mapsave_flush();
@@ -20614,10 +25071,11 @@ static void update_sleep_touch(const input_frame_t *in)
     if (!in->touch_pressed_edge || in->touch_menu_btn) return;
     int tx = in->touch_x, ty = in->touch_y, prop = s_sleep_prop;
     if (pt_in(tx, ty, SLEEP_CLOSE_X - 6, SLEEP_Y + 4, INV_BTN + 12, INV_BTN + 12)) { ui_close(); return; }
-    if (pt_in(tx, ty, SLEEP_YES_X - 4, SLEEP_BTN_Y - 4, SLEEP_BTN_W + 8, SLEEP_BTN_H + 8)) { ui_close(); sleep_now(); return; }
-    if (pt_in(tx, ty, SLEEP_NO_X - 4, SLEEP_BTN_Y - 4, SLEEP_BTN_W + 8, SLEEP_BTN_H + 8)) {
+    if (sleep_btn_hit(0, tx, ty)) { ui_close(); sleep_now(); return; }
+    if (sleep_btn_hit(1, tx, ty)) { ui_close(); return; }
+    if (prop >= 0 && sleep_btn_hit(2, tx, ty)) {
         ui_close();
-        if (prop >= 0) place_pick_up(prop);
+        place_pick_up(prop);
     }
 }
 
@@ -20776,7 +25234,7 @@ static void ts_draw_sky(const uint16_t *sky_copy, int y_end)
 #define LOAD_BAR_Y   (LOAD_PANEL_Y + 146)
 #define LOAD_BAR_W   (LOAD_PANEL_W - 80)
 #define LOAD_BAR_H   16
-#define LOAD_WALK_Y  (LOAD_BAR_Y - 2 * PLAYER_H - 1)   // the character, at 2x, walks along the top of the bar
+#define LOAD_WALK_Y  (LOAD_BAR_Y - 2 * CHAR_SH - 1)    // the character, at 2x, walks along the top of the bar
 
 static bool     s_loading_on   = false;
 static float    s_loading_frac = 0;
@@ -20793,9 +25251,9 @@ static void loading_draw_bar(float frac)
         fill_rect(LOAD_BAR_X + 3, LOAD_BAR_Y + 3, fill, LOAD_BAR_H - 6, TS_GRASS);
         fill_rect(LOAD_BAR_X + 3, LOAD_BAR_Y + 3, fill, 2, TS_GRASS_LIT);
     }
-    int span = LOAD_BAR_W - 2 * PLAYER_W;
+    int span = LOAD_BAR_W - 2 * CHAR_SW;
     int f    = (int)(ts_now_ms() / 140) % PLAYER_ANIM_FRAMES;
-    blit_scaled_keyed(s_player_frames[PDIR_RIGHT][f], PLAYER_W, PLAYER_H, LOAD_BAR_X + (int)(span * frac), LOAD_WALK_Y, 2);
+    blit_scaled_keyed(s_player_frames[PDIR_RIGHT][f], CHAR_SW, CHAR_SH, LOAD_BAR_X + (int)(span * frac), LOAD_WALK_Y, 2);
     compose_end();
     s_loading_ms = ts_now_ms();
 }
@@ -20869,15 +25327,35 @@ void loading_end(void)
 #define TS_BAND_H     256   // rows that animate: clouds + the hanging vines
 #define TS_FRAME_MS   40
 #define TS_CLOUDS     6
-#define TS_BTN_MAX    10
-#define TS_PREV_X     150   // Customize: the preview panel
-#define TS_PREV_Y     76
-#define TS_PREV_W     180
-#define TS_PREV_H     272
+#define TS_BTN_MAX    32
+#define TS_PREV_X     12    // Customize: the preview panel
+#define TS_PREV_Y     58
+#define TS_PREV_W     164
+#define TS_PREV_H     300
 #define TS_PREV_SCALE 5
+#define TS_ROWS_X     188   // ...the wardrobe's rows (body, hair, ...) right of it, 40 apart
+#define TS_ROWS_Y     58
+#define TS_TABS_Y     302   // ...the colour tabs, then the hue and shade bars
+#define TS_HUE_Y      344
+#define TS_SHADE_Y    378
+#define TS_BAR_W      280
+#define TS_BAR_H      26
+#define TS_HUE_GREY   360   // the hue bar's last stretch: no hue (greys)
+#define TS_PICK_COLS  6     // the wardrobe list: a page of cells, each the outfit wearing one item
+#define TS_PICK_ROWS  4
+#define TS_PICK_X     8
+#define TS_PICK_Y     58
+#define TS_PICK_W     74
+#define TS_PICK_H     84
+#define TS_PICK_GAP   4
+#define TS_PICK_PAGE  (TS_PICK_COLS * TS_PICK_ROWS)
 
-typedef enum { TS_MAIN, TS_PLAY, TS_LOAD, TS_CUSTOMIZE } ts_screen_t;
-typedef enum { TA_PLAY, TA_CUSTOMIZE, TA_NEW, TA_LOAD, TA_BACK, TA_PREV, TA_NEXT, TA_DONE, TA_SLOT, TA_DELETE } ts_action_t;
+typedef enum { TS_MAIN, TS_PLAY, TS_LOAD, TS_CUSTOMIZE, TS_PICK, TS_CHARS } ts_screen_t;   // TS_PICK: a wardrobe row's list; TS_CHARS: the SD card's characters
+typedef enum { TA_PLAY, TA_CUSTOMIZE, TA_NEW, TA_LOAD, TA_BACK, TA_PREV, TA_NEXT, TA_DONE, TA_SLOT, TA_DELETE,
+               TA_TAB, TA_HUE, TA_SHADE, TA_OWN, TA_RANDOM,
+               TA_LIST, TA_PICK, TA_PAGE, TA_WALK, TA_HOLD,
+               TA_CHARS, TA_CHAR } ts_action_t;   // TA_PREV/NEXT/LIST: arg = the wardrobe row; TA_PICK: the item; TA_PAGE: +-1;
+                                                   // TA_CHARS: arg 0 = Save, 1 = Load (the Characters screen); TA_CHAR: a character slot
 
 typedef struct {
     int         x, y, w, h;
@@ -20909,36 +25387,173 @@ static int          s_dev_title_load = 0;       // DEV LINK "load N": title_run(
 static int          s_ts_used;         // slots with a save in them
 static bool         s_ts_del;          // Load is in Delete mode: tapping a save deletes it (twice)
 static int          s_ts_del_arm = -1; // ...the save tapped once: the next tap on it deletes it
-static int          s_ts_char;         // the character Customize is showing
+static outfit_t     s_ts_outfit;       // what Customize shows (Done makes it the player's)
+static uint16_t    *s_ts_px = NULL;    // PSRAM: its 16 walking then 16 carrying frames (ward_compose())
+static int          s_ts_tab = WC_HAIR;   // the colour the hue and shade bars set
+static int          s_ts_tap_x;        // where the last tap let go (on a bar: the colour)
+static uint16_t     s_ts_hue[WC_COUNT];    // each colour's marks on the bars (kept with the outfit)
+static uint8_t      s_ts_shade[WC_COUNT];
 static int          s_ts_pose = -1;    // the preview frame showing (Customize); -1 = draw it
+static bool         s_ts_walk = true;  // Customize's preview: walking round (else standing, facing the front)...
+static bool         s_ts_hold = false; // ...carrying something (arms up)
+static int          s_ts_pick_row;     // TS_PICK: the wardrobe row it lists...
+static int          s_ts_pick_page;    // ...and the page showing
+static char         s_ts_vals[6][16];  // Customize: each row's "12/283" (its list button's label)
 
-// ---- the chosen character, kept in NVS by name ----
-#define CFG_KEY_CHARACTER "character"
-#define CHARACTER_FIRST   "Pierre"   // played until one is picked in Customize
+// ---- the player's outfit, kept in NVS (item names, so new art doesn't mix it up) ----
+#define CFG_KEY_OUTFIT  "outfit"
+#define OUTFIT_NVS_VER  1
+typedef struct {
+    uint8_t  ver;
+    char     body[24], hair[24], shirt[24], pants[24], acc[24], hat[24];   // "" = none
+    int16_t  col[WC_COUNT][3];
+    uint16_t hue[WC_COUNT];
+    uint8_t  shade[WC_COUNT];
+} outfit_nvs_t;
 
-static void character_load_choice(void)
+static void outfit_load(void)
 {
-    char name[32] = "";
+    outfit_default(&s_outfit);
+    for (int k = 0; k < WC_COUNT; k++) { s_ts_hue[k] = 30; s_ts_shade[k] = 128; }
+    outfit_nvs_t n;
+    size_t len = sizeof(n);
     nvs_handle_t h;
+    bool ok = false;
     if (nvs_open(CFG_NVS_NAMESPACE, NVS_READONLY, &h) == ESP_OK) {
-        size_t len = sizeof(name);
-        if (nvs_get_str(h, CFG_KEY_CHARACTER, name, &len) != ESP_OK) name[0] = '\0';
+        ok = nvs_get_blob(h, CFG_KEY_OUTFIT, &n, &len) == ESP_OK && len == sizeof(n) && n.ver == OUTFIT_NVS_VER;
         nvs_close(h);
     }
-    if (name[0] == '\0' || strcmp(name, "default") == 0) snprintf(name, sizeof(name), "%s", CHARACTER_FIRST);   // "default" = Pierre's old folder name
-    s_character = 0;
-    for (int i = 0; i < character_count(); i++)
-        if (strcmp(k_character_assets[i].name, name) == 0) s_character = i;
-    ESP_LOGI(TAG, "character: %s (%d in assets/characters/)", character_name(s_character), character_count());
+    if (ok) {
+        int i;
+        if ((i = ward_find(k_ward_bodies, WARD_N_BODIES, n.body)) >= 0) s_outfit.body  = (int16_t)i;
+        if ((i = ward_find(k_ward_hair,   WARD_N_HAIR,   n.hair)) >= 0) s_outfit.hair  = (int16_t)i;
+        if ((i = ward_find(k_ward_shirts, WARD_N_SHIRTS, n.shirt)) >= 0) s_outfit.shirt = (int16_t)i;
+        if ((i = ward_find(k_ward_pants,  WARD_N_PANTS,  n.pants)) >= 0) s_outfit.pants = (int16_t)i;
+        s_outfit.acc = (int16_t)ward_find(k_ward_accessories, WARD_N_ACCESSORIES, n.acc);
+        s_outfit.hat = (int16_t)ward_find(k_ward_hats, WARD_N_HATS, n.hat);
+        memcpy(s_outfit.col, n.col, sizeof(n.col));
+        memcpy(s_ts_hue, n.hue, sizeof(n.hue));
+        memcpy(s_ts_shade, n.shade, sizeof(n.shade));
+    }
+    ESP_LOGI(TAG, "outfit: %s, hair %d, shirt %d, pants %d, accessory %d, hat %d (%s)",
+             WARD_N_BODIES ? k_ward_bodies[s_outfit.body].name : "-", s_outfit.hair, s_outfit.shirt, s_outfit.pants,
+             s_outfit.acc, s_outfit.hat, ok ? "saved" : "the first one");
 }
 
-static void character_save_choice(void)
+static void outfit_save(void)
 {
+    outfit_nvs_t n;
+    memset(&n, 0, sizeof(n));
+    n.ver = OUTFIT_NVS_VER;
+#define OUTFIT_NAME(dst, tbl, cnt, i) snprintf(dst, sizeof(dst), "%s", (i) >= 0 && (i) < (cnt) ? tbl[i].name : "")
+    OUTFIT_NAME(n.body,  k_ward_bodies,      WARD_N_BODIES,      s_outfit.body);
+    OUTFIT_NAME(n.hair,  k_ward_hair,        WARD_N_HAIR,        s_outfit.hair);
+    OUTFIT_NAME(n.shirt, k_ward_shirts,      WARD_N_SHIRTS,      s_outfit.shirt);
+    OUTFIT_NAME(n.pants, k_ward_pants,       WARD_N_PANTS,       s_outfit.pants);
+    OUTFIT_NAME(n.acc,   k_ward_accessories, WARD_N_ACCESSORIES, s_outfit.acc);
+    OUTFIT_NAME(n.hat,   k_ward_hats,        WARD_N_HATS,        s_outfit.hat);
+#undef OUTFIT_NAME
+    memcpy(n.col, s_outfit.col, sizeof(n.col));
+    memcpy(n.hue, s_ts_hue, sizeof(n.hue));
+    memcpy(n.shade, s_ts_shade, sizeof(n.shade));
     nvs_handle_t h;
     if (nvs_open(CFG_NVS_NAMESPACE, NVS_READWRITE, &h) != ESP_OK) return;
-    nvs_set_str(h, CFG_KEY_CHARACTER, character_name(s_character));
+    nvs_set_blob(h, CFG_KEY_OUTFIT, &n, sizeof(n));
     nvs_commit(h);
     nvs_close(h);
+}
+
+// ---- characters on the SD card: Customize's Save / Load ----
+// CHAR_SLOTS outfits, one text file each, GAME_DIR/characters/char1.txt ..
+// (W:\CaptureIt\characters\ on the PC), so a look can be kept, swapped back
+// in, or copied to another card. By name like the NVS copy (a part whose art
+// is gone falls back to the default's), one line each:
+//     body male            hair <name>     shirt <name>    pants <name>
+//     face -               hat -           ("-" = none)
+//     colour skin L a b hue H shade S      (L < 0 = the art's own colours;
+//     colour hair / shirt / pants ...       hue / shade = where the bars' marks sit)
+#define CHAR_SLOTS  6
+#define CHARS_DIR   GAME_DIR "/characters"
+typedef struct {
+    bool     used;
+    outfit_t o;
+    uint16_t hue[WC_COUNT];
+    uint8_t  shade[WC_COUNT];
+} saved_char_t;
+EXT_RAM_BSS_ATTR static saved_char_t s_ts_chars[CHAR_SLOTS];   // PSRAM: only while the Characters screen is up
+static bool s_ts_chars_save;        // the Characters screen saves into a slot (else loads from one)
+static int  s_ts_char_arm = -1;     // Save: the full slot tapped once (the next tap saves over it)
+static char s_ts_char_msg[48];      // what the last tap did
+static const char *const k_char_cols[WC_COUNT] = { "skin", "hair", "shirt", "pants" };
+
+static void char_path(int slot, char *out, size_t n) { snprintf(out, n, CHARS_DIR "/char%d.txt", slot + 1); }
+
+static bool char_write(int slot, const outfit_t *o, const uint16_t *hue, const uint8_t *shade)
+{
+    static char path[64];
+    char_path(slot, path, sizeof(path));
+    mapsave_make_dirs(path);
+    FILE *f = fopen(path, "w");
+    if (!f) { ESP_LOGW(TAG, "characters: can't write %s", path); return false; }
+#define CHAR_NAME(tbl, cnt, i) ((i) >= 0 && (i) < (cnt) ? tbl[i].name : "-")
+    fprintf(f, "# CaptureIt character - saved from Customize. Names are files in assets/wardrobe, - = none.\n");
+    fprintf(f, "body %s\n",  CHAR_NAME(k_ward_bodies,      WARD_N_BODIES,      o->body));
+    fprintf(f, "hair %s\n",  CHAR_NAME(k_ward_hair,        WARD_N_HAIR,        o->hair));
+    fprintf(f, "shirt %s\n", CHAR_NAME(k_ward_shirts,      WARD_N_SHIRTS,      o->shirt));
+    fprintf(f, "pants %s\n", CHAR_NAME(k_ward_pants,       WARD_N_PANTS,       o->pants));
+    fprintf(f, "face %s\n",  CHAR_NAME(k_ward_accessories, WARD_N_ACCESSORIES, o->acc));
+    fprintf(f, "hat %s\n",   CHAR_NAME(k_ward_hats,        WARD_N_HATS,        o->hat));
+#undef CHAR_NAME
+    for (int k = 0; k < WC_COUNT; k++)
+        fprintf(f, "colour %s %d %d %d hue %u shade %u\n", k_char_cols[k], o->col[k][0], o->col[k][1], o->col[k][2], hue[k], shade[k]);
+    bool ok = fclose(f) == 0;
+    ESP_LOGI(TAG, "characters: saved %s", path);
+    return ok;
+}
+
+static bool char_read(int slot, saved_char_t *c)
+{
+    static char path[64], line[96];
+    char_path(slot, path, sizeof(path));
+    c->used = false;
+    FILE *f = fopen(path, "r");
+    if (!f) return false;
+    outfit_default(&c->o);
+    for (int k = 0; k < WC_COUNT; k++) { c->hue[k] = 30; c->shade[k] = 128; }
+    while (fgets(line, sizeof(line), f)) {
+        line[strcspn(line, "\r\n")] = '\0';
+        char *sp = strchr(line, ' ');
+        if (line[0] == '#' || !sp) continue;
+        *sp = '\0';
+        const char *key = line, *val = sp + 1;
+        int i;
+        if      (!strcmp(key, "body"))  { if ((i = ward_find(k_ward_bodies, WARD_N_BODIES, val)) >= 0) c->o.body  = (int16_t)i; }
+        else if (!strcmp(key, "hair"))  { if ((i = ward_find(k_ward_hair,   WARD_N_HAIR,   val)) >= 0) c->o.hair  = (int16_t)i; }
+        else if (!strcmp(key, "shirt")) { if ((i = ward_find(k_ward_shirts, WARD_N_SHIRTS, val)) >= 0) c->o.shirt = (int16_t)i; }
+        else if (!strcmp(key, "pants")) { if ((i = ward_find(k_ward_pants,  WARD_N_PANTS,  val)) >= 0) c->o.pants = (int16_t)i; }
+        else if (!strcmp(key, "face"))  c->o.acc = (int16_t)ward_find(k_ward_accessories, WARD_N_ACCESSORIES, val);
+        else if (!strcmp(key, "hat"))   c->o.hat = (int16_t)ward_find(k_ward_hats, WARD_N_HATS, val);
+        else if (!strcmp(key, "colour")) {
+            char name[16];
+            int l, a, b;
+            unsigned hue = 30, shade = 128;
+            if (sscanf(val, "%15s %d %d %d hue %u shade %u", name, &l, &a, &b, &hue, &shade) < 4) continue;
+            for (int k = 0; k < WC_COUNT; k++) {
+                if (strcmp(name, k_char_cols[k]) != 0) continue;
+                c->o.col[k][0] = (int16_t)l; c->o.col[k][1] = (int16_t)a; c->o.col[k][2] = (int16_t)b;
+                c->hue[k]   = (uint16_t)(hue > TS_HUE_GREY ? TS_HUE_GREY : hue);
+                c->shade[k] = (uint8_t)(shade > 255 ? 255 : shade);
+            }
+        }
+    }
+    fclose(f);
+    c->used = true;
+    return true;
+}
+
+static void chars_scan(void)
+{
+    for (int i = 0; i < CHAR_SLOTS; i++) char_read(i, &s_ts_chars[i]);
 }
 
 // ---- clouds ----
@@ -21027,6 +25642,10 @@ static void ts_slot_row(const ts_btn_t *b, tsb_state_t st)
     ts_text(b->x + 16, b->y + sink + 32, line, 2, TS_WOOD_LIT, TS_TEXT_DARK);
 }
 
+static void ts_bar(const ts_btn_t *b);         // Customize: a colour bar
+static void ts_pick_cell(const ts_btn_t *b, tsb_state_t st);   // ...and a cell of a wardrobe list
+static void ts_char_cell(const ts_btn_t *b, tsb_state_t st);   // the Characters screen: a slot on the SD card
+
 // Draws button i into the UI layer (or straight on screen without one).
 static void ts_draw_btn(int i)
 {
@@ -21034,8 +25653,13 @@ static void ts_draw_btn(int i)
     tsb_state_t st = b->off ? TSB_OFF : (i == s_ts_pressed ? TSB_DOWN : TSB_UP);
     uint16_t *prev = s_ts_ui ? ui_target_push(s_ts_ui) : s_fb;
     if (s_ts_ui) fill_rect(b->x, b->y, b->w + 2, b->h + 5, 0x0000);   // see-through again: the shadow and the sunk face move
-    if (b->act == TA_SLOT) ts_slot_row(b, st);
-    else                   ts_button(b->x, b->y, b->w, b->h, b->label, b->scale, st);
+    if (st == TSB_UP && ((b->act == TA_TAB && b->arg == s_ts_tab) ||   // the colour being set,
+                         (b->act == TA_WALK && s_ts_walk) || (b->act == TA_HOLD && s_ts_hold))) st = TSB_DOWN;   // a toggle that's on: pressed in
+    if (b->act == TA_SLOT)                           ts_slot_row(b, st);
+    else if (b->act == TA_HUE || b->act == TA_SHADE) ts_bar(b);
+    else if (b->act == TA_PICK)                      ts_pick_cell(b, st);
+    else if (b->act == TA_CHAR)                      ts_char_cell(b, st);
+    else                                             ts_button(b->x, b->y, b->w, b->h, b->label, b->scale, st);
     s_fb = prev;
 }
 
@@ -21048,29 +25672,143 @@ static void ts_show_btn(int i)
     ts_render(bottom > TS_BAND_H ? bottom : TS_BAND_H);
 }
 
-// ---- Customize: the character preview ----
-// Walks down, left, up, right, then the same holding, turning every ~2.5 s.
+// ---- Customize: the outfit ----
+// The bars' colour: hue (0..359, TS_HUE_GREY = grey) and shade (0..255:
+// near black .. the full colour .. near white) -> 8-bit RGB.
+static void ts_colour_rgb(int hue, int shade, int *r, int *g, int *b)
+{
+    float t = shade / 255.0f, sat, val;
+    if (hue >= TS_HUE_GREY) { sat = 0; val = 0.08f + 0.9f * t; }
+    else if (t < 0.5f)      { sat = 1; val = 0.12f + 0.88f * t / 0.5f; }
+    else                    { val = 1; sat = 1 - 0.92f * (t - 0.5f) / 0.5f; }
+    float h = (hue % 360) / 60.0f, c = val * sat, x = c * (1 - fabsf(fmodf(h, 2) - 1)), m = val - c, rr, gg, bb;
+    if      (h < 1) { rr = c; gg = x; bb = 0; }
+    else if (h < 2) { rr = x; gg = c; bb = 0; }
+    else if (h < 3) { rr = 0; gg = c; bb = x; }
+    else if (h < 4) { rr = 0; gg = x; bb = c; }
+    else if (h < 5) { rr = x; gg = 0; bb = c; }
+    else            { rr = c; gg = 0; bb = x; }
+    *r = (int)lroundf((rr + m) * 255), *g = (int)lroundf((gg + m) * 255), *b = (int)lroundf((bb + m) * 255);
+}
+
+// Customize put on shirt i (any way): a coloured one (most of Stardew's) is worn as drawn.
+static void ts_shirt_own(outfit_t *o, int i)
+{
+    if (i >= 0 && i < WARD_N_SHIRTS && !k_ward_shirts[i].grey) o->col[WC_SHIRT][0] = -1;
+}
+
+// The outfit Customize shows changed: its frames again.
+static void ts_outfit_changed(void)
+{
+    if (!s_ts_px) s_ts_px = heap_caps_malloc((size_t)2 * PDIR_COUNT * PLAYER_ANIM_FRAMES * CHAR_FRAME_PX * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
+    if (s_ts_px) ward_compose(&s_ts_outfit, s_ts_px, s_ts_px + (size_t)PDIR_COUNT * PLAYER_ANIM_FRAMES * CHAR_FRAME_PX);
+}
+
+// The wardrobe's rows: their item (-1: none), how many there are, and whether "none" is one of them.
+static const char *const k_ts_rows[6] = { "Body", "Hair", "Shirt", "Pants", "Face", "Hat" };
+static int16_t *ts_row_item(int row, int *count, bool *none)
+{
+    static const int counts[6] = { WARD_N_BODIES, WARD_N_HAIR, WARD_N_SHIRTS, WARD_N_PANTS, WARD_N_ACCESSORIES, WARD_N_HATS };
+    int16_t *items[6] = { &s_ts_outfit.body, &s_ts_outfit.hair, &s_ts_outfit.shirt, &s_ts_outfit.pants, &s_ts_outfit.acc, &s_ts_outfit.hat };
+    *count = counts[row];
+    *none  = row >= 4;
+    return items[row];
+}
+
+// Walking (s_ts_walk): down, left, up, right, turning every ~2.5 s; else
+// standing, facing the front. Carrying something if s_ts_hold.
 // false = the same frame as last time (nothing drawn).
 static bool ts_preview(bool force)
 {
     static const player_dir_t order[4] = { PDIR_DOWN, PDIR_LEFT, PDIR_UP, PDIR_RIGHT };
     int step = (int)(ts_now_ms() / 160);
-    int pose = (step / 16) % 8, f = step % PLAYER_ANIM_FRAMES;
-    if (!force && pose * PLAYER_ANIM_FRAMES + f == s_ts_pose) return false;
-    s_ts_pose = pose * PLAYER_ANIM_FRAMES + f;
+    player_dir_t dir = s_ts_walk ? order[(step / 16) % 4] : PDIR_DOWN;
+    int f = s_ts_walk ? step % PLAYER_ANIM_FRAMES : 0, key = (dir * PLAYER_ANIM_FRAMES + f) * 2 + s_ts_hold;
+    if (!force && key == s_ts_pose) return false;
+    s_ts_pose = key;
 
     uint16_t *prev = s_ts_ui ? ui_target_push(s_ts_ui) : s_fb;
     int px = TS_PREV_X + 12, py = TS_PREV_Y + 14, pw = TS_PREV_W - 24, ph = TS_PREV_H - 26;   // the panel's paper
     fill_round_rect(px, py, pw, ph, 5, TS_PAPER, 255);
-    int cw = PLAYER_W * TS_PREV_SCALE, ch = PLAYER_H * TS_PREV_SCALE;
-    int cx = px + (pw - cw) / 2, cy = py + 28;
+    int cw = CHAR_SW * TS_PREV_SCALE, ch = CHAR_SH * TS_PREV_SCALE;
+    int cx = px + (pw - cw) / 2, cy = py + 20;
     for (int dy = -5; dy <= 5; dy++)                                    // shadow under the feet
         for (int dx = -30; dx <= 30; dx++)
             if (dx * dx * 25 + dy * dy * 900 <= 22500) draw_pixel(cx + cw / 2 + dx, cy + ch - 4 + dy, TS_PAPER_DK);
-    blit_scaled_keyed(character_frame(s_ts_char, pose >= 4, order[pose % 4], f), PLAYER_W, PLAYER_H, cx, cy, TS_PREV_SCALE);
-    ts_text_c(px + pw / 2, cy + ch + 14, pose >= 4 ? "Holding" : "Walking", 2, TS_WOOD_DARK, TS_PAPER_DK);
+    size_t at = (size_t)((s_ts_hold ? PDIR_COUNT : 0) * PLAYER_ANIM_FRAMES + dir * PLAYER_ANIM_FRAMES + f) * CHAR_FRAME_PX;
+    const uint16_t *frame = s_ts_px ? s_ts_px + at : (s_ts_hold ? s_player_held_frames : s_player_frames)[dir][f];
+    blit_scaled_keyed(frame, CHAR_SW, CHAR_SH, cx, cy, TS_PREV_SCALE);
+    ts_text_c(px + pw / 2, cy + ch + 14, s_ts_hold ? "Carrying" : s_ts_walk ? "Walking" : "Standing", 2, TS_WOOD_DARK, TS_PAPER_DK);
     s_fb = prev;
     return true;
+}
+
+// A cell of a wardrobe list: the outfit wearing item b->arg (-1: none of
+// that row), facing the front at 2x; the one it's wearing now framed in gold.
+static void ts_pick_cell(const ts_btn_t *b, tsb_state_t st)
+{
+    EXT_RAM_BSS_ATTR static uint16_t thumb[CHAR_FRAME_PX];
+    int n;
+    bool none;
+    int16_t *it = ts_row_item(s_ts_pick_row, &n, &none);
+    bool worn = *it == b->arg;
+    ts_button_frame(b->x, b->y, b->w, b->h, worn && st == TSB_UP ? TSB_DOWN : st);
+    int sink = (worn || st == TSB_DOWN) ? 3 : 0, px = b->x + 6, py = b->y + sink + 6, pw = b->w - 12, ph = b->h - 12;
+    if (worn) fill_round_rect(px - 2, py - 2, pw + 4, ph + 4, 5, TS_WOOD_LIT, 255);
+    fill_round_rect(px, py, pw, ph, 4, TS_PAPER, 255);
+    outfit_t o = s_ts_outfit;
+    int16_t *slot = (int16_t *)((char *)&o + ((char *)it - (char *)&s_ts_outfit));   // the same row in the copy
+    *slot = (int16_t)b->arg;
+    if (s_ts_pick_row == 2) ts_shirt_own(&o, b->arg);
+    ward_prepare(&o);
+    ward_frame(PDIR_DOWN, 0, false, thumb);
+    int scale = 2, tw = CHAR_SW * scale, th = CHAR_SH * scale;
+    blit_scaled_keyed(thumb, CHAR_SW, CHAR_SH, px + (pw - tw) / 2, py + (ph - th) / 2, scale);
+    if (b->arg < 0) ts_text_c(px + pw / 2, py + ph - 10, "none", 1, TS_TEXT, TS_TEXT_DARK);
+}
+
+// A character slot (TA_CHAR, b->arg): the character saved there facing the
+// front at 3x, or "Empty"; the slot tapped once on Save framed in gold.
+static void ts_char_cell(const ts_btn_t *b, tsb_state_t st)
+{
+    EXT_RAM_BSS_ATTR static uint16_t thumb[CHAR_FRAME_PX];
+    const saved_char_t *c = &s_ts_chars[b->arg];
+    bool armed = s_ts_chars_save && b->arg == s_ts_char_arm;
+    ts_button_frame(b->x, b->y, b->w, b->h, armed && st == TSB_UP ? TSB_DOWN : st);
+    int sink = (armed || st == TSB_DOWN) ? 3 : 0, px = b->x + 6, py = b->y + sink + 6, pw = b->w - 12, ph = b->h - 12;
+    if (armed) fill_round_rect(px - 2, py - 2, pw + 4, ph + 4, 5, TS_WOOD_LIT, 255);
+    fill_round_rect(px, py, pw, ph, 4, TS_PAPER, 255);
+    char label[24];
+    snprintf(label, sizeof(label), "Character %d", b->arg + 1);
+    if (c->used) {
+        ward_prepare(&c->o);
+        ward_frame(PDIR_DOWN, 0, false, thumb);
+        int scale = 3, tw = CHAR_SW * scale;
+        blit_scaled_keyed(thumb, CHAR_SW, CHAR_SH, px + (pw - tw) / 2, py + 6, scale);
+    } else {
+        ts_text_c(px + pw / 2, py + ph / 2 - 14, "Empty", 2, TS_WOOD_DARK, TS_PAPER_DK);
+    }
+    ts_text_c(px + pw / 2, py + ph - 16, armed ? "Tap to save over" : label, armed ? 1 : 2, TS_WOOD_DARK, TS_PAPER_DK);
+}
+
+// A colour bar (TA_HUE, TA_SHADE) with a mark at the tab's colour.
+static void ts_bar(const ts_btn_t *b)
+{
+    int hue = s_ts_hue[s_ts_tab], mark;
+    fill_round_rect(b->x - 3, b->y - 3, b->w + 6, b->h + 6, 6, TS_EDGE, 255);
+    for (int x = 0; x < b->w; x++) {
+        int r, g, bl, v = x * 256 / b->w;
+        if (b->act == TA_HUE) ts_colour_rgb(x >= b->w * 9 / 10 ? TS_HUE_GREY : x * 360 / (b->w * 9 / 10), x >= b->w * 9 / 10 ? 160 : 128, &r, &g, &bl);
+        else                  ts_colour_rgb(hue, v, &r, &g, &bl);
+        fill_rect(b->x + x, b->y, 1, b->h, COLOR_RGB565(r, g, bl));
+    }
+    if (b->act == TA_HUE) mark = hue >= TS_HUE_GREY ? b->w * 19 / 20 : hue * (b->w * 9 / 10) / 360;
+    else                  mark = s_ts_shade[s_ts_tab] * b->w / 256;
+    bool own = s_ts_outfit.col[s_ts_tab][0] < 0;   // the art's own colour: no mark
+    if (!own) {
+        fill_rect(b->x + mark - 2, b->y - 4, 5, b->h + 8, TS_EDGE);
+        fill_rect(b->x + mark - 1, b->y - 3, 3, b->h + 6, TS_TEXT);
+    }
 }
 
 // ---- screens ----
@@ -21092,12 +25830,33 @@ static void ts_draw_static(void)
             ts_button(162, 16, 156, 48, s_ts_del ? "Delete" : "Load", 3, TSB_UP);   // a sign, not a button
             break;
         case TS_CUSTOMIZE: {
-            ts_button(130, 12, 220, 48, "Customize", 3, TSB_UP);
+            ts_button(130, 4, 220, 46, "Customize", 3, TSB_UP);
             ts_panel(TS_PREV_X, TS_PREV_Y, TS_PREV_W, TS_PREV_H);
-            snprintf(line, sizeof(line), "%d / %d", s_ts_char + 1, character_count() ? character_count() : 1);
-            ts_text_c(LCD_H_RES / 2, TS_PREV_Y + TS_PREV_H + 14, line, 3, TS_TEXT, TS_TEXT_DARK);
+            for (int r = 0; r < 6; r++) {   // each row: its name, and which one (between its arrows)
+                int n, y = TS_ROWS_Y + r * 40;
+                bool none;
+                int16_t *it = ts_row_item(r, &n, &none);
+                (void)it;
+                ts_text(TS_ROWS_X, y + 10, k_ts_rows[r], 2, TS_TEXT, TS_TEXT_DARK);
+            }
             break;
         }
+        case TS_PICK: {
+            int n;
+            bool none;
+            ts_row_item(s_ts_pick_row, &n, &none);
+            int pages = (n + (none ? 1 : 0) + TS_PICK_PAGE - 1) / TS_PICK_PAGE;
+            ts_button(130, 4, 220, 46, k_ts_rows[s_ts_pick_row], 3, TSB_UP);
+            snprintf(line, sizeof(line), "%d/%d", s_ts_pick_page + 1, pages ? pages : 1);
+            ts_text_c(286, 436, line, 3, TS_TEXT, TS_TEXT_DARK);
+            break;
+        }
+        case TS_CHARS:
+            ts_button(130, 4, 220, 46, s_ts_chars_save ? "Save" : "Load", 3, TSB_UP);   // a sign
+            ts_text_c(LCD_H_RES / 2, 58, s_ts_chars_save ? "Save this character on the SD card" : "Wear a character from the SD card",
+                      2, TS_TEXT, TS_TEXT_DARK);
+            if (s_ts_char_msg[0]) ts_text_c(300, 438, s_ts_char_msg, 2, TS_TEXT, TS_TEXT_DARK);
+            break;
     }
 }
 
@@ -21127,10 +25886,50 @@ static void ts_build(ts_screen_t scr)
             break;
         }
         case TS_CUSTOMIZE: {
-            bool one = character_count() < 2;
-            ts_add(70, 186, 60, 64, TA_PREV, 0, "<", 4, one);
-            ts_add(350, 186, 60, 64, TA_NEXT, 0, ">", 4, one);
-            ts_add(160, 414, 160, 54, TA_DONE, 0, "Done", 3, false);
+            static const char *const tabs[WC_COUNT] = { "Skin", "Hair", "Shirt", "Pants" };
+            for (int r = 0; r < 6; r++) {
+                int n;
+                bool none, one;
+                ts_row_item(r, &n, &none);
+                one = n + (none ? 1 : 0) < 2;
+                int16_t *it = ts_row_item(r, &n, &none);
+                if (*it < 0) snprintf(s_ts_vals[r], sizeof(s_ts_vals[r]), "none");
+                else         snprintf(s_ts_vals[r], sizeof(s_ts_vals[r]), "%d/%d", *it + 1, n);
+                ts_add(254, TS_ROWS_Y + r * 40, 40, 34, TA_PREV, r, "<", 3, one);
+                ts_add(298, TS_ROWS_Y + r * 40, 124, 34, TA_LIST, r, s_ts_vals[r], 2, one);   // tap: the whole list
+                ts_add(426, TS_ROWS_Y + r * 40, 40, 34, TA_NEXT, r, ">", 3, one);
+            }
+            for (int k = 0; k < WC_COUNT; k++) ts_add(TS_ROWS_X + k * 71, TS_TABS_Y, 67, 34, TA_TAB, k, tabs[k], 2, false);
+            ts_add(TS_ROWS_X, TS_HUE_Y, TS_BAR_W, TS_BAR_H, TA_HUE, 0, NULL, 2, false);
+            ts_add(TS_ROWS_X, TS_SHADE_Y, TS_BAR_W, TS_BAR_H, TA_SHADE, 0, NULL, 2, false);
+            ts_add(TS_PREV_X, 362, 80, 46, TA_WALK, 0, "Walk", 2, false);   // toggles, pressed in while on
+            ts_add(TS_PREV_X + 84, 362, 80, 46, TA_HOLD, 0, "Hold", 2, false);
+            ts_add(TS_PREV_X, 418, 112, 52, TA_RANDOM, 0, "Random", 2, false);
+            ts_add(TS_ROWS_X - 52, 418, 150, 52, TA_OWN, 0, "As drawn", 2, s_ts_outfit.col[s_ts_tab][0] < 0);
+            ts_add(330, 418, 140, 52, TA_DONE, 0, "Done", 3, false);
+            ts_add(8, 4, 116, 46, TA_CHARS, 0, "Save", 3, false);     // characters on the SD card
+            ts_add(356, 4, 116, 46, TA_CHARS, 1, "Load", 3, false);
+            break;
+        }
+        case TS_CHARS:   // the SD card's character slots, 3 x 2
+            for (int i = 0; i < CHAR_SLOTS; i++)
+                ts_add(12 + (i % 3) * 156, 80 + (i / 3) * 166, 148, 158, TA_CHAR, i, NULL, 2, !s_ts_chars_save && !s_ts_chars[i].used);
+            ts_add(8, 418, 110, 52, TA_BACK, 0, "Back", 3, false);
+            break;
+        case TS_PICK: {   // a page of the row's items (none first, for the face and hat)
+            int n;
+            bool none;
+            ts_row_item(s_ts_pick_row, &n, &none);
+            int total = n + (none ? 1 : 0), pages = (total + TS_PICK_PAGE - 1) / TS_PICK_PAGE;
+            for (int i = 0; i < TS_PICK_PAGE; i++) {
+                int k = s_ts_pick_page * TS_PICK_PAGE + i;
+                if (k >= total) break;
+                ts_add(TS_PICK_X + (i % TS_PICK_COLS) * (TS_PICK_W + TS_PICK_GAP), TS_PICK_Y + (i / TS_PICK_COLS) * (TS_PICK_H + TS_PICK_GAP),
+                       TS_PICK_W, TS_PICK_H, TA_PICK, k - (none ? 1 : 0), NULL, 2, false);
+            }
+            ts_add(8, 418, 110, 52, TA_BACK, 0, "Back", 3, false);
+            ts_add(170, 418, 64, 52, TA_PAGE, -1, "<", 3, s_ts_pick_page == 0);
+            ts_add(338, 418, 64, 52, TA_PAGE, 1, ">", 3, s_ts_pick_page >= pages - 1);
             break;
         }
     }
@@ -21144,23 +25943,132 @@ static void ts_build(ts_screen_t scr)
     if (s_ts_ui) ts_render(LCD_V_RES);
 }
 
+// The tab's colour from where a finger is on bar b (x clamped to the bar).
+static void ts_bar_set(const ts_btn_t *b, int tap_x)
+{
+    int x = tap_x - b->x, r, g, bl;
+    x = x < 0 ? 0 : x >= b->w ? b->w - 1 : x;
+    if (b->act == TA_HUE) s_ts_hue[s_ts_tab] = (uint16_t)(x >= b->w * 9 / 10 ? TS_HUE_GREY : x * 360 / (b->w * 9 / 10));
+    else                  s_ts_shade[s_ts_tab] = (uint8_t)(x * 256 / b->w);
+    ts_colour_rgb(s_ts_hue[s_ts_tab], s_ts_shade[s_ts_tab], &r, &g, &bl);
+    ward_rgb_lab(r, g, bl, s_ts_outfit.col[s_ts_tab]);
+}
+
+// A finger on a colour bar moved: the colour follows it. Only the bars,
+// "As drawn" and the preview are redrawn (not the whole screen), so it keeps
+// up with the finger.
+static void ts_bar_drag(const ts_btn_t *b, int tap_x)
+{
+    ts_bar_set(b, tap_x);
+    ts_outfit_changed();
+    int y_end = TS_SHADE_Y + TS_BAR_H + 8;   // the bars and the preview, above them
+    for (int i = 0; i < s_ts_nbtn; i++) {
+        ts_btn_t *o = &s_ts_btn[i];
+        bool own = s_ts_outfit.col[s_ts_tab][0] < 0;
+        if (o->act == TA_OWN && o->off != own) {   // "As drawn" (below them) can be pressed again: show that too
+            o->off = own;
+            ts_draw_btn(i);
+            y_end = LCD_V_RES;
+        }
+        if (o->act == TA_HUE || o->act == TA_SHADE) ts_draw_btn(i);
+    }
+    ts_preview(true);
+    if (s_ts_ui) ts_render(y_end);
+}
+
+static bool ts_is_bar(int i) { return i >= 0 && (s_ts_btn[i].act == TA_HUE || s_ts_btn[i].act == TA_SHADE); }
+
 // A button was tapped. true = a game was picked (*slot, *is_new filled in).
 static bool ts_act(const ts_btn_t *b, int *slot, bool *is_new)
 {
-    int n = character_count();
     switch (b->act) {
         case TA_PLAY:      ts_build(TS_PLAY); break;
-        case TA_CUSTOMIZE: s_ts_char = s_character; ts_build(TS_CUSTOMIZE); break;
+        case TA_CUSTOMIZE: s_ts_outfit = s_outfit; ts_outfit_changed(); ts_build(TS_CUSTOMIZE); break;
         case TA_LOAD:      s_ts_del = false; s_ts_del_arm = -1; ts_build(TS_LOAD); break;
-        case TA_BACK:      s_ts_del = false; s_ts_del_arm = -1; ts_build(s_ts_screen == TS_LOAD ? TS_PLAY : TS_MAIN); break;
+        case TA_BACK:      s_ts_del = false; s_ts_del_arm = -1;
+                           ts_build(s_ts_screen == TS_LOAD ? TS_PLAY : s_ts_screen == TS_PICK || s_ts_screen == TS_CHARS ? TS_CUSTOMIZE : TS_MAIN); break;
         case TA_DELETE:    s_ts_del = !s_ts_del; s_ts_del_arm = -1; ts_build(TS_LOAD); break;
-        case TA_PREV:      if (n) { s_ts_char = (s_ts_char + n - 1) % n; ts_build(TS_CUSTOMIZE); } break;
-        case TA_NEXT:      if (n) { s_ts_char = (s_ts_char + 1) % n; ts_build(TS_CUSTOMIZE); } break;
+        case TA_PREV:
+        case TA_NEXT: {   // the next / previous item in that row (or none, for the face and hat)
+            int n;
+            bool none;
+            int16_t *it = ts_row_item(b->arg, &n, &none);
+            int lo = none ? -1 : 0, span = n - lo;
+            if (span > 0) *it = (int16_t)(lo + ((*it - lo) + (b->act == TA_NEXT ? 1 : span - 1)) % span);
+            if (b->arg == 2) ts_shirt_own(&s_ts_outfit, *it);
+            ts_outfit_changed();
+            ts_build(TS_CUSTOMIZE);
+            break;
+        }
+        case TA_TAB:   s_ts_tab = b->arg; ts_build(TS_CUSTOMIZE); break;
+        case TA_LIST: {   // the row's whole list, at the page with what's worn
+            int n;
+            bool none;
+            int16_t *it = ts_row_item(b->arg, &n, &none);
+            s_ts_pick_row  = b->arg;
+            s_ts_pick_page = (*it + (none ? 1 : 0)) / TS_PICK_PAGE;
+            ts_build(TS_PICK);
+            break;
+        }
+        case TA_PAGE:  s_ts_pick_page += b->arg; ts_build(TS_PICK); break;
+        case TA_WALK:  s_ts_walk = !s_ts_walk; ts_build(TS_CUSTOMIZE); break;
+        case TA_HOLD:  s_ts_hold = !s_ts_hold; ts_build(TS_CUSTOMIZE); break;
+        case TA_PICK: {
+            int n;
+            bool none;
+            *ts_row_item(s_ts_pick_row, &n, &none) = (int16_t)b->arg;
+            if (s_ts_pick_row == 2) ts_shirt_own(&s_ts_outfit, b->arg);
+            ts_outfit_changed();
+            ts_build(TS_CUSTOMIZE);
+            break;
+        }
+        case TA_HUE:
+        case TA_SHADE:     // let go of a bar (it was set while the finger slid): the screen again, all of it
+            ts_build(TS_CUSTOMIZE);
+            break;
+        case TA_OWN:   s_ts_outfit.col[s_ts_tab][0] = -1; ts_outfit_changed(); ts_build(TS_CUSTOMIZE); break;
+        case TA_RANDOM:
+            ward_random(esp_random(), &s_ts_outfit);
+            for (int k = 0; k < WC_COUNT; k++) { s_ts_hue[k] = 30; s_ts_shade[k] = 128; }   // (the marks don't follow a random colour)
+            ts_outfit_changed();
+            ts_build(TS_CUSTOMIZE);
+            break;
         case TA_DONE:
-            s_character = s_ts_char;
+            s_outfit = s_ts_outfit;
             build_player_frames();
-            character_save_choice();
+            outfit_save();
             ts_build(TS_MAIN);
+            break;
+        case TA_CHARS:   // Save / Load: the SD card's character slots
+            s_ts_chars_save = b->arg == 0;
+            s_ts_char_arm   = -1;
+            s_ts_char_msg[0] = '\0';
+            chars_scan();
+            ts_build(TS_CHARS);
+            break;
+        case TA_CHAR:
+            if (s_ts_chars_save) {   // a full slot: the first tap asks, the second saves over it
+                if (s_ts_chars[b->arg].used && s_ts_char_arm != b->arg) {
+                    s_ts_char_arm = b->arg;
+                    snprintf(s_ts_char_msg, sizeof(s_ts_char_msg), "Tap it again to replace it");
+                    ts_build(TS_CHARS);
+                    break;
+                }
+                s_ts_char_arm = -1;
+                if (char_write(b->arg, &s_ts_outfit, s_ts_hue, s_ts_shade))
+                    snprintf(s_ts_char_msg, sizeof(s_ts_char_msg), "Saved as character %d", b->arg + 1);
+                else
+                    snprintf(s_ts_char_msg, sizeof(s_ts_char_msg), "Couldn't write the SD card");
+                chars_scan();
+                ts_build(TS_CHARS);
+                break;
+            }
+            if (!s_ts_chars[b->arg].used) break;
+            s_ts_outfit = s_ts_chars[b->arg].o;   // shown in Customize; Done puts it on
+            memcpy(s_ts_hue, s_ts_chars[b->arg].hue, sizeof(s_ts_hue));
+            memcpy(s_ts_shade, s_ts_chars[b->arg].shade, sizeof(s_ts_shade));
+            ts_outfit_changed();
+            ts_build(TS_CUSTOMIZE);
             break;
         case TA_NEW:
             for (int i = 0; i < SAVE_SLOTS_MAX; i++) {
@@ -21200,12 +26108,11 @@ static void title_run(int *slot, bool *is_new)
         else s_ts_sky = NULL;
     }
     ts_clouds_init();
-    s_ts_char = s_character;
     s_ts_used = save_slots_scan(s_ts_slots);
     ts_build(TS_MAIN);
     s_ts_last_ms = ts_now_ms();
 
-    int  last_x = 0, last_y = 0;
+    int  last_x = 0, last_y = 0, drag_x = -1;
     bool picked = false;
     s_ts_on = true;
     while (!picked) {
@@ -21227,13 +26134,21 @@ static void title_run(int *slot, bool *is_new)
             int i = ts_btn_at(in.touch_x, in.touch_y);
             if (i >= 0) {
                 s_ts_pressed = i;
-                ts_show_btn(i);
+                if (ts_is_bar(i)) { drag_x = in.touch_x; ts_bar_drag(&s_ts_btn[i], in.touch_x); }   // the colour jumps to the finger
+                else              ts_show_btn(i);
             }
-        } else if (!in.touch_active && s_ts_pressed >= 0) {   // finger up: act if it's still on the button
+        } else if (in.touch_active && ts_is_bar(s_ts_pressed) && abs(in.touch_x - drag_x) >= 2) {   // sliding along a bar (not each jitter)
+            drag_x = in.touch_x;
+            ts_bar_drag(&s_ts_btn[s_ts_pressed], in.touch_x);
+        } else if (!in.touch_active && s_ts_pressed >= 0) {   // finger up: act if it's still on the button (a bar: wherever it is)
             int i = s_ts_pressed;
             s_ts_pressed = -1;
-            ts_show_btn(i);
-            if (ts_btn_at(last_x, last_y) == i) picked = ts_act(&s_ts_btn[i], slot, is_new);
+            s_ts_tap_x = last_x;
+            if (ts_is_bar(i)) picked = ts_act(&s_ts_btn[i], slot, is_new);
+            else {
+                ts_show_btn(i);
+                if (ts_btn_at(last_x, last_y) == i) picked = ts_act(&s_ts_btn[i], slot, is_new);
+            }
         }
 
         uint32_t now = ts_now_ms();
@@ -21251,6 +26166,8 @@ static void title_run(int *slot, bool *is_new)
     s_ts_on = false;
     heap_caps_free(s_ts_ui);
     s_ts_ui  = NULL;
+    heap_caps_free(s_ts_px);   // Customize's preview frames
+    s_ts_px  = NULL;
     s_ts_sky = NULL;   // the hold buffer goes back to the map loader
 }
 
@@ -21560,7 +26477,8 @@ static bool game_start(int slot, bool is_new, bool sd_ok)
 //    clock N                   N game minutes per real second (0 = the clock stopped)
 //    sleep / save              as the bed's SLEEP (to 6:00 tomorrow) / Save Game
 //    noclip on|off / speed N   walk through walls / N x walking speed
-//    crops [list|grow [N]|water] / machines [list|done]   this map's crops / machines
+//    crops [list|grow [N]|water|morning|crows [PCT]] / machines [list|done]   this map's crops / machines
+//                              (morning: today's 6:00 again — sprinklers, crows; crows: they come now, PCT % of the unguarded crops)
 //    ui close / dev            closes the open screen / the dev switches as they are
 //    goto MAP [TX TY [INST]]   loads MAP (INST = a building's inside), stands on tile (TX,TY)
 //    load N | load new         on the title screen: loads save N (1-based) / starts a new game, no taps needed
@@ -21570,6 +26488,9 @@ static bool game_start(int slot, bool is_new, bool sd_ok)
 //                              writes PATH on the SD card (PATH.part first, then renamed)
 //    get PATH                  @@D <base64> lines, then @@END <size>
 //    npc ...                   NPC SHOPPERS test hooks (see there)
+//    animal ...                ANIMALS / FARM test hooks: list, add, feed, ready, day, grass, herd, door, hay, silo, pipes (see there)
+//    place ID TX TY            puts a prop or building from the bag down, its footprint's top-left at tile (TX,TY) (PLACEMENT)
+//    craft [list|open|ID]      every recipe (@@CRAFT lines) / the crafting tab / crafts one of item ID from the bag (CRAFTING)
 //  File commands run on the link's own task; the rest wait for the main
 //  task's next frame (dev_main_poll(), from input_poll()), so they never
 //  touch the game mid-frame. goto runs from app_main's loop, like a teleport.
@@ -21813,13 +26734,15 @@ static void dev_cmd_shot(void)
 
 static const char *dev_ui_name(void)
 {
-    static const char *const k[] = { "none", "inventory", "menu", "keyboard", "shop", "shelf", "offer", "auction" };
+    static const char *const k[] = { "none", "inventory", "menu", "keyboard", "shop", "shelf", "offer", "auction",
+                                     "ledger", "fishing", "sleep", "fishbook", "craft" };
     return (unsigned)s_ui_screen < sizeof(k) / sizeof(k[0]) ? k[s_ui_screen] : "?";
 }
 
 static void npc_dev_cmd(char *args);   // NPC SHOPPERS section
 static void fish_dev_cmd(char *args);  // FISHING section
 static void ranch_dev_cmd(char *args); // ANIMALS section
+static void craft_dev_cmd(char *args); // CRAFTING section
 
 // "psram N": how fast PSRAM is (write, read, copy over 1 MB blocks — far
 // bigger than the cache, so it's the chip and its bus being measured), then
@@ -21867,16 +26790,35 @@ static void dev_cmd_psram(int passes)
 }
 
 // "crops" / "crops list" (every plot on this map, then @@END), "crops grow [N]" (N more grown days
-// for every crop, none = all ripe now), "crops water" (all the farmland here watered, like rain).
+// for every crop, none = all ripe now), "crops water" (all the farmland here watered, like rain),
+// "crops morning" (today's 6:00 played again now: sprinklers water + spray if it's 6-7, crows at CROW_PCT),
+// "crops crows [PCT]" (crows come now for PCT % — none = all — of the crops no scarecrow guards).
 static void dev_cmd_crops(char **w, int nw)
 {
     if (nw < 2 || strcmp(w[1], "list") == 0) {
+        farm_guards_update();
         for (int i = 0; i < FARM_MAX; i++) {
             const farm_plot_t *p = &s_farm[i];
-            if (p->used) dev_out("@@CROP %d %s tile=%d,%d grown=%d need=%d picked=%d watered=%d", i, s_crops[p->crop]->id,
-                                 p->tx, p->ty, p->grown, farm_need(p), p->picked, s_soil[p->ty][p->tx] == SOIL_WATERED);
+            if (p->used) dev_out("@@CROP %d %s tile=%d,%d grown=%d need=%d picked=%d watered=%d sprinkled=%d guarded=%d wet=%d", i, s_crops[p->crop]->id,
+                                 p->tx, p->ty, p->grown, farm_need(p), p->picked, s_soil[p->ty][p->tx] == SOIL_WATERED,
+                                 s_sprinkled[p->ty][p->tx], s_scared[p->ty][p->tx], soil_just_watered(p->tx, p->ty));
         }
         dev_out("@@END");
+    } else if (strcmp(w[1], "morning") == 0) {
+        farm_morning(true, true, true, CROW_PCT);
+        dev_out("@@OK morning played");
+    } else if (strcmp(w[1], "crows") == 0) {
+        int pct = nw > 2 ? atoi(w[2]) : 100;
+        farm_guards_update();
+        memcpy(s_soil_was, s_soil, sizeof(s_soil_was));
+        s_crow_ate_n = 0;
+        int n = crows_eat(pct < 0 ? 0 : pct > 100 ? 100 : pct, true);
+        if (n) {
+            soil_show_changes(true);
+            crows_ate_repaint();
+            mapsave_mark_dirty();
+        }
+        dev_out("@@OK %d crops eaten", n);
     } else if (strcmp(w[1], "grow") == 0) {
         int days = nw > 2 ? atoi(w[2]) : 0, n = 0;
         for (int i = 0; i < FARM_MAX; i++) {
@@ -21894,7 +26836,7 @@ static void dev_cmd_crops(char **w, int nw)
         soil_rain(true);
         dev_out("@@OK watered");
     } else {
-        dev_out("@@ERR crops list | grow [N] | water");
+        dev_out("@@ERR crops list | grow [N] | water | morning | crows [PCT]");
     }
 }
 
@@ -21943,7 +26885,7 @@ static void dev_main_poll(void)
                 if (s_inv[i].count) dev_out("@@INV %d %s %d %d", i, item_get(s_inv[i].item)->id, s_inv[i].count, s_inv[i].quality);
             dev_out("@@END");
         } else if (strcmp(w[0], "give") == 0 && nw >= 2) {
-            uint8_t item = item_find(w[1]);
+            item_id_t item = item_find(w[1]);
             int n = nw > 2 ? atoi(w[2]) : 1;
             if (n <= 0) n = 1;
             int mut = 0, bad = 0, grade = QUALITY_STANDARD;   // "give ID N [MUTATION] [GRADE] [wet]" (a mutation name, e.g. heavy, or its number;
@@ -21960,8 +26902,29 @@ static void dev_main_poll(void)
             if (item == ITEM_NONE) dev_out("@@ERR no item %s", w[1]);
             else if (bad)          dev_out("@@ERR no mutation %s", w[bad]);
             else { int left = inv_add_q(item, (uint8_t)(QUALITY_MAKE(grade, mut) | wet), n); hud_refresh(); dev_out("@@OK gave %d", n - left); }
+        } else if (strcmp(w[0], "can") == 0) {   // "can [N]": the water in the watering can (-1 = full) (FARMING)
+            if (nw >= 2) can_set(atoi(w[1]));
+            dev_out("@@OK can water %d (full = %d)", can_level(inv_held_item()), can_max(inv_held_item()));
+        } else if (strcmp(w[0], "place") == 0 && nw >= 4) {   // "place ID TX TY": as if held and its hologram tapped there
+            item_id_t item = item_find(w[1]);
+            int kind = place_item_kind(item), slot = -1;
+            for (int k = 0; k < INV_SLOTS && slot < 0; k++) if (s_inv[k].count && s_inv[k].item == item) slot = k;
+            place_geom_t g;
+            const char *why = "";
+            if (kind == PLACE_NONE)  dev_out("@@ERR %s can't be placed", w[1]);
+            else if (slot < 0)       dev_out("@@ERR no %s in the bag (give it first)", w[1]);
+            else if (!place_geom(kind, kind == PLACE_PROP ? item : building_of_item(item), atoi(w[2]), atoi(w[3]), &g)) dev_out("@@ERR bad spot");
+            else if (!place_ok(&g, true, &why)) dev_out("@@ERR %s", why);
+            else {
+                int was = s_inv_held;
+                s_inv_held = slot;
+                place_put(&g);
+                s_inv_held = was;
+                hud_refresh();
+                dev_out("@@OK placed %s at %d,%d", w[1], g.tx, g.ty);
+            }
         } else if (strcmp(w[0], "take") == 0 && nw >= 2) {   // "take ID [N]": N (default all) of item ID out of the bag
-            uint8_t item = item_find(w[1]);
+            item_id_t item = item_find(w[1]);
             if (item == ITEM_NONE) dev_out("@@ERR no item %s", w[1]);
             else { int n = inv_remove(item, nw > 2 ? atoi(w[2]) : 9999); hud_refresh(); dev_out("@@OK took %d", n); }
         } else if (strcmp(w[0], "inv") == 0 && nw >= 2 && strcmp(w[1], "clear") == 0) {   // "inv clear [SLOT]": that slot (or the whole bag) emptied
@@ -21974,9 +26937,9 @@ static void dev_main_poll(void)
             }
         } else if (strcmp(line, "items") == 0) {   // every item in this build, then the mutations and grades
             for (int i = 1; i < item_count; i++) {
-                const item_asset_t *ia = item_get((uint8_t)i);
-                if (ia) dev_out("@@ITEM %d %s %ld %ld %d %s", i, ia->id, (long)item_sell_price((uint8_t)i), (long)item_buy_price((uint8_t)i),
-                                item_max_stack((uint8_t)i), ia->display_name ? ia->display_name : ia->id);
+                const item_asset_t *ia = item_get((item_id_t)i);
+                if (ia) dev_out("@@ITEM %d %s %ld %ld %d %s", i, ia->id, (long)item_sell_price((item_id_t)i), (long)item_buy_price((item_id_t)i),
+                                item_max_stack((item_id_t)i), ia->display_name ? ia->display_name : ia->id);
             }
             for (int k = 1; k < MUT_COUNT; k++) dev_out("@@MUT %d %s", k, item_mutation_name((uint8_t)k));
             for (int k = 1; k < QUALITY_COUNT; k++) dev_out("@@GRADE %d %s", k, item_quality_name((uint8_t)k));
@@ -21998,6 +26961,17 @@ static void dev_main_poll(void)
             s_clock_day = (uint32_t)a;
             s_clock_us  = 0;
             dev_out("@@OK day %d", a);
+        } else if (strcmp(w[0], "season") == 0 && nw == 2) {   // "season fall" (or 0..3): day 1 of it, this year (SEASONS)
+            static const char *const k_sn[4] = { "spring", "summer", "fall", "winter" };
+            int k = -1;
+            for (int i = 0; i < 4; i++) if (strcasecmp(w[1], k_sn[i]) == 0) k = i;
+            if (k < 0 && w[1][0] >= '0' && w[1][0] <= '3' && !w[1][1]) k = w[1][0] - '0';
+            if (k < 0) dev_out("@@ERR season spring|summer|fall|winter");
+            else {
+                s_clock_day = (uint32_t)((clock_year() - 1) * SEASON_DAYS * 4 + k * SEASON_DAYS);
+                s_clock_us  = 0;
+                dev_out("@@OK %s, day %lu", k_season_name[k], (unsigned long)s_clock_day);
+            }
         } else if (strcmp(line, "sleep") == 0) {   // the bed's SLEEP: to 6:00 tomorrow, the night played, saved
             if (!s_map_loaded) dev_out("@@ERR not in a game");
             else { if (s_ui_screen != UI_NONE) ui_close(); sleep_now(); dev_out("@@OK day %lu", (unsigned long)s_clock_day); }
@@ -22010,7 +26984,7 @@ static void dev_main_poll(void)
         } else if (strcmp(line, "dev") == 0) {   // the dev switches as they are now
             dev_out("@@OK noclip=%d speed=%d clock=%d rain=%d", s_dev_noclip, s_dev_speed, s_clock_x, s_rain_force);
         } else if (strcmp(w[0], "photo") == 0 && nw >= 2) {   // a test photo item: ITEM's art, sellable $100, maybe a LEGENDARY trait
-            uint8_t src = item_find(w[1]);
+            item_id_t src = item_find(w[1]);
             const item_asset_t *sa = item_get(src);
             const legendary_t  *lg = nw >= 3 ? legendary_find(w[2]) : NULL;
             if (src == ITEM_NONE || !sa || !sa->passive.frame_count) dev_out("@@ERR no item %s", w[1]);
@@ -22022,7 +26996,7 @@ static void dev_main_poll(void)
                 int n = 1;
                 if (lg) at[n++] = (item_attr_t){ lg->id, (int32_t)lg->mult * 100 };
                 if (icon) memcpy(icon, sa->passive.pixels, px * sizeof(uint16_t));
-                uint8_t it = icon ? item_add_photo(item_name(src), icon, sa->passive.w, sa->passive.h, at, (uint8_t)n) : ITEM_NONE;
+                item_id_t it = icon ? item_add_photo(item_name(src), icon, sa->passive.w, sa->passive.h, at, (uint8_t)n) : ITEM_NONE;
                 if (it == ITEM_NONE) { heap_caps_free(icon); dev_out("@@ERR couldn't make it"); }
                 else { inv_add(it, 1); hud_refresh(); dev_out("@@OK %s sells for $%ld", item_get(it)->id, (long)item_sell_price(it)); }
             }
@@ -22084,6 +27058,8 @@ static void dev_main_poll(void)
             fish_dev_cmd(line + 4);
         } else if (strncmp(line, "animal", 6) == 0) {
             ranch_dev_cmd(line + 6);
+        } else if (strncmp(line, "craft", 5) == 0) {
+            craft_dev_cmd(line + 5);
         } else {
             dev_out("@@ERR unknown: %s", line);
         }
@@ -22176,6 +27152,7 @@ static void game_task(void *arg)
         for (;;) {
             update_input();
             tp_travel();              // a teleporter was stepped on: load its map here, at the boot load's stack depth
+            season_tick();            // a new season: its map art loads here too (SEASONS)
 #if DEV_LINK_ENABLED
             dev_travel();             // ...or a goto sent over USB (DEV LINK)
 #endif
@@ -22193,7 +27170,7 @@ void app_main(void){
     ESP_ERROR_CHECK(nvs_flash_init());
     s_hotbar_invert = cfg_get_flag(CFG_KEY_HOTBAR_TOP);
     s_hotbar_y      = s_hotbar_invert ? HOTBAR_Y_TOP : HOTBAR_Y_BOTTOM;
-    character_load_choice();   // the character picked in Customize
+    outfit_load();             // the outfit picked in Customize (WARDROBE)
     build_player_frames();
 
     // The game (and the hardware it sets up, the panel included — see

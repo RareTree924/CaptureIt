@@ -3,7 +3,7 @@
 // One animal = what walks about below + the item "wooly_rabbit" that lets it out.
 // 24 frames of 16x16, babies for 30 days; gives wool every 4 days it's fed (dropped).
 // Everything here is const: it stays in flash (no RAM). RGB565, 0x0000 = see-through.
-// ANIMALS-EDITOR {"name":"Wooly Rabbit","fw":16,"fh":16,"frames":24,"bare":false,"colours":[{"name":"","bare":false,"baby":true,"product":""}],"growDays":30,"mirror":false,"seqs":{"down":[0,1,2,3],"right":[4,5,6,7],"up":[8,9,10,11],"left":[12,13,14,15],"eat":[16,17,18,19],"sleep":[20,21,22,23]},"product":"wool","days":4,"chance":100,"tool":"","rare":"rabbits_foot","rareChance":10,"eats":2,"speed":4,"sound":"rabbit","price":15000,"iconW":15,"iconH":16,"iconAuto":true}
+// ANIMALS-EDITOR {"name":"Wooly Rabbit","fw":16,"fh":16,"frames":24,"bare":false,"colours":[{"name":"","bare":false,"baby":true,"product":""}],"growDays":30,"mirror":false,"seqs":{"down":[0,1,2,3],"right":[4,5,6,7],"up":[8,9,10,11],"left":[12,13,14,15],"eat":[16,17,18,19],"sleep":[20,21,22,23]},"product":"wool","days":4,"chance":100,"tool":"","rare":"rabbits_foot","rareChance":10,"eats":2,"speed":4,"sound":"rabbit","price":15000,"iconW":15,"iconH":16,"iconAuto":true,"house":"coop"}
 #include "items.h"
 #include "animals.h"
 
@@ -1060,6 +1060,7 @@ const animal_def_t k_animal_wooly_rabbit = {
     .variant_products = NULL,
     .frames_baby = k_animal_wooly_rabbit_baby,
     .grow_days = 30,
+    .house = "coop",   // the farm building it lives in ("" = none: outdoors, where it's let out)
 };
 
 // The item that lets it out: hold it and tap open ground. The Ranch shop sells it for 15000.

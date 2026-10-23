@@ -1,7 +1,7 @@
 # Animals
 
 Every `.c` file in this folder is one farm animal, saved by the Game Tools
-**Animals Editor** (gameTools.html → Animals Editor). The file name is the
+**Farm** tab → **Animals** (gameTools.html). The file name is the
 animal's id (`cow.c` → animal `"cow"`), and each file also makes the item of
 the same id that lets the animal out (the Ranch shop sells it). Don't rename
 files by hand, and don't give an item in `../items/` the same id (the build
@@ -27,3 +27,12 @@ The products, hay and tools are ordinary items in `../items/` (egg, milk,
 goat_milk, wool, truffle, rabbits_foot, hay, scythe, shears, milk_pail,
 grass_starter) with placeholder art — open them in the Item Editor to give
 them real art. See `main/animals.h` for what the editor writes.
+
+Homes (Stardew's barns and coops): an animal with "Lives in a barn" (or coop)
+needs a farm building of that kind with room — made in the Farm tab → Barns,
+coops & silos, sold in the Build shop. Let it out near one (or tap the
+building, or let it out inside), and from then on it sleeps in it, walks out of
+its animal door in the morning when that's open (tap the door to open or shut
+it), comes back at 5 pm, and at night eats hay from the troughs inside if it
+found no grass. cow, goat, sheep and pig live in a barn; wooly_rabbit in a coop.
+Grass grows back by itself on ground ticked "Grassy" in the Map Editor.

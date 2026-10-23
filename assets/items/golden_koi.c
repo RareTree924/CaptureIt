@@ -38,6 +38,7 @@ static const item_attr_t k_golden_koi_attrs[] = {
     { "fish_max", 32 },
     { "fish_tier", 5 },
     { "mut", 300 },
+    { "fish_seasons", 1 },
 };
 
 const item_asset_t k_item_golden_koi = {
@@ -47,5 +48,5 @@ const item_asset_t k_item_golden_koi = {
     .passive = { .w=16, .h=16, .frame_count=1, .interval_ms=150, .loop_count=-1, .pixels=k_golden_koi_passive_pixels },
     .use = { .frame_count = 0 },
     .attrs = k_golden_koi_attrs,
-    .attr_count = 9,
+    .attr_count = 10,
 };

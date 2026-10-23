@@ -5,16 +5,14 @@ named after the PNG file (sanitized to a valid C identifier):
 
   <in-dir>/*.png                    sprites, by file name ("char_wave_1")
   <in-dir>/ui/*.png                 title screen art, as "ui_<name>" ("ui_title_sky")
-  <in-dir>/characters/<who>/*.png   one folder per playable character, each
-                                    holding that character's walking and holding
-                                    frames (char_down_1.png ... char_held_right_4.png)
+  <in-dir>/wardrobe/**/*.png        everyone's looks, in layers (bodies, hair, shirts...):
+                                    not converted here but by wardrobe.py, into wardrobe_gen.h
   <in-dir>/fx/*.png                 effects drawn see-through (rain), as "fx_<name>":
                                     the RGB565 pixels plus a second array, fx_<name>_a,
                                     with each pixel's alpha (0 = not drawn, 255 = solid)
 
-sprites_gen.h then includes them all and lists them in two tables:
-k_sprite_assets (sprites + ui art, by name) and k_character_assets (one entry
-per character folder, in name order, each with its own list of frames).
+sprites_gen.h then includes them all (and wardrobe_gen.h) and lists them in
+k_sprite_assets (sprites + ui art, by name).
 
 Run automatically by CMake before every build (see main/CMakeLists.txt)
 -- you should never need to run this by hand.
@@ -26,6 +24,8 @@ import re
 import sys
 import argparse
 from PIL import Image
+
+import wardrobe    # (next to this script) everyone's looks: assets/wardrobe/ -> wardrobe_gen.h
 
 
 def sanitize(name: str) -> str:
@@ -142,23 +142,7 @@ def main():
         n, _, _ = convert_fx(os.path.join(args.in_dir, 'fx', fname), args.out_dir, 'fx_' + sanitize(os.path.splitext(fname)[0]))
         fx.append(n)
 
-    characters = []   # (folder name, C name of its table, [(C name, lookup name, w, h)])
-    char_root = os.path.join(args.in_dir, 'characters')
-    if os.path.isdir(char_root):
-        for who in sorted(os.listdir(char_root)):
-            folder = os.path.join(char_root, who)
-            if not os.path.isdir(folder):
-                continue
-            frames = []
-            for fname in pngs(folder):
-                stem = os.path.splitext(fname)[0]
-                n, w, h = convert_one(os.path.join(folder, fname), args.out_dir,
-                                      'chr_' + sanitize(who) + '__' + sanitize(stem))
-                frames.append((n, sanitize(stem), w, h))
-            if frames:
-                characters.append((who, 'k_chr_' + sanitize(who), frames))
-            else:
-                print(f'characters/{who}: no PNGs - skipped')
+    ward = wardrobe.emit(args.out_dir, os.path.join(args.in_dir, 'wardrobe'))
 
     # One umbrella header so main.c only needs a single #include for everything,
     # plus name -> pixels tables so code can look art up by file name
@@ -169,11 +153,9 @@ def main():
             '#include <stdint.h>']
     for n, _, _, _ in sprites:
         text.append(f'#include "{n}.h"')
-    for _, _, frames in characters:
-        for n, _, _, _ in frames:
-            text.append(f'#include "{n}.h"')
     for n in fx:
         text.append(f'#include "{n}.h"')
+    text.append('#include "wardrobe_gen.h"')
     text += ['',
              'typedef struct { const char *name; const uint16_t *pixels; uint16_t w, h; } sprite_asset_t;',
              '',
@@ -182,24 +164,11 @@ def main():
     for n, look, _, _ in sprites:
         text.append(f'    {{ "{look}", {n}, {n.upper()}_W, {n.upper()}_H }},')
     text += ['    { NULL, NULL, 0, 0 },', '};', '']
-    for who, table, frames in characters:
-        text.append(f'// assets/characters/{who}/')
-        text.append(f'static const sprite_asset_t {table}[] = {{')
-        for n, look, _, _ in frames:
-            text.append(f'    {{ "{look}", {n}, {n.upper()}_W, {n.upper()}_H }},')
-        text += ['    { NULL, NULL, 0, 0 },', '};', '']
-    text += ['// One per folder in assets/characters/, by folder name. Ends with a NULL-name entry.',
-             'typedef struct { const char *name; const sprite_asset_t *frames; } character_asset_t;',
-             'static const character_asset_t k_character_assets[] = {']
-    for who, table, _ in characters:
-        label = who.replace(chr(92), '/').replace('"', "'")   # keep the C string literal valid
-        text.append(f'    {{ "{label}", {table} }},')
-    text += ['    { NULL, NULL },', '};', '']
     with open(os.path.join(args.out_dir, 'sprites_gen.h'), 'w') as f:
         f.write('\n'.join(text))
 
-    print(f'Converted {len(sprites)} sprite PNG(s) and {len(characters)} character(s) '
-          f'({sum(len(c[2]) for c in characters)} frames) -> {args.out_dir}')
+    print(f'Converted {len(sprites)} sprite PNG(s) and the wardrobe '
+          f'({", ".join(f"{n} {k}" for k, n in ward.items())}) -> {args.out_dir}')
 
 
 if __name__ == '__main__':

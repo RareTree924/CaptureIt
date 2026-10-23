@@ -3,7 +3,7 @@
 // One animal = what walks about below + the item "goat" that lets it out.
 // 17 frames of 32x32, babies for 30 days; gives goat_milk every 2 days it's fed (taken with the "milks" tool).
 // Everything here is const: it stays in flash (no RAM). RGB565, 0x0000 = see-through.
-// ANIMALS-EDITOR {"name":"Goat","fw":32,"fh":32,"frames":17,"bare":false,"colours":[{"name":"","bare":false,"baby":true,"product":""}],"growDays":30,"mirror":true,"seqs":{"down":[0,1,2,3],"right":[4,5,6,7],"up":[8,9,10,11],"left":[],"eat":[12,13,14,15],"sleep":[16]},"product":"goat_milk","days":2,"chance":100,"tool":"milks","rare":"large_goat_milk","rareChance":10,"eats":3,"speed":2,"sound":"goat","price":10000,"iconW":18,"iconH":24,"iconAuto":true}
+// ANIMALS-EDITOR {"name":"Goat","fw":32,"fh":32,"frames":17,"bare":false,"colours":[{"name":"","bare":false,"baby":true,"product":""}],"growDays":30,"mirror":true,"seqs":{"down":[0,1,2,3],"right":[4,5,6,7],"up":[8,9,10,11],"left":[],"eat":[12,13,14,15],"sleep":[16]},"product":"goat_milk","days":2,"chance":100,"tool":"milks","rare":"large_goat_milk","rareChance":10,"eats":3,"speed":2,"sound":"goat","price":10000,"iconW":18,"iconH":24,"iconAuto":true,"house":"barn"}
 #include "items.h"
 #include "animals.h"
 
@@ -2938,6 +2938,7 @@ const animal_def_t k_animal_goat = {
     .variant_products = NULL,
     .frames_baby = k_animal_goat_baby,
     .grow_days = 30,
+    .house = "barn",   // the farm building it lives in ("" = none: outdoors, where it's let out)
 };
 
 // The item that lets it out: hold it and tap open ground. The Ranch shop sells it for 10000.

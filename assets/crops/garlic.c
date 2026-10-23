@@ -3,7 +3,7 @@
 // One crop = the plant below + two items: "garlic" (the harvest) and "garlic_seeds" (what's planted).
 // 6 stages, ripe after 4 game days, harvested once.
 // Everything here is const: it stays in flash (no RAM). RGB565, 0x0000 = see-through.
-// CROPS-EDITOR {"name":"Garlic","stageCount":6,"growDays":4,"regrows":false,"regrowDays":3,"sellPrice":60,"seedPrice":20,"buyPrice":40,"quality":true,"solid":false,"extraChance":0,"extraMin":2,"extraMax":3,"iconW":16,"iconH":16,"seedIconW":16,"seedIconH":16}
+// CROPS-EDITOR {"name":"Garlic","stageCount":6,"growDays":4,"regrows":false,"regrowDays":3,"sellPrice":60,"seedPrice":20,"buyPrice":40,"quality":true,"solid":false,"extraChance":0,"extraMin":2,"extraMax":3,"iconW":16,"iconH":16,"seedIconW":16,"seedIconH":16,"seasons":12}
 #include "items.h"
 #include "crops.h"
 
@@ -317,7 +317,7 @@ const item_asset_t k_item_garlic = {
     .attr_count = 2,
 };
 
-// The seed packet: hold it and tap a free tile to plant. Shops sell it for 40.
+// The seed packet: hold it and tap a free tile to plant (Fall, Winter). Shops sell it for 40.
 static const uint16_t k_garlic_seeds_icon_pixels[256] = {
     0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
     0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
@@ -345,6 +345,7 @@ static const uint16_t k_garlic_seeds_icon_pixels[256] = {
 static const item_attr_t k_garlic_seeds_attrs[] = {
     { "sellable", 20 },
     { "buyable", 40 },
+    { "season", 12 },
 };
 const item_asset_t k_item_garlic_seeds = {
     .id = "garlic_seeds",
@@ -353,5 +354,5 @@ const item_asset_t k_item_garlic_seeds = {
     .passive = { .w=16, .h=16, .frame_count=1, .interval_ms=150, .loop_count=-1, .pixels=k_garlic_seeds_icon_pixels },
     .use = { .frame_count = 0 },
     .attrs = k_garlic_seeds_attrs,
-    .attr_count = 2,
+    .attr_count = 3,
 };

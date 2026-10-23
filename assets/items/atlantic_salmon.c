@@ -35,6 +35,7 @@ static const item_attr_t k_atlantic_salmon_attrs[] = {
     { "fish_min", 20 },
     { "fish_max", 40 },
     { "fish_tier", 2 },
+    { "fish_seasons", 5 },
 };
 
 const item_asset_t k_item_atlantic_salmon = {
@@ -44,5 +45,5 @@ const item_asset_t k_item_atlantic_salmon = {
     .passive = { .w=16, .h=16, .frame_count=1, .interval_ms=150, .loop_count=-1, .pixels=k_atlantic_salmon_passive_pixels },
     .use = { .frame_count = 0 },
     .attrs = k_atlantic_salmon_attrs,
-    .attr_count = 6,
+    .attr_count = 7,
 };

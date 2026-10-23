@@ -3,7 +3,7 @@
 // One crop = the plant below + two items: "rhubarb" (the harvest) and "rhubarb_seeds" (what's planted).
 // 7 stages, ripe after 13 game days, harvested once.
 // Everything here is const: it stays in flash (no RAM). RGB565, 0x0000 = see-through.
-// CROPS-EDITOR {"name":"Rhubarb","stageCount":7,"growDays":13,"regrows":false,"regrowDays":3,"sellPrice":220,"seedPrice":50,"buyPrice":100,"quality":true,"solid":false,"extraChance":0,"extraMin":2,"extraMax":3,"iconW":16,"iconH":16,"seedIconW":16,"seedIconH":16}
+// CROPS-EDITOR {"name":"Rhubarb","stageCount":7,"growDays":13,"regrows":false,"regrowDays":3,"sellPrice":220,"seedPrice":50,"buyPrice":100,"quality":true,"solid":false,"extraChance":0,"extraMin":2,"extraMax":3,"iconW":16,"iconH":16,"seedIconW":16,"seedIconH":16,"seasons":1}
 #include "items.h"
 #include "crops.h"
 
@@ -360,7 +360,7 @@ const item_asset_t k_item_rhubarb = {
     .attr_count = 2,
 };
 
-// The seed packet: hold it and tap a free tile to plant. Shops sell it for 100.
+// The seed packet: hold it and tap a free tile to plant (Spring). Shops sell it for 100.
 static const uint16_t k_rhubarb_seeds_icon_pixels[256] = {
     0x0000, 0x0000, 0x0000, 0x0000, 0x4800, 0x4800, 0x4800, 0x4800, 0x4800, 0x4800, 0x4800, 0x4800,
     0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x4800, 0xfe55, 0xfcb2, 0xe3ae, 0xe3ae,
@@ -388,6 +388,7 @@ static const uint16_t k_rhubarb_seeds_icon_pixels[256] = {
 static const item_attr_t k_rhubarb_seeds_attrs[] = {
     { "sellable", 50 },
     { "buyable", 100 },
+    { "season", 1 },
 };
 const item_asset_t k_item_rhubarb_seeds = {
     .id = "rhubarb_seeds",
@@ -396,5 +397,5 @@ const item_asset_t k_item_rhubarb_seeds = {
     .passive = { .w=16, .h=16, .frame_count=1, .interval_ms=150, .loop_count=-1, .pixels=k_rhubarb_seeds_icon_pixels },
     .use = { .frame_count = 0 },
     .attrs = k_rhubarb_seeds_attrs,
-    .attr_count = 2,
+    .attr_count = 3,
 };

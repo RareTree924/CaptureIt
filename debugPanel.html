@@ -262,6 +262,12 @@ textarea#fileText { width: 100%; height: 380px; font: 12px/1.4 var(--mono); resi
           </div>
           <div class="hint">Quality ★: silver / gold / emerald. Mutation shown as its first letters. 💧 = wet.</div>
         </div>
+        <div class="card stack">
+          <div class="row"><h2 style="margin:0">Crafting</h2><div class="grow"></div><button class="small" onclick="craftList()">Refresh</button></div>
+          <div class="row"><button onclick="act('craft open')">Open the crafting tab</button><button onclick="act('give wood 50'); act('give hay 20')">Give a scarecrow's ingredients</button></div>
+          <div id="craftList" class="mono dim">-</div>
+          <div class="hint">Every recipe: what it takes, what the bag has. Craft = from the bag, as the tab does.</div>
+        </div>
       </div>
     </div>
 
@@ -295,6 +301,10 @@ textarea#fileText { width: 100%; height: 380px; font: 12px/1.4 var(--mono); resi
             <div class="col"><label>Day (0 = the first Monday)</label><input type="number" id="dayN" min="0" value="1"></div>
             <div class="col"><label>&nbsp;</label><button onclick="act('day '+dayN.value)">Set day</button></div>
             <div class="col"><label>&nbsp;</label><button class="primary" onclick="act('sleep')">Sleep → 6:00 tomorrow</button></div>
+          </div>
+          <div class="row">
+            <button onclick="act('season spring')">Spring 1</button><button onclick="act('season summer')">Summer 1</button>
+            <button onclick="act('season fall')">Fall 1</button><button onclick="act('season winter')">Winter 1</button>
           </div>
           <div class="col"><label>Clock speed (game minutes per real second)</label>
             <div class="row" id="clockBtns">
@@ -353,6 +363,11 @@ textarea#fileText { width: 100%; height: 380px; font: 12px/1.4 var(--mono); resi
             <button onclick="act('crops grow 1').then(loadCrops)">+1 day of growth</button>
             <button onclick="act('crops water').then(loadCrops)">💧 Water all farmland</button>
           </div>
+          <div class="row">
+            <button onclick="act('hour 6').then(() => act('crops morning')).then(loadCrops)">🌅 6:00 again (sprinklers spray, crows 4%)</button>
+            <button onclick="act('crops crows').then(loadCrops)">🐦 Crows eat every unguarded crop</button>
+          </div>
+          <div class="hint">Sprinklers and the scarecrow aren't sold yet (scarecrow: Build shop) — give bronze_sprinkler / silver_sprinkler / gold_sprinkler / emerald_sprinkler / scarecrow from Items, then place them. 💦 = picked now it comes out Wet.</div>
           <div id="cropTable" class="dim">-</div>
         </div>
         <div class="card stack">
@@ -380,6 +395,17 @@ textarea#fileText { width: 100%; height: 380px; font: 12px/1.4 var(--mono); resi
             <div class="col"><label>&nbsp;</label><button onclick="act(`animal grass ${gX.value} ${gY.value} ${gN.value}`)">Set grass</button></div>
           </div>
           <div id="anTable" class="dim">-</div>
+        </div>
+        <div class="card stack">
+          <div class="row"><h2 style="margin:0">Barns, coops &amp; silos</h2><div class="grow"></div><button class="small" onclick="loadHerd()">Refresh</button></div>
+          <div class="hint">Every animal that lives in a barn or coop (in farm.txt — on any map), and every barn and coop. Animals go out of an open animal door from 6:00, home at 5 pm, and are fetched in at 7 pm.</div>
+          <div class="row">
+            <div class="col"><label>Hay in the silos</label><input type="number" id="siloN" min="0" max="9999" value="240" style="width:80px"></div>
+            <div class="col"><label>&nbsp;</label><button onclick="act(`animal silo ${siloN.value}`).then(loadHerd)">Set</button></div>
+            <div class="col"><label>&nbsp;</label><button onclick="act('animal pipes', { end: ['@@END', '@@ERR'] }).then(loadHerd)">Check pipes here</button></div>
+          </div>
+          <div id="houseTable" class="dim">-</div>
+          <div id="herdTable" class="dim">-</div>
         </div>
       </div>
     </div>
@@ -820,9 +846,10 @@ async function loadCrops() {
     const p = l.split(' '), k = kvOf(p);
     const name = ((catalog.crops.find(c => c.id === p[2]) || {}).name) || p[2];
     return [`<img src="${iconOf(p[2])}" style="width:20px;height:20px;image-rendering:pixelated;vertical-align:middle"> ${esc(name)}`, k.tile,
-      `${k.grown}/${k.need}${+k.grown >= +k.need ? ' <b style="color:var(--good)">ripe</b>' : ''}`, k.watered === '1' ? '💧' : 'dry', k.picked === '1' ? 'regrowing' : ''];
+      `${k.grown}/${k.need}${+k.grown >= +k.need ? ' <b style="color:var(--good)">ripe</b>' : ''}`, (k.watered === '1' ? '💧' : 'dry') + (k.wet === '1' ? ' 💦' : ''),
+      [k.sprinkled === '1' ? 'sprinkler' : '', k.guarded === '1' ? 'scarecrow' : ''].filter(Boolean).join(', '), k.picked === '1' ? 'regrowing' : ''];
   });
-  $('cropTable').innerHTML = r.ok ? table(rows, ['Crop', 'Tile', 'Grown', 'Soil', '']) : esc(answer(r));
+  $('cropTable').innerHTML = r.ok ? table(rows, ['Crop', 'Tile', 'Grown', 'Soil', 'Covered by', '']) : esc(answer(r));
 }
 async function loadMachines() {
   const r = await cmd('machines list', { quiet: true });
@@ -835,7 +862,7 @@ async function loadMachines() {
   $('machTable').innerHTML = r.ok ? table(rows, ['Machine', 'Tile', 'Making', '']) : esc(answer(r));
 }
 async function loadAnimals() {
-  const r = await cmd('animal list', { quiet: true, end: ['@@OK', '@@ERR'] });
+  const r = await cmd('animal list', { quiet: true, end: ['@@END', '@@ERR'] });
   const rows = (r.lines || []).filter(l => l.startsWith('@@ANIMAL ')).map(l => {
     const p = l.split(' '), k = kvOf(p), a = catalog.animals.find(x => x.id === p[2]) || { name: p[2], colours: [] };
     return [esc(a.name), esc(a.colours[+k.variant] || k.variant), k.baby === '1' ? 'baby' : 'adult', k.tile, k.fed === '1' ? '✓' : '✗',
@@ -843,6 +870,25 @@ async function loadAnimals() {
   });
   const sum = (r.lines || []).find(l => l.startsWith('@@OK'));
   $('anTable').innerHTML = table(rows, ['Animal', 'Colour', 'Age', 'Tile', 'Fed', 'Product']) + (sum ? `<div class="hint" style="margin-top:6px">${esc(sum.slice(5))}</div>` : '');
+}
+async function loadHerd() {
+  const r = await cmd('animal herd', { quiet: true, end: ['@@END', '@@ERR'] });
+  const lines = r.lines || [];
+  const houses = lines.filter(l => l.startsWith('@@HOUSE ')).map(l => {
+    const p = l.split(' '), k = kvOf(p), inst = p[1], name = p[2];
+    const where = k.here === '1' ? 'on this map' : k.here === '2' ? 'inside it now' : '';
+    return [esc(name) + ` <span class="dim">#${inst}</span>`, k.animals, k.door === '1' ? 'open' : 'shut', `${k.hay}`, k.piped === '1' ? '✓' : '', where,
+      `<button class="small" onclick="act('animal door ${inst} ${k.door === '1' ? 0 : 1}').then(loadHerd)">${k.door === '1' ? 'Shut door' : 'Open door'}</button>
+       <button class="small" onclick="act('animal hay ${inst} ${(k.animals || '0/0').split('/')[1]}').then(loadHerd)">Fill troughs</button>`];
+  });
+  const herd = lines.filter(l => l.startsWith('@@HERD ')).map(l => {
+    const p = l.split(' '), k = kvOf(p), a = catalog.animals.find(x => x.id === p[2]) || { name: p[2], colours: [] };
+    return [esc(a.name), esc(a.colours[+k.variant] || k.variant), `#${k.home}`, k.out === '1' ? 'out' : 'in', k.body !== '-1' ? 'here' : '', k.fed === '1' ? '✓' : '✗',
+      k.ready === '1' || +k.pending > 0 ? '<b style="color:var(--good)">yes</b>' : ''];
+  });
+  const sum = lines.find(l => l.startsWith('@@OK'));
+  $('houseTable').innerHTML = table(houses, ['Building', 'Animals', 'Door', 'Troughs', 'Piped', '', '']);
+  $('herdTable').innerHTML = table(herd, ['Animal', 'Colour', 'Home', '', 'On screen', 'Fed', 'Product']) + (sum ? `<div class="hint" style="margin-top:6px">${esc(sum.slice(5))}</div>` : '');
 }
 function fillAnimals() {
   $('anKind').innerHTML = catalog.animals.map(a => `<option value="${a.id}">${esc(a.name)}</option>`).join('');
@@ -868,6 +914,18 @@ async function giveRod() {
   if (slot >= 0) act('held ' + slot); else toast('The rod went into the backpack — move it to the hotbar', true);
 }
 async function fishState() { const r = await cmd('fish', { quiet: true }); $('fishNow').textContent = answer(r); }
+// "@@CRAFT id can makes in:need:have ..." lines -> one row each, with a Craft button.
+async function craftList() {
+  const r = await cmd('craft list', { quiet: true, end: ['@@END', '@@ERR'] });
+  const rows = (r.lines || []).filter(l => l.startsWith('@@CRAFT '));
+  const box = $('craftList');
+  if (!rows.length) { box.textContent = 'No recipes (or the board isn’t answering).'; return; }
+  box.innerHTML = rows.map(l => {
+    const [, id, can, makes, ...ins] = l.split(' ');
+    const need = ins.map(x => { const [i, n, h] = x.split(':'); return `<span style="color:${+h >= +n ? '' : '#ff8a80'}">${esc(i)} ${h}/${n}</span>`; }).join(' + ');
+    return `<div class="row"><b>${esc(id)}</b>${+makes > 1 ? ' x' + makes : ''} ← ${need}<div class="grow"></div><button class="small" ${can === '1' ? '' : 'disabled'} onclick="act('craft ${esc(id)}').then(craftList)">Craft</button></div>`;
+  }).join('');
+}
 
 // ---------------------------------------------------------------- market
 async function loadNpc() {
@@ -942,6 +1000,7 @@ const REF = [
   ['money N | +N | -N', 'set / add / take money (max 999999)'],
   ['hour H [M] / day N', 'set the time / the day'],
   ['clock N', 'N game minutes per real second, 0 = stopped'],
+  ['season spring|summer|fall|winter', 'jump to day 1 of that season (this year); 28 days a season'],
   ['sleep', 'like the bed: to 6:00 tomorrow, night played, saved'],
   ['save', 'Save Game now'],
   ['rain on|off|auto', 'weather'],
@@ -951,7 +1010,10 @@ const REF = [
   ['crops [list|grow [N]|water]', 'this map\'s crops'],
   ['machines [list|done]', 'this map\'s machines'],
   ['animal list|add ID [COLOUR] [adult]|feed|ready|day|grass TX TY N', 'ranch animals and grass'],
+  ['animal herd|door INST 0|1|hay INST N|silo N|pipes', 'barns, coops, silos and the animals living in them'],
+  ['place ID TX TY', 'put a prop / building from the bag down at that tile'],
   ['fish | fish hook ID | bite | catch | mut N | book', 'fishing'],
+  ['craft [list|open|ID]', 'recipes / the crafting tab / craft one from the bag'],
   ['npc list|spawn|clear|accept|minute N|lot SLOT', 'shoppers, the market, auctions'],
   ['load N | load new', 'title screen: load a save / new game'],
   ['tap X Y [MS]', 'touch the screen'],
@@ -967,7 +1029,7 @@ async function runCmdIn() {
   const line = $('cmdIn').value.trim();
   if (!line) return;
   hist.push(line); histI = hist.length; $('cmdIn').value = '';
-  const multi = /^animal( list)?$/.test(line) ? { end: ['@@OK', '@@ERR'] } : {};
+  const multi = /^animal( list| herd| pipes)?$/.test(line) ? { end: ['@@END', '@@ERR'] } : {};
   await act(line, { timeout: 60, ...multi });
 }
 $('cmdIn').addEventListener('keydown', e => {
@@ -983,7 +1045,7 @@ async function loadLog() {
 }
 
 // ---------------------------------------------------------------- tabs + start
-const TAB_LOAD = { farm: () => { loadCrops(); loadMachines(); loadAnimals(); }, fish: fishState, market: loadNpc, saves: () => { loadSlots(); ls(); }, console: loadLog, world: () => refreshDev(false) };
+const TAB_LOAD = { farm: () => { loadCrops(); loadMachines(); loadAnimals(); loadHerd(); }, fish: fishState, market: loadNpc, saves: () => { loadSlots(); ls(); }, console: loadLog, world: () => refreshDev(false) };
 for (const b of $('tabs').children) b.onclick = () => {
   for (const x of $('tabs').children) x.classList.toggle('active', x === b);
   for (const t of document.querySelectorAll('.tab')) t.classList.toggle('active', t.id === 'tab-' + b.dataset.tab);

@@ -907,6 +907,53 @@
       "files": [],
       "done": false,
       "reply": ""
+    },
+    {
+      "id": "art_lava_fishing",
+      "kind": "art",
+      "title": "Lava fishing: make the lava tile, a lava rod and lava fish",
+      "what": "Lava fishing is in (2026-10-23), but nothing uses it yet. Map Editor: on a 16x16 lava tile tick Fishable, then click its Water: button until it says Lava, and export the map. Fishing tab: give a rod 'Can fish in lava' (other rods say they'd burn up), and give some fish Water: Lava only (nothing else bites in lava). The minigame turns orange in lava.",
+      "added": "2026-10-23",
+      "files": [],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "test_seasons_crops_maps",
+      "kind": "test",
+      "title": "Try crop seasons and seasonal map art on the board",
+      "what": "Crops now have seasons (28 days each, the same as the fish). Check: the clock shows e.g. 'Mon Spr 12'. Out-of-season seeds can't be planted, and the Seed shop only sells in-season packets. Plant potatoes in spring, then dev 'season summer' and sleep: they wither, with a message (inside a building they don't). Seasonal map art: give a tile Seasons… art in the Map Editor, export (it also writes <map>.winter.map etc.), copy everything to the card's map folder, then dev 'season winter' while on that map: it reloads in its winter look and the player stays put. The debug panel has Spring 1 / Summer 1 / Fall 1 / Winter 1 buttons.",
+      "added": "2026-10-23",
+      "files": [
+        "crops/potato.c"
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "decision_crop_seasons",
+      "kind": "decision",
+      "title": "Crop seasons: check Claude's picks",
+      "what": "Claude picked each crop's seasons. Spring: parsnip, potato, cauliflower, green bean, rhubarb, radish. Summer: blueberry, hot pepper, melon, tomato, wheat. Fall: radish, wheat, garlic, kale. Winter: garlic, kale. Change any of them in the Crops Editor's 'Grows in' boxes.",
+      "added": "2026-10-23",
+      "files": [
+        "crops/garlic.c",
+        "crops/kale.c",
+        "crops/radish.c",
+        "crops/wheat.c"
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "test_general_store",
+      "kind": "test",
+      "title": "Try the General store and the Shop Editor",
+      "what": "Any item with a price is now for sale. Put the new 'General store' action on a map object (Map Editor › Actions…). In the Shop Editor tab, tick a few items, set prices, Save changes, then rebuild. Each shop shows a tab for every counter with stock (up to 5: SEEDS, BUILD, RANCH, FISH, GOODS). With 4 or more tabs, the money moves to the footer; check that it looks right.",
+      "added": "2026-10-23",
+      "files": [],
+      "done": false,
+      "reply": ""
     }
   ]
 }

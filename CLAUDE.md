@@ -33,6 +33,7 @@ and JS are checked in other ways (see *Testing*).
 | `tools/make_menu_art.py` | Generates the title screen art into `assets/ui/` (`--preview`). The strand anchors it prints must match `k_title_strands[]` in main.c. |
 | `tools/gemini_test.py`, `ebay_test.py`, `sam_test.py` | PC tests of the CAM's online APIs. `tools/gemini_key.txt` holds a real key and is gitignored. Never print or commit keys. |
 | `docs/STARDEW_PLAN.md` | The original plan/feasibility study for the Stardew features (2026-09-30). |
+| `docs/SEASONS.md`, `docs/LAVA_AND_SHOPS.md`, `docs/FEATURE_IDEAS.md` | How seasons (crops, seasonal map art), lava fishing and the General store / Shop Editor work, and a list of feature ideas. |
 | `partitions.csv` | 16 MB flash: nvs, one 15.9 MB factory app (no OTA), coredump. |
 | `.vscode/tasks.json` | Old build/flash tasks that point to `C:\esp\v6.1` and COM7. They are stale; use the commands below instead. |
 
@@ -68,6 +69,7 @@ TITLE SCREEN (Customize; its Save / Load = characters on the SD card) · GAME ME
 - **SD card** = drive **`W:`** (label "Absolute") when it's in the PC. Older notes say `D:`, which is the same card; the reader
   used to be D:. Check with `Get-Volume` if unsure. The game reads everything from `/sdcard/CaptureIt/` (`W:\CaptureIt\`):
   - `maps/<name>/<name>.map` + night files `.n1`–`.n6`. A map **must** be in its own folder; maps exported flat into `maps/` won't load. A new game starts on `meadows`.
+    Seasonal art: `<name>.<spring|summer|fall|winter>.map` + its own `.n1`–`.n6`, loaded instead in that season (main.c SEASONS, `season_map_path()`); same map name and save.
   - `characters/char1.txt`…`char6.txt`: outfits saved from Customize › Save (text, wardrobe part names + colours).
   - `saves/save1`…`save6/` (world.txt, map `.sav` files, buildings.txt, farm.txt, photos.bin, fishbook.txt, ledger.csv, market.txt, sold.txt).
   - `sounds/sound effects/*.wav` must be **16-bit mono 44.1 kHz** (the mixer doesn't resample), and are named without `.wav` in the editor.
@@ -188,9 +190,11 @@ Testing rules:
   (pond 1 / river 2 / ocean 4 — the Map Editor's "Water:" on a Fishable asset = TILE_FLAG_RIVER 0x10 / TILE_FLAG_OCEAN 0x20), `fish_map:<name>`,
   `fish_depth`, `fish_level`, `fish_once`, `fish_trait` (minigame tricks), crab pots `pot`/`pot_*`. Gear effects `rod_`/`bait_`/`tackle_` + name.
   The line's bait/tackle (s_rig) and fishing xp are in world.txt (`rig ...`, `fishxp`). Crab pots reuse placed_t.mk_* (MACHINES) for their catch.
-  `assets/fishing/settings.c` (k_fishing_cfg) must exist — the link needs it. Item ids are `item_id_t` (uint16_t, items.h) since 2026-10-20 — never store one in a uint8_t.
+  Lava is a 4th water kind: `fish_water` bit 8 = TILE_FLAG_LAVA 0x40 (the Map Editor's Water: Lava); only `rod_lava` rods cast into it and nothing bites there without bit 8. `assets/fishing/settings.c` (k_fishing_cfg) must exist — the link needs it. Item ids are `item_id_t` (uint16_t, items.h) since 2026-10-20 — never store one in a uint8_t.
+- **Seasons** (main.c SEASONS, before FARMING): SEASON_DAYS 28, `clock_season()`. Crops: a seed packet's `season` bits (Crops Editor "Grows in") — planted / sold only in season, withers when its season ends (not in building interiors). Assets can have per-season art (Map Editor › Seasons…, `asset.seasons`); Export writes `<map>.<season>.map`. Dev link `season spring|summer|fall|winter`.
+- **Shops**: any item with `buyable` is for sale; `shop N` (1 Seeds, 2 Build, 3 Ranch, 4 Fish, 5 General) picks the counter, else `shop_kind_of()`'s usual one. The General store is the `general_shop` action. Game Tools' Shop Editor tab edits prices/counters for many items at once.
 - **Maps**: Map Editor → Export → `W:\CaptureIt\maps\<name>\<name>.map` (the SD card). The current format is **MAP14** (magic "MAPE"); older ones
-  still load. The format notes are in main.c's MAP LOADING banner and around the breakable notes. Tile flags: Tillable, Buildable `0x02`, Fishable `0x04`, Grassy `0x08` (wild grass grows back).
+  still load. The format notes are in main.c's MAP LOADING banner and around the breakable notes. Tile flags: Tillable, Buildable `0x02`, Fishable `0x04`, Grassy `0x08` (wild grass grows back), River `0x10`, Ocean `0x20`, Lava `0x40`.
   A changed sound bundle needs the map re-exported.
 - The Asset Explorer in the Map Editor links to the real `assets/` folder. New map art goes in `assets/map/` (not compiled in).
 - **Some editor code mirrors C code**: FSH_TRAITS / FSH_FX / FSH_CFG / fshCondOk / fshWeight / fshFx (main.c FISHING, items.h), MUTATIONS / mutPx / mutOdds, ROD_STATS, PROP_ART_MAX (64), ITEM_SPRINKLER_MAX / ITEM_SCARECROW_MAX (6 / 15), ITEM_CRAFT_IN_MAX (6) and BUILTIN_ACTIONS in gameTools.html

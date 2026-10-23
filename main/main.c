@@ -13707,7 +13707,8 @@ static void update_inventory_touch(const input_frame_t *in)
 #define SHOP_CARD_H   44
 #define SHOP_TAB_W    66                     // the SEEDS / BUILD / RANCH tabs in the header...
 #define SHOP_TAB_W3   56                     // ...narrower when there are three
-#define SHOP_TAB_W4   50                     // ...and four
+#define SHOP_TAB_W4   50                     // ...four (the money moves down to the footer)...
+#define SHOP_TAB_W5   44                     // ...or five
 #define SHOP_TAB_X    (SHOP_PANEL_X + INV_BTN + 22)
 
 static item_id_t s_shop_items[SHOP_MAX];   // what's for sale
@@ -13742,7 +13743,13 @@ static bool shop_show(void);
 // asset action ("seed_shop", "build_shop", "ranch_shop") opens its own; the
 // counters that have stock get tabs in the header to switch between them, so
 // any shop on a map sells the animals too.
-enum { SHOP_SEEDS = 0, SHOP_BUILD, SHOP_RANCH, SHOP_FISH, SHOP_KINDS };
+// GOODS (the General store) sells anything else with a price, and an item's
+// "shop N" (items.h ITEM_ATTR_SHOP) puts it on counter N instead, so any item
+// can be sold anywhere (Game Tools' Item Editor / Shop Editor).
+enum { SHOP_SEEDS = 0, SHOP_BUILD, SHOP_RANCH, SHOP_FISH, SHOP_GENERAL, SHOP_KINDS };
+static const char *const k_shop_title[SHOP_KINDS] = { "SEED SHOP", "BUILD SHOP", "RANCH", "FISH SHOP", "GENERAL STORE" };
+static const char *const k_shop_tab[SHOP_KINDS]   = { "SEEDS", "BUILD", "RANCH", "FISH", "GOODS" };
+static const char *const k_shop_who[SHOP_KINDS]   = { "Seed shop", "Build shop", "Ranch", "Fish shop", "General store" };
 
 // The fish shop sells it (Stardew's Willy): a rod, bait, tackle or a crab pot (FISHING).
 static bool fish_shop_sells(item_id_t item)
@@ -13756,38 +13763,49 @@ static int  animal_of_item(item_id_t item);   // ANIMALS section: the s_animals[
 static bool ranch_sells(item_id_t item);      // ...hay, grass starter, an animal tool
 static void ranch_shop_card(item_id_t item, char *line, size_t n);
 
-// Fills out[] with what counter `kind` sells. Returns how many.
+// The counter item is sold on (SHOP_*), or -1: it has no price.
+static int shop_kind_of(item_id_t item)
+{
+    if (item_buy_price(item) <= 0) return -1;
+    int k = (int)item_attr(item, ITEM_ATTR_SHOP, 0);
+    if (k >= 1 && k <= SHOP_KINDS) return k - 1;   // put on a counter by hand (Item Editor / Shop Editor)
+    if (animal_of_item(item) >= 0 || ranch_sells(item)) return SHOP_RANCH;
+    if (ITEM_TILLS(item) || ITEM_WATERS(item) || crop_of_seed(item) >= 0) return SHOP_SEEDS;
+    if (fish_shop_sells(item)) return SHOP_FISH;
+    if (place_item_kind(item) != PLACE_NONE) return SHOP_BUILD;
+    return SHOP_GENERAL;
+}
+
+// Fills out[] with what counter `kind` sells. Returns how many. FISH: rods,
+// bait, tackle, crab pots, then the rest; RANCH: the animals first; SEEDS:
+// the farming tools, then the packets in crop order (in season only).
 static int shop_stock(int kind, item_id_t *out)
 {
     int n = 0;
-    if (kind == SHOP_FISH) {
-        for (int pass = 0; pass < 4; pass++)   // rods, bait, tackle, crab pots
-            for (int i = 1; i < item_count && n < SHOP_MAX; i++) {
-                item_id_t it = (item_id_t)i;
-                bool want = pass == 0 ? item_attr(it, ITEM_ATTR_ROD, 0) > 0 : pass == 1 ? item_attr(it, ITEM_ATTR_BAIT, 0) > 0 :
-                            pass == 2 ? item_attr(it, ITEM_ATTR_TACKLE, 0) > 0 && item_attr(it, ITEM_ATTR_BAIT, 0) <= 0 :
-                                        item_attr(it, ITEM_ATTR_CRAB_POT, 0) > 0;
-                if (want && item_buy_price(it) > 0 && (pass < 3 || item_attr(it, ITEM_ATTR_ROD, 0) <= 0)) out[n++] = it;
-            }
-    } else if (kind == SHOP_RANCH) {
-        for (int i = 1; i < item_count && n < SHOP_MAX; i++)   // the animals first
-            if (animal_of_item((item_id_t)i) >= 0 && item_buy_price((item_id_t)i) > 0) out[n++] = (item_id_t)i;
-        for (int i = 1; i < item_count && n < SHOP_MAX; i++)
-            if (animal_of_item((item_id_t)i) < 0 && ranch_sells((item_id_t)i) && item_buy_price((item_id_t)i) > 0) out[n++] = (item_id_t)i;
-    } else if (kind == SHOP_SEEDS) {
+    if (kind == SHOP_SEEDS) {
         for (int i = 1; i < item_count && n < SHOP_MAX; i++)   // farming tools with a price first (a watering can)
-            if ((ITEM_TILLS((item_id_t)i) || ITEM_WATERS((item_id_t)i)) && item_buy_price((item_id_t)i) > 0) out[n++] = (item_id_t)i;
+            if (shop_kind_of((item_id_t)i) == SHOP_SEEDS && crop_of_seed((item_id_t)i) < 0) out[n++] = (item_id_t)i;
         for (int c = 0; c < crop_count && n < SHOP_MAX; c++) {
             char id[48];
             snprintf(id, sizeof(id), "%s_seeds", s_crops[c]->id);
             item_id_t seeds = item_find(id);
             if (!season_fits(crop_seasons(c), clock_season())) continue;   // SEASONS: in-season seeds only
-            if (seeds != ITEM_NONE && item_buy_price(seeds) > 0) out[n++] = seeds;
+            if (seeds != ITEM_NONE && shop_kind_of(seeds) == SHOP_SEEDS) out[n++] = seeds;
         }
-    } else {
-        for (int i = 1; i < item_count && n < SHOP_MAX; i++)
-            if (place_item_kind((item_id_t)i) != PLACE_NONE && item_buy_price((item_id_t)i) > 0 && !fish_shop_sells((item_id_t)i)) out[n++] = (item_id_t)i;
+        return n;
     }
+    for (int pass = 0; pass < 5; pass++)
+        for (int i = 1; i < item_count && n < SHOP_MAX; i++) {
+            item_id_t it = (item_id_t)i;
+            if (shop_kind_of(it) != kind) continue;
+            int p = 4;   // which pass it's listed in
+            if (kind == SHOP_FISH)
+                p = item_attr(it, ITEM_ATTR_ROD, 0) > 0 ? 0 : item_attr(it, ITEM_ATTR_BAIT, 0) > 0 ? 1 :
+                    item_attr(it, ITEM_ATTR_TACKLE, 0) > 0 ? 2 : item_attr(it, ITEM_ATTR_CRAB_POT, 0) > 0 ? 3 : 4;
+            else if (kind == SHOP_RANCH)
+                p = animal_of_item(it) >= 0 ? 0 : 4;
+            if (p == pass) out[n++] = it;
+        }
     return n;
 }
 
@@ -13801,13 +13819,13 @@ static int shop_tab_kinds(int kinds[SHOP_KINDS])
 }
 
 // Two counters or more have something: the header shows a tab each, this wide.
-static int shop_tab_w(int n) { return n > 3 ? SHOP_TAB_W4 : n > 2 ? SHOP_TAB_W3 : SHOP_TAB_W; }
+static int shop_tab_w(int n) { return n > 4 ? SHOP_TAB_W5 : n > 3 ? SHOP_TAB_W4 : n > 2 ? SHOP_TAB_W3 : SHOP_TAB_W; }
 
 static void shop_switch(int kind)
 {
     s_shop_kind  = kind;
     s_shop_count = shop_stock(kind, s_shop_items);
-    s_shop_title = kind == SHOP_SEEDS ? "SEED SHOP" : kind == SHOP_BUILD ? "BUILD SHOP" : kind == SHOP_FISH ? "FISH SHOP" : "RANCH";
+    s_shop_title = k_shop_title[kind];
     s_shop_sel   = 0;
     s_shop_page  = 0;
 }
@@ -13828,6 +13846,7 @@ bool seed_shop_open(void)  { return shop_open_kind(SHOP_SEEDS); }
 bool build_shop_open(void) { return shop_open_kind(SHOP_BUILD); }
 bool ranch_shop_open(void) { return shop_open_kind(SHOP_RANCH); }
 bool fish_shop_open(void)  { return shop_open_kind(SHOP_FISH); }
+bool general_shop_open(void) { return shop_open_kind(SHOP_GENERAL); }
 
 // Opens the shop screen on what shop_switch() stocked.
 static bool shop_show(void)
@@ -13858,7 +13877,7 @@ static void shop_buy(int n)
     if (got == 0) { message(2000, "No room in your bag"); return; }
     money_spend(price * (uint32_t)got);
     ledger_add(false, item, QUALITY_STANDARD, got, price * (uint32_t)got, "",
-               s_shop_kind == SHOP_SEEDS ? "Seed shop" : s_shop_kind == SHOP_BUILD ? "Build shop" : s_shop_kind == SHOP_FISH ? "Fish shop" : "Ranch");
+               k_shop_who[s_shop_kind]);
     if (got > 1) message(2000, "Bought %s x%d for $%lu", item_name(item), got, (unsigned long)(price * got));
     else         message(2000, "Bought %s for $%lu", item_name(item), (unsigned long)price);
 }
@@ -13920,12 +13939,11 @@ static void shop_draw(void)
     const char *title = s_shop_title;
     int kinds[SHOP_KINDS], tabs = shop_tab_kinds(kinds), tw = shop_tab_w(tabs);
     if (tabs >= 2) {
-        static const char *const k_tab[SHOP_KINDS] = { "SEEDS", "BUILD", "RANCH", "FISH" };
         for (int k = 0; k < tabs; k++) {
             int tx = SHOP_TAB_X + k * (tw + 4);
             fill_round_rect(tx, SHOP_BTN_Y, tw, INV_BTN, 5, kinds[k] == s_shop_kind ? INV_COL_GOLD : INV_COL_SLOT_LT, 255);
             draw_round_rect(tx, SHOP_BTN_Y, tw, INV_BTN, 5, 1, INV_COL_EDGE);
-            draw_text_centered(tx, SHOP_BTN_Y + 7, tw, k_tab[kinds[k]], INV_COL_TEXT, INV_COL_SHINE);
+            draw_text_centered(tx, SHOP_BTN_Y + 7, tw, k_shop_tab[kinds[k]], INV_COL_TEXT, INV_COL_SHINE);
         }
     } else {
         draw_text_centered(px + INV_BTN + 16, py + 17, pw - 2 * (INV_BTN + 16), title, INV_COL_TEXT, INV_COL_SHINE);
@@ -13933,7 +13951,8 @@ static void shop_draw(void)
     draw_coin(px + 10 + INV_BTN / 2, SHOP_BTN_Y + INV_BTN / 2);
     draw_close_button(SHOP_CLOSE_X, SHOP_BTN_Y, INV_BTN, false, COLOR_WHITE);
     int title_right = tabs >= 2 ? SHOP_TAB_X + tabs * (tw + 4) : px + pw / 2 + text_width(title, 2) / 2;
-    inv_draw_money(SHOP_CLOSE_X - 8, SHOP_BTN_Y + INV_BTN / 2, SHOP_CLOSE_X - 8 - title_right - 8);
+    bool money_below = tabs >= 4;   // no room left in the header: the money goes in the footer
+    if (!money_below) inv_draw_money(SHOP_CLOSE_X - 8, SHOP_BTN_Y + INV_BTN / 2, SHOP_CLOSE_X - 8 - title_right - 8);
 
     // the packets on this page, each with its price (red when it's more than the money)
     int first = s_shop_page * SHOP_PAGE;
@@ -13961,9 +13980,17 @@ static void shop_draw(void)
     shop_draw_button(SHOP_BUY_X, SHOP_BTN_W, "BUY", price > 0 && money_get() >= price);
     shop_draw_button(SHOP_BUY5_X, SHOP_BTN_W, "BUY 5", price > 0 && money_get() >= price * 5);
     char hint[32];
+    int  hint_right = SHOP_BUY_X - 6;
+    if (money_below) {   // the money, right of the hint
+        char amount[12];
+        snprintf(amount, sizeof(amount), "%lu", (unsigned long)money_get());
+        int mw = text_width(amount, 1) + 16;
+        inv_draw_money(SHOP_BUY_X - 8, SHOP_FOOT_Y + SHOP_BTN_H / 2, mw);
+        hint_right -= mw + 6;
+    }
     if (pages > 1) snprintf(hint, sizeof(hint), "PAGE %d/%d", s_shop_page + 1, pages);
-    else           snprintf(hint, sizeof(hint), "TAP A PACKET");
-    draw_text_centered(text_x, SHOP_FOOT_Y + 2, SHOP_BUY_X - 6 - text_x, hint, INV_COL_TEXT, INV_COL_SHINE);
+    else           snprintf(hint, sizeof(hint), money_below ? "TAP ONE" : "TAP A PACKET");
+    draw_text_centered(text_x, SHOP_FOOT_Y + 2, hint_right - text_x, hint, INV_COL_TEXT, INV_COL_SHINE);
     shop_draw_card();
 }
 

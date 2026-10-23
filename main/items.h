@@ -69,6 +69,11 @@ int64_t             item_price_bonus_pct(item_id_t item);
 // asks this for the price.
 #define ITEM_ATTR_BUYABLE "buyable"
 int32_t             item_buy_price(item_id_t item);                        // 0 = no shop sells it
+// "shop N" puts an item with a price on one counter, whatever it is (Game Tools' Item Editor /
+// Shop Editor "Counter"): 1 Seeds, 2 Build, 3 Ranch, 4 Fish, 5 General. None = its usual one
+// (seeds and farm tools: Seeds, props: Build, animal things: Ranch, rods / bait / tackle / crab
+// pots: Fish, anything else: General).
+#define ITEM_ATTR_SHOP    "shop"
 
 // Quality (rarity): every stack has one. Most things are always Standard;
 // an item with "quality 1" (the Item Editor's "Rolls a quality" box, or the

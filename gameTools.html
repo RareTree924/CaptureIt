@@ -598,6 +598,22 @@ body.farmOn #aniEdOverlay, body.farmOn #fbdEdOverlay, body.farmOn #fncEdOverlay 
 .snCard button { min-height: auto; padding: 4px 7px; font-size: 11px; }
 #snPrevTabs button.on { background: #2f6d8c; color: #fff; }
 #snPrevCanvas { width: min(640px, 80vh); height: min(640px, 80vh); image-rendering: pixelated; border: 1px solid #555; align-self: center; }
+/* ---- Shop Editor (the Game Tools "Shop Editor" tab): the Machines Editor's layout ---- */
+#shEdOverlay { display: none; position: fixed; left: 0; right: 0; bottom: 0; top: 31px; background: #1a1a1a; z-index: 1000; align-items: flex-start; justify-content: center; overflow: auto; padding: 16px 0; box-sizing: border-box; }
+#shEdOverlay.show { display: flex; }
+#shEdPanel { background: #222; padding: 16px 18px; border-radius: 8px; border: 1px solid #444; display: flex; flex-direction: column; gap: 12px; width: min(1080px, 96vw); box-sizing: border-box; }
+#shEdPanel button { min-height: 30px; padding: 5px 11px; }
+.shBar { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; font-size: 13px; color: #ccc; }
+.shTable { width: 100%; border-collapse: collapse; font-size: 13px; color: #ddd; }
+.shTable th { text-align: left; color: #999; font-weight: normal; padding: 4px 6px; border-bottom: 1px solid #3a3a3a; position: sticky; top: 0; background: #1c1c1c; }
+.shTable td { padding: 3px 6px; border-bottom: 1px solid #2c2c2c; vertical-align: middle; }
+.shTable tr.changed td { background: rgba(255,215,107,.08); }
+.shTable tr.changed td:first-child { box-shadow: inset 3px 0 #ffd76b; }
+.shTable canvas { width: 32px; height: 32px; image-rendering: pixelated; border-radius: 3px; display: block; }
+.shTable input[type=number] { width: 80px; }
+.shTable .shWhere { font-size: 12px; color: #9ad; }
+.shTable .shSub { font-size: 11px; color: #888; }
+.shWrap { max-height: calc(100vh - 260px); overflow: auto; border: 1px solid #333; border-radius: 6px; }
 /* ---------- Game Tools: tab bar (Map Editor / Image Editor) ---------- */
 #gtBar { flex: 0 0 auto; display: flex; align-items: stretch; height: 30px; padding: 0 8px; background: #0e0e0e; border-bottom: 1px solid #000; position: relative; z-index: 1001; }
 #gtBar img { width: 16px; height: 16px; align-self: center; margin-right: 7px; }
@@ -817,6 +833,7 @@ body.farmOn #aniEdOverlay, body.farmOn #fbdEdOverlay, body.farmOn #fncEdOverlay 
   <button type="button" class="gtTab" data-tool="building">Buildings Editor</button>
   <button type="button" class="gtTab" data-tool="farm" title="Farm animals, barns, coops, silos, fences, gates and pipes">Farm</button>
   <button type="button" class="gtTab" data-tool="machine">Machines Editor</button>
+  <button type="button" class="gtTab" data-tool="shop" title="Put any item up for sale: its price and which shop counter sells it">Shop Editor</button>
   <button type="button" class="gtTab" data-tool="fishing" title="Stardew style fishing: fish, junk, crab pot catches, bait, tackle, rods — their icons, where and when they bite — and the game-wide fishing settings">Fishing</button>
   <button type="button" class="gtTab" data-tool="furniture" title="Furniture you want in the game: its name, price, pictures and what it should do — a list Claude builds from">Furniture <span id="furBadge" class="nyBadge" hidden></span></button>
   <button type="button" class="gtTab" data-tool="wardrobe" title="Who wears each piece of clothing (male, neutral, female): the shoppers dress by it, and Customize's lists go male, neutral, female">Wardrobe <span id="wgBadge" class="nyBadge" hidden></span></button>
@@ -1579,6 +1596,33 @@ body.farmOn #aniEdOverlay, body.farmOn #fbdEdOverlay, body.farmOn #fncEdOverlay 
   </div>
 </div>
 
+<div id="shEdOverlay">
+  <div id="shEdPanel">
+    <div class="itemHead">
+      <div class="itemTitle">Shop Editor</div>
+      <button type="button" id="shRescanBtn" title="Read the items folder again">Rescan</button>
+      <button type="button" id="shFolderBtn" title="The assets/items folder">Choose items folder…</button>
+    </div>
+    <div class="animCap">Put any item up for sale: tick it, give it a price and pick a counter. "Usual" sends it where it belongs (props → Build, seeds and farm tools → Seeds, animal things → Ranch, rods, bait, tackle and crab pots → Fish, anything else → General store). In game every shop has a tab for each counter with stock; put a shop on a map with an asset action (Map Editor › Actions…: Seed / Build / Ranch / Fish shop, General store). Seeds, animals, buildings and machines keep their price in their own editors.</div>
+    <div class="shBar">
+      <label>Search <input type="search" id="shFilter" placeholder="name or id" style="width:160px;"></label>
+      <label>Show <select id="shShow"><option value="all">every item</option><option value="sale">for sale</option><option value="not">not for sale</option><option value="changed">changed</option></select></label>
+      <label>Counter <select id="shCounterFilter"><option value="-1">any</option></select></label>
+      <span style="flex:1"></span>
+      <label title="Every item shown: put it up for sale at its sell price × this">Price shown items at sell price × <input type="number" id="shMult" min="0.1" max="100" step="0.1" value="2" style="width:56px;"></label>
+      <button type="button" id="shMultBtn">Apply</button>
+    </div>
+    <div class="shWrap">
+      <table class="shTable"><thead><tr><th></th><th>Item</th><th>For sale</th><th>Price</th><th>Counter</th><th>Sold at</th><th>Sells for</th></tr></thead><tbody id="shBody"></tbody></table>
+    </div>
+    <div class="row itemFoot">
+      <div id="shStatus" class="animCap"></div>
+      <button type="button" id="shRevertBtn">Undo changes</button>
+      <button type="button" id="shSaveBtn">Save changes</button>
+    </div>
+  </div>
+</div>
+
 <div id="startupOverlay">
   <div id="startupPanel">
     <h2 id="startupTitle">Load a Map</h2>
@@ -1962,8 +2006,9 @@ body.farmOn #aniEdOverlay, body.farmOn #fbdEdOverlay, body.farmOn #fncEdOverlay 
           <div class="animFields">
             <label><input type="checkbox" id="itemBuyable"> Sold in shops</label>
             <label>Price <input type="number" id="itemBuyPrice" min="1" max="999999" value="10" disabled> coins</label>
+            <label>Counter <select id="itemShopKind" disabled></select></label>
           </div>
-          <div class="animCap">A prop with a price is sold in the Build shop (the "Build shop" asset action in the Map Editor); a hoe or watering can with a price, in the Seed shop.</div>
+          <div class="animCap">Any item with a price is for sale. "Usual" puts it where it belongs: props in the Build shop, a hoe or watering can in the Seed shop, animal things at the Ranch, rods / bait / tackle / crab pots in the Fish shop, anything else in the General store — or pick a counter. Each shop is an asset action in the Map Editor; every shop has a tab for each counter with stock. The Shop Editor tab sets this for many items at once.</div>
         </div>
 
         <div class="itemCard">
@@ -9994,6 +10039,7 @@ const BUILTIN_ACTIONS = [
   { id: 'build_shop', label: 'Build shop', help: 'Opens a shop that sells every prop and building that has a price' },
   { id: 'ranch_shop', label: 'Ranch shop', help: 'Opens a shop that sells farm animals, hay, grass starter and animal tools' },
   { id: 'fish_shop', label: 'Fish shop', help: 'Opens a shop that sells fishing rods, bait, tackle and crab pots' },
+  { id: 'general_shop', label: 'General store', help: 'Opens a shop that sells any other item with a price (Item Editor / Shop Editor)' },
   { id: 'auction_house', label: 'Auction house', help: 'Opens the auction house: put things up for auction, see the bids' },
   { id: 'ledger', label: 'Ledger', help: 'Opens the ledger: everything bought and sold in the last 20 days (also ledger.csv in the save)' },
   { id: 'bed', label: 'Bed', help: 'Asks to go to bed: sleeps until 6:00 am the next morning, and crops in watered soil grow overnight' },
@@ -12901,10 +12947,14 @@ itemEl('itemBedSheetBtn').addEventListener('click', () => itemEl('itemBedSheetFi
 itemEl('itemBedSheetFile').addEventListener('change', e => { const f = e.target.files[0]; e.target.value = ''; if (f) loadItemBedSheet(f); });
 itemEl('itemBedSheetClear').addEventListener('click', () => setItemBed(itemEl('itemBed').checked, null));
 ['itemBedHead', 'itemBedFoot'].forEach(id => itemEl(id).addEventListener('input', drawItemBedPreview));
-function setItemBuyable(on, price) {
+const ITEM_SHOP_ATTR = 'shop';   // items.h ITEM_ATTR_SHOP: which counter sells it (none = its usual one)
+const SHOP_COUNTERS = ['Usual', 'Seeds', 'Build', 'Ranch', 'Fish', 'General'];   // main.c SHOP_* + 1 (0 = "usual": not written)
+SHOP_COUNTERS.forEach((n, i) => itemEl('itemShopKind').add(new Option(n, i)));
+function setItemBuyable(on, price, counter) {
   itemEl('itemBuyable').checked = on;
-  itemEl('itemBuyPrice').disabled = !on;
+  itemEl('itemBuyPrice').disabled = itemEl('itemShopKind').disabled = !on;
   if (price !== undefined) itemEl('itemBuyPrice').value = price;
+  if (counter !== undefined) itemEl('itemShopKind').value = itemClamp(counter | 0, 0, SHOP_COUNTERS.length - 1);
 }
 itemEl('itemBuyable').addEventListener('change', e => setItemBuyable(e.target.checked));
 // Crafting: the recipe that makes this item — "craft:<id>" N per ingredient and "craft_makes" N
@@ -13235,7 +13285,7 @@ itemMutRefresh();
 const ITEM_OWNED_ATTRS = () => [ITEM_SELL_ATTR, ITEM_DROP_ATTR, ITEM_QUALITY_ATTR, ITEM_BUY_ATTR, ITEM_PROP_ATTR, ITEM_PROP_ROWS_ATTR, ITEM_PROP_SOLID_ATTR, ITEM_SHELF_ATTR, ITEM_SHELF_Y_ATTR,
                                 ITEM_BED_ATTR, ITEM_BED_HEAD_ATTR, ITEM_BED_FOOT_ATTR, ITEM_AQUA_ATTR, ITEM_SPRINKLER_ATTR, ITEM_SCARECROW_ATTR, ITEM_TILLS_ATTR, ITEM_WATERS_ATTR, ITEM_WATER_MAX_ATTR, ...ITEM_RANCH_ATTRS.map(r => r[1]), ITEM_ROD_ATTR, ...ROD_STATS.map(s => s.attr), ...ITEM_FISH_ATTRS, ITEM_MUT_ATTR];
 // What the cards own (a hand-added row with one of these names is ignored): the list above, and a recipe's craft:<id> / craft_makes.
-function itemOwnsAttr(name) { return ITEM_OWNED_ATTRS().includes(name) || name.startsWith(ITEM_CRAFT_PREFIX) || name === ITEM_CRAFT_MAKES_ATTR; }
+function itemOwnsAttr(name) { return ITEM_OWNED_ATTRS().includes(name) || name === ITEM_SHOP_ATTR || name.startsWith(ITEM_CRAFT_PREFIX) || name === ITEM_CRAFT_MAKES_ATTR; }
 function readItemSellPrice() {
   if (!itemEl('itemSellable').checked) return 0;
   return itemClamp(parseInt(itemEl('itemSellPrice').value) || 1, 1, 999999);
@@ -13454,7 +13504,8 @@ function importItemC(text, id) {
   setItemProp(!!prop && prop.value > 0, rows ? rows.value : 0, !solid || solid.value !== 0);
   const shelf = p.attrs.find(a => a.name === ITEM_SHELF_ATTR), shelfY = p.attrs.find(a => a.name === ITEM_SHELF_Y_ATTR);
   setItemShelf(!!shelf && shelf.value > 0, shelf && shelf.value > 0 ? shelf.value : 2, shelfY ? shelfY.value : 0);
-  setItemBuyable(!!buy && buy.value > 0, buy && buy.value > 0 ? buy.value : 10);
+  const shopAt = p.attrs.find(a => a.name === ITEM_SHOP_ATTR);
+  setItemBuyable(!!buy && buy.value > 0, buy && buy.value > 0 ? buy.value : 10, shopAt ? shopAt.value : 0);
   const av = (n, d) => { const a = p.attrs.find(x => x.name === n); return a ? a.value : d; };
   setItemRod(av(ITEM_ROD_ATTR, 0) > 0, Object.fromEntries(ROD_STATS.map(s => [s.attr, av(s.attr, s.def)])));
   setItemFish(av(ITEM_FISH_ATTR, 0) > 0, {
@@ -13529,7 +13580,7 @@ function resetItemEditor(ask) {
   itemEl('itemWaterMax').value = 40;   // (a new can holds Stardew's basic can's 40)
   ITEM_RANCH_ATTRS.forEach(([el]) => { itemEl(el).checked = false; });
   setItemProp(false, 0, true);
-  setItemBuyable(false, 10);
+  setItemBuyable(false, 10, 0);
   setItemRod(false, {});
   setItemFish(false, ITEM_FISH_FIELDS);
   setItemMut(1);
@@ -13663,7 +13714,11 @@ async function exportItemAsset(asNew) {
   const waterMax = itemClamp(parseInt(itemEl('itemWaterMax').value) || 0, 0, 999);
   if (itemEl('itemWaters').checked && waterMax > 0) validAttrs.push({ name: ITEM_WATER_MAX_ATTR, value: waterMax });   // none = never runs dry
   ITEM_RANCH_ATTRS.forEach(([el, at]) => { if (itemEl(el).checked) validAttrs.push({ name: at, value: 1 }); });
-  if (itemEl('itemBuyable').checked) validAttrs.push({ name: ITEM_BUY_ATTR, value: itemClamp(parseInt(itemEl('itemBuyPrice').value) || 1, 1, 999999) });
+  if (itemEl('itemBuyable').checked) {
+    validAttrs.push({ name: ITEM_BUY_ATTR, value: itemClamp(parseInt(itemEl('itemBuyPrice').value) || 1, 1, 999999) });
+    const counter = itemClamp(parseInt(itemEl('itemShopKind').value) || 0, 0, SHOP_COUNTERS.length - 1);
+    if (counter) validAttrs.push({ name: ITEM_SHOP_ATTR, value: counter });   // none = its usual counter
+  }
   if (itemEl('itemRod').checked) validAttrs.push(...itemRodAttrs());
   if (itemEl('itemFish').checked) validAttrs.push(...itemFishAttrs());
   validAttrs.push(...itemMutAttrs());   // mutation chance multiplier, any item (none = x1)
@@ -21771,6 +21826,165 @@ function seasonPreviewRender() {
 </script>
 
 <script>
+// Shop Editor's icon helpers: a parsed item's first held frame as an image, drawn whole-pixel scaled and centred.
+function shBundleImg(b) { return b ? cropUnpack(b.pixels.slice(0, b.w * b.h), b.w, b.h) : null; }
+function shDrawIcon(cv, img) {
+  const g = cv.getContext('2d');
+  for (let y = 0; y < cv.height; y += 8)
+    for (let x = 0; x < cv.width; x += 8) { g.fillStyle = ((x + y) / 8) % 2 ? '#1d1d1d' : '#262626'; g.fillRect(x, y, 8, 8); }
+  if (!img) return;
+  const scale = Math.max(1, Math.floor(Math.min(cv.width / img.w, cv.height / img.h))), tmp = document.createElement('canvas');
+  tmp.width = img.w; tmp.height = img.h;
+  tmp.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(img.rgba), img.w, img.h), 0, 0);
+  g.imageSmoothingEnabled = false;
+  g.drawImage(tmp, Math.floor((cv.width - img.w * scale) / 2), Math.floor((cv.height - img.h * scale) / 2), img.w * scale, img.h * scale);
+}
+// ================================================================
+//  SHOP EDITOR — the Game Tools "Shop Editor" tab. Every item in
+//  assets/items/ in one table: tick "For sale", give it a price ("buyable")
+//  and a counter ("shop", items.h ITEM_ATTR_SHOP; Usual = not written).
+//  Save rewrites only the attribute table of each changed .c (everything
+//  else in the file stays as it was).
+// ================================================================
+const shEl = id => document.getElementById(id);
+let shRows = [];   // [{ id, name, icon, attrs, handle, text, sale, price, counter, orig: { sale, price, counter } }]
+
+// main.c shop_kind_of() for an item without "shop": its usual counter (1..5).
+function shUsualCounter(attrs) {
+  const has = n => attrs.some(a => a.name === n && a.value > 0);
+  if (ITEM_RANCH_ATTRS.some(r => has(r[1]))) return 3;
+  if (has(ITEM_TILLS_ATTR) || has(ITEM_WATERS_ATTR)) return 1;
+  if (has(ITEM_ROD_ATTR) || has('bait') || has('tackle') || has('crab_pot')) return 4;   // main.c fish_shop_sells()
+  if (has(ITEM_PROP_ATTR)) return 2;
+  return 5;
+}
+function shWhere(r) { return SHOP_COUNTERS[r.counter || shUsualCounter(r.attrs)]; }
+function shChanged(r) { return r.sale !== r.orig.sale || (r.sale && (r.price !== r.orig.price || r.counter !== r.orig.counter)); }
+function shStatus(t, bad) { const e = shEl('shStatus'); e.textContent = t || ''; e.className = 'animCap' + (bad ? ' itemMsg bad' : ''); }
+function shShown() {
+  const q = shEl('shFilter').value.trim().toLowerCase(), show = shEl('shShow').value, cf = parseInt(shEl('shCounterFilter').value);
+  return shRows.filter(r => (!q || r.name.toLowerCase().includes(q) || r.id.includes(q)) &&
+    (show === 'all' || (show === 'sale' && r.sale) || (show === 'not' && !r.sale) || (show === 'changed' && shChanged(r))) &&
+    (cf < 0 || (r.sale && (r.counter || shUsualCounter(r.attrs)) === cf)));
+}
+function shRefreshCount() {
+  const n = shRows.filter(shChanged).length;
+  shEl('shSaveBtn').textContent = n ? `Save ${n} change${n === 1 ? '' : 's'}` : 'Save changes';
+  shEl('shSaveBtn').disabled = shEl('shRevertBtn').disabled = !n;
+}
+function shRender() {
+  const body = shEl('shBody');
+  body.innerHTML = '';
+  for (const r of shShown()) {
+    const tr = document.createElement('tr');
+    tr.className = shChanged(r) ? 'changed' : '';
+    tr.innerHTML = `<td><canvas width="32" height="32"></canvas></td><td><b></b><div class="shSub"></div></td>
+      <td><input type="checkbox"></td><td><input type="number" min="1" max="999999"></td><td><select></select></td><td class="shWhere"></td><td class="shSub"></td>`;
+    shDrawIcon(tr.querySelector('canvas'), r.icon);
+    tr.querySelector('b').textContent = r.name;
+    tr.querySelector('.shSub').textContent = `${r.id}.c`;
+    const [chk, price] = tr.querySelectorAll('input'), sel = tr.querySelector('select'), where = tr.querySelector('.shWhere');
+    SHOP_COUNTERS.forEach((n, i) => sel.add(new Option(i ? n : `Usual (${SHOP_COUNTERS[shUsualCounter(r.attrs)]})`, i)));
+    const sell = r.attrs.find(a => a.name === ITEM_SELL_ATTR);
+    tr.lastElementChild.textContent = sell && sell.value > 0 ? `$${sell.value}` : '—';
+    const sync = () => {
+      chk.checked = r.sale; price.value = r.price; sel.value = r.counter;
+      price.disabled = sel.disabled = !r.sale;
+      where.textContent = r.sale ? `${shWhere(r)} shop` : '';
+      tr.className = shChanged(r) ? 'changed' : '';
+      shRefreshCount();
+    };
+    chk.onchange = () => { r.sale = chk.checked; sync(); };
+    price.oninput = () => { r.price = itemClamp(parseInt(price.value) || 1, 1, 999999); tr.className = shChanged(r) ? 'changed' : ''; shRefreshCount(); };
+    sel.onchange = () => { r.counter = parseInt(sel.value) || 0; sync(); };
+    sync();
+    body.appendChild(tr);
+  }
+  if (!body.children.length) body.innerHTML = `<tr><td colspan="7" class="animCap">${shRows.length ? 'Nothing matches.' : 'No items — choose the assets/items folder.'}</td></tr>`;
+  shRefreshCount();
+}
+async function shScan() {
+  const dir = await getItemsDir(false);
+  shRows = [];
+  if (dir) {
+    for await (const [name, handle] of dir.entries()) {
+      if (handle.kind !== 'file' || !name.endsWith('.c')) continue;
+      const id = name.slice(0, -2);
+      if (!ITEM_ID_RE.test(id) || id === 'none') continue;
+      let text, p;
+      try { text = await (await handle.getFile()).text(); p = parseItemC(text); } catch (e) { continue; }
+      const buy = p.attrs.find(a => a.name === ITEM_BUY_ATTR), shop = p.attrs.find(a => a.name === ITEM_SHOP_ATTR);
+      const sale = !!buy && buy.value > 0, sell = p.attrs.find(a => a.name === ITEM_SELL_ATTR);
+      const price = sale ? buy.value : Math.max(1, (sell && sell.value > 0 ? sell.value : 5) * 2), counter = shop ? itemClamp(shop.value, 0, SHOP_COUNTERS.length - 1) : 0;
+      shRows.push({ id, name: p.name || id, icon: shBundleImg(p.passive), attrs: p.attrs, handle, text, sale, price, counter, orig: { sale, price, counter } });
+    }
+    shRows.sort((a, b) => a.name.localeCompare(b.name));
+  }
+  shStatus(dir ? `${shRows.length} items in "${dir.name}".` : 'No items folder connected — Choose items folder… (assets/items).');
+  shRender();
+}
+
+// The .c with its attribute table replaced by `attrs` (and .attrs / .attr_count to match).
+function shRewriteAttrs(text, id, attrs) {
+  const table = /static const item_attr_t (\w+)\[\] = \{[\s\S]*?\};\n?/;
+  const name = `k_${id}_attrs`, decl = attrs.length ? `static const item_attr_t ${name}[] = {\n${attrs.map(a => `    { "${cString(a.name)}", ${a.value} },`).join('\n')}\n};\n` : '';
+  let out;
+  if (table.test(text)) out = text.replace(table, decl);
+  else {
+    const at = text.indexOf(`const item_asset_t k_item_${id}`);
+    if (at < 0) throw new Error(`no k_item_${id} in it`);
+    out = text.slice(0, at) + decl + (decl ? '\n' : '') + text.slice(at);
+  }
+  if (!/\.attrs\s*=\s*[^,]+,/.test(out) || !/\.attr_count\s*=\s*\d+/.test(out)) throw new Error('its item has no .attrs / .attr_count to update');
+  return out.replace(/\.attrs\s*=\s*[^,]+,/, `.attrs = ${attrs.length ? name : 'NULL'},`).replace(/\.attr_count\s*=\s*\d+/, `.attr_count = ${attrs.length}`);
+}
+async function shSave() {
+  const todo = shRows.filter(shChanged);
+  if (!todo.length) return;
+  const dir = await getItemsDir(true);
+  if (!dir) return;
+  const done = [], failed = [];
+  for (const r of todo) {
+    const attrs = r.attrs.filter(a => a.name !== ITEM_BUY_ATTR && a.name !== ITEM_SHOP_ATTR);
+    if (r.sale) {
+      attrs.push({ name: ITEM_BUY_ATTR, value: r.price });
+      if (r.counter) attrs.push({ name: ITEM_SHOP_ATTR, value: r.counter });
+    }
+    try {
+      const fresh = await (await (await dir.getFileHandle(`${r.id}.c`)).getFile()).text();   // as it is on disk now
+      const text = shRewriteAttrs(fresh, r.id, attrs);
+      const w = await (await dir.getFileHandle(`${r.id}.c`, { create: false })).createWritable();
+      await w.write(text);
+      await w.close();
+      r.attrs = attrs; r.text = text; r.orig = { sale: r.sale, price: r.price, counter: r.counter };
+      done.push(r.id);
+    } catch (e) { failed.push(`${r.id}.c: ${e.message}`); }
+  }
+  shRender();
+  shStatus(`Saved ${done.length} item${done.length === 1 ? '' : 's'} — rebuild the firmware to update the shops.` + (failed.length ? ` Couldn't save: ${failed.join('; ')}` : ''), failed.length > 0);
+}
+
+function openShopEditor() { shEl('shEdOverlay').classList.add('show'); shScan(); }
+function closeShopEditor() { shEl('shEdOverlay').classList.remove('show'); }
+
+(() => {
+  SHOP_COUNTERS.slice(1).forEach((n, i) => shEl('shCounterFilter').add(new Option(n, i + 1)));
+  ['shFilter', 'shShow', 'shCounterFilter'].forEach(id => shEl(id).addEventListener('input', shRender));
+  shEl('shRescanBtn').onclick = () => { if (!shRows.some(shChanged) || confirm('Read the folder again? Unsaved changes are lost.')) shScan(); };
+  shEl('shFolderBtn').onclick = async () => { await getItemsDir(true, true); shScan(); };
+  shEl('shSaveBtn').onclick = shSave;
+  shEl('shRevertBtn').onclick = () => { shRows.forEach(r => { r.sale = r.orig.sale; r.price = r.orig.price; r.counter = r.orig.counter; }); shRender(); };
+  shEl('shMultBtn').onclick = () => {
+    const k = parseFloat(shEl('shMult').value) || 2, rows = shShown().filter(r => r.attrs.some(a => a.name === ITEM_SELL_ATTR && a.value > 0));
+    if (!rows.length) { shStatus('None of the items shown has a sell price.'); return; }
+    if (!confirm(`Put ${rows.length} shown item${rows.length === 1 ? '' : 's'} up for sale at their sell price × ${k}?`)) return;
+    rows.forEach(r => { r.sale = true; r.price = Math.max(1, Math.round(r.attrs.find(a => a.name === ITEM_SELL_ATTR).value * k)); });
+    shRender();
+  };
+})();
+</script>
+
+<script>
 // ---------- Game Tools: Map Editor / Item Editor / Image Editor tabs ----------
 // The Item Editor is the map editor's Item Mode (it shares the map's item
 // list), shown as a page of its own; the Image Editor is #gtImage.
@@ -21795,16 +22009,18 @@ function seasonPreviewRender() {
     if (tool === 'needs') openNeeds(); else closeNeeds();
     if (tool === 'furniture') openFurniture(); else closeFurniture();
     if (tool === 'fishing') openFishing(); else closeFishing();
+    if (tool === 'shop') openShopEditor();
+    else if (document.getElementById('shEdOverlay').classList.contains('show')) closeShopEditor();
     if (tool === 'wardrobe') openWardrobe(); else closeWardrobe();
     tabs.forEach(t => t.classList.toggle('on', t.dataset.tool === tool));
-    if (tool !== 'farm') document.title = 'Game Tools · ' + { map: 'Map Editor', item: 'Item Editor', crop: 'Crops Editor', building: 'Buildings Editor', machine: 'Machines Editor', image: 'Image Editor', needs: 'Needs You', furniture: 'Furniture', wardrobe: 'Wardrobe', fishing: 'Fishing' }[tool];
+    if (tool !== 'farm') document.title = 'Game Tools · ' + { map: 'Map Editor', item: 'Item Editor', crop: 'Crops Editor', building: 'Buildings Editor', machine: 'Machines Editor', image: 'Image Editor', needs: 'Needs You', furniture: 'Furniture', wardrobe: 'Wardrobe', fishing: 'Fishing', shop: 'Shop Editor' }[tool];
     if (tool === 'image') frame.focus(); else if (document.activeElement === frame) frame.blur();
     try { localStorage.setItem('gameTools.tool', tool); } catch {}
   }
   window.gtShowTool = showTool;
   tabs.forEach(t => t.addEventListener('click', () => showTool(t.dataset.tool)));
   let tool = 'map';
-  try { const t = localStorage.getItem('gameTools.tool'); if (t === 'item' || t === 'crop' || t === 'building' || t === 'animal' || t === 'farm' || t === 'machine' || t === 'image' || t === 'needs' || t === 'furniture' || t === 'wardrobe' || t === 'fishing') tool = t; } catch {}
+  try { const t = localStorage.getItem('gameTools.tool'); if (t === 'item' || t === 'crop' || t === 'building' || t === 'animal' || t === 'farm' || t === 'machine' || t === 'image' || t === 'needs' || t === 'furniture' || t === 'wardrobe' || t === 'fishing' || t === 'shop') tool = t; } catch {}
   showTool(tool);
 })();
 </script>

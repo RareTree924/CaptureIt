@@ -37,6 +37,14 @@ static void action_fish_shop(const action_ctx_t *ctx)
     (void)ctx;
     fish_shop_open();
 }
+// Opens the general store: anything with a "buyable" price that no other
+// counter sells (plus anything put on the General counter by hand).
+static void action_general_shop(const action_ctx_t *ctx)
+{
+    (void)ctx;
+    general_shop_open();
+}
+
 // Opens the auction house: what's being auctioned, and putting a stack from
 // the bag up for auction. Bidders keep bidding while the player is elsewhere.
 static void action_auction_house(const action_ctx_t *ctx)
@@ -82,6 +90,7 @@ const asset_action_t k_asset_actions[] = {
     ASSET_ACTION(build_shop, "Build shop", "Opens a shop that sells every prop and building that has a price"),
     ASSET_ACTION(ranch_shop, "Ranch shop", "Opens a shop that sells farm animals, hay, grass starter and animal tools"),
     ASSET_ACTION(fish_shop, "Fish shop", "Opens a shop that sells fishing rods, bait, tackle and crab pots"),
+    ASSET_ACTION(general_shop, "General store", "Opens a shop that sells any other item with a price (Item Editor / Shop Editor)"),
     ASSET_ACTION(auction_house, "Auction house", "Opens the auction house: put things up for auction, see the bids"),
     ASSET_ACTION(bench, "Bench", "Auction crowds gather here: bidders stand on it (if walkable) or beside it and shout their bids"),
     ASSET_ACTION(ledger, "Ledger", "Opens the ledger: everything bought and sold in the last 20 days (also ledger.csv in the save)"),

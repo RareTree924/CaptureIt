@@ -3768,6 +3768,7 @@ static bool tp_bank_read(FILE *f, tp_bank_t *out)
 #define TILE_FLAG_GRASSY       0x08  // the editor's "Grassy": wild grass grows here by itself, and grows back (FARMING)
 #define TILE_FLAG_RIVER        0x10  // the editor's water kind "River" on Fishable water (FISHING: "fish_water" 2)
 #define TILE_FLAG_OCEAN        0x20  // ...and "Ocean" (FISHING: "fish_water" 4); neither = a pond or lake ("fish_water" 1)
+#define TILE_FLAG_LAVA         0x40  // ...and "Lava" (FISHING: "fish_water" 8): only a "rod_lava" rod casts into it, only lava fish bite
 #define TILE_CELL_COVERED      0x80
 #define TILE_NONE              0     // no tile type here (see above), off the map, or a map from before MAP11
 #define TILE_FARMLAND          254   // tilled with a hoe (FARMING) — the same on every map
@@ -3881,13 +3882,13 @@ bool tile_fishable(int tx, int ty)
     return t != TILE_NONE && (s_tiles->types[t].flags & TILE_FLAG_FISHABLE);
 }
 
-// Fishable water's kind (FISHING, "fish_water" bits): 1 pond / lake, 2 river, 4 ocean; 0 = not water.
+// Fishable water's kind (FISHING, "fish_water" bits): 1 pond / lake, 2 river, 4 ocean, 8 lava; 0 = not water.
 static int tile_water_kind(int tx, int ty)
 {
     uint8_t t = read_map_tile(tx, ty);
     if (t == TILE_NONE || !(s_tiles->types[t].flags & TILE_FLAG_FISHABLE)) return 0;
     uint8_t f = s_tiles->types[t].flags;
-    return (f & TILE_FLAG_OCEAN) ? 4 : (f & TILE_FLAG_RIVER) ? 2 : 1;
+    return (f & TILE_FLAG_LAVA) ? 8 : (f & TILE_FLAG_OCEAN) ? 4 : (f & TILE_FLAG_RIVER) ? 2 : 1;
 }
 
 // Ground ticked "Grassy" in the editor, with nothing on it: wild grass grows on it (FARMING).
@@ -18149,6 +18150,7 @@ typedef struct {
     int32_t  loot_money;          // ...or money
     int      level_up;            // > 0: this catch made fishing level N
     item_id_t  worn[2];             // tackle that wore out on this catch
+    bool     lava;                // cast into lava (only lava fish; the minigame glows orange)
 } fish_t;
 static fish_t     s_fish;
 static rect_t     s_fish_clip;
@@ -18422,6 +18424,7 @@ static bool fish_cond_ok(item_id_t it, const char *pre, const fish_ctx_t *c)
     }
     int water = (int)FC_ATTR("water", 0);
     if (water && c->water && !(water & c->water)) return false;
+    if (c->water == 8 && !(water & 8)) return false;   // lava: only what says it lives there ("fish_water" 8)
     if (c->depth < (int)FC_ATTR("depth", 0)) return false;
     if (c->level < (int)FC_ATTR("level", 0)) return false;
     if (FC_ATTR("once", 0) > 0 && fishbook_caught(it)) return false;
@@ -18623,7 +18626,8 @@ static void fish_paint_rect(int x, int y, int w, int h)
         int rr = 6 + (int)(s_fish.look % 3) * 2;
         for (int a = 0; a < 48; a++) {
             float ang = a * (6.2831853f / 48);
-            fish_px(s_fish.bx + (int)(cosf(ang) * rr), s_fish.by + 3 + (int)(sinf(ang) * rr / 2), COLOR_RGB565(200, 232, 250), true);
+            fish_px(s_fish.bx + (int)(cosf(ang) * rr), s_fish.by + 3 + (int)(sinf(ang) * rr / 2),
+                    s_fish.lava ? COLOR_RGB565(255, 170, 60) : COLOR_RGB565(200, 232, 250), true);
         }
         fish_px_sprite(s_fish.bx - 3, s_fish.by - 3, k_fish_bobber, 3, true);
         fish_px_sprite(s_player_x + PLAYER_W / 2 - 5, s_player_y - 15, k_fish_alert, 13, false);
@@ -18674,6 +18678,11 @@ static bool fish_on_action(void)
     int fx = s_selected_tile_x, fy = s_selected_tile_y;
     if (!tile_fishable(fx, fy)) return false;
     if (fish_line_out()) return true;
+    int kind = tile_water_kind(fx, fy);
+    if (kind == 8 && item_attr(inv_held_item(), ITEM_ATTR_ROD_LAVA, 0) <= 0) {   // lava: it takes a lava rod
+        message(3000, "%s would burn up in lava - it takes a lava rod", item_name(inv_held_item()));
+        return true;
+    }
     int dx, dy;
     direction_to_delta(s_player_facing, &dx, &dy);
     int want = 1;   // out toward the tapped water, as far as the water and the rod go
@@ -18681,7 +18690,7 @@ static bool fish_on_action(void)
     if (dy && !dx) want += (s_fish.aim_y - fy) * dy;
     if (want > FISH_CAST_TILES) want = FISH_CAST_TILES;
     int n = 1;
-    while (n < want && tile_fishable(fx + dx * n, fy + dy * n)) n++;
+    while (n < want && tile_fishable(fx + dx * n, fy + dy * n) && (tile_water_kind(fx + dx * n, fy + dy * n) == 8) == (kind == 8)) n++;   // not from water out into lava
     s_fish.wx = fx + dx * (n - 1);
     s_fish.wy = fy + dy * (n - 1);
     fish_rod_tip(&s_fish.sx, &s_fish.sy);
@@ -18690,6 +18699,7 @@ static bool fish_on_action(void)
     s_fish.bx = s_fish.sx;
     s_fish.by = s_fish.sy;
     s_fish.rod     = inv_held_item();
+    s_fish.lava    = kind == 8;
     fish_fx_get(s_fish.rod, &s_fish.fx);
     s_fish.fish    = ITEM_NONE;
     s_fish_tier_col = 0;
@@ -19077,15 +19087,16 @@ static void fish_draw(void)
     // the water
     const int cx = px + FISH_COL_DX, cy = py + FISH_COL_DY, CH = FISH_WATER_H;
     fill_rect(cx - 3, cy - 3, FISH_COL_W + 6, CH + 6, FISH_WOOD_DK);
-    for (int r = 0; r < CH; r++) {
+    for (int r = 0; r < CH; r++) {   // water: light blue to deep; lava: bright orange to dark red
         int k = r * 255 / CH;
-        fill_rect(cx, cy + r, FISH_COL_W, 1, COLOR_RGB565((96 * (255 - k) + 20 * k) / 255, (176 * (255 - k) + 62 * k) / 255, (220 * (255 - k) + 124 * k) / 255));
+        if (s_fish.lava) fill_rect(cx, cy + r, FISH_COL_W, 1, COLOR_RGB565((255 * (255 - k) + 120 * k) / 255, (190 * (255 - k) + 16 * k) / 255, (60 * (255 - k) + 8 * k) / 255));
+        else             fill_rect(cx, cy + r, FISH_COL_W, 1, COLOR_RGB565((96 * (255 - k) + 20 * k) / 255, (176 * (255 - k) + 62 * k) / 255, (220 * (255 - k) + 124 * k) / 255));
     }
-    for (int i = 0; i < 5; i++) {   // bubbles drifting up
+    for (int i = 0; i < 5; i++) {   // bubbles drifting up (embers in lava)
         float sp = 22.0f + i * 7.0f;
         int yy = CH - 4 - (int)fmodf(s_fish.t * sp + i * 61.0f, (float)(CH - 8));
         int xx = 4 + (i * 9) % (FISH_COL_W - 10) + (int)(sinf(s_fish.t * 3.0f + i) * 2.0f);
-        fill_round_rect(cx + xx, cy + yy, 3, 3, 1, COLOR_RGB565(196, 232, 250), 150);
+        fill_round_rect(cx + xx, cy + yy, 3, 3, 1, s_fish.lava ? COLOR_RGB565(255, 236, 140) : COLOR_RGB565(196, 232, 250), 150);
     }
     if (s_fish.trait & FISH_TRAIT_CURRENT) {   // the current: chevrons down the side, pointing the way it pushes
         int dir = s_fish.current > 0 ? -1 : 1, off = (int)(s_fish.t * 40.0f) % 24;
@@ -19900,10 +19911,10 @@ static void book_draw_page(void)
     int weather = (int)item_attr(it, ITEM_ATTR_FISH_WEATHER, 0);
     draw_text(lx, y, weather == 1 ? "Weather: rainy days only" : weather == 2 ? "Weather: dry days only" : "Weather: any", 1, INV_COL_TEXT); y += L1;
     {   // where: the water kinds and the maps
-        int water = (int)item_attr(it, ITEM_ATTR_FISH_WATER, 0) & 7, len = snprintf(t, sizeof(t), "Where:  ");
-        static const char *const k_water[3] = { "pond", "river", "ocean" };
+        int water = (int)item_attr(it, ITEM_ATTR_FISH_WATER, 0) & 15, len = snprintf(t, sizeof(t), "Where:  ");
+        static const char *const k_water[4] = { "pond", "river", "ocean", "lava" };
         if (!water || water == 7) len += snprintf(t + len, sizeof(t) - len, " any water");
-        for (int k = 0; k < 3 && water && water != 7; k++) if ((water >> k) & 1) len += snprintf(t + len, sizeof(t) - len, " %s", k_water[k]);
+        for (int k = 0; k < 4 && water && water != 7; k++) if ((water >> k) & 1) len += snprintf(t + len, sizeof(t) - len, " %s", k_water[k]);
         const item_asset_t *a = item_get(it);
         bool first = true;
         for (int i = 0; a && i < a->attr_count && len < (int)sizeof(t) - 4; i++) {

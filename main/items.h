@@ -267,7 +267,8 @@ bool                item_droppable(item_id_t item);
 //   "fish_seasons"  bit set: 1 spring, 2 summer, 4 fall, 8 winter (a season is SEASON_DAYS game days)
 //   "fish_days"     bit set: 1 Monday, 2 Tuesday ... 64 Sunday
 //   "fish_water"    bit set: 1 pond / lake (plain Fishable water), 2 river, 4 ocean (the Map Editor's
-//                   water kind on the water asset: TILE_FLAG_RIVER / TILE_FLAG_OCEAN in main.c)
+//                   water kind on the water asset: TILE_FLAG_RIVER / TILE_FLAG_OCEAN in main.c),
+//                   8 lava (TILE_FLAG_LAVA): nothing bites in lava unless its fish_water has 8
 //   "fish_map:<map name>" 1   one per map ("fish_map:mines"): it only bites on those maps
 //   "fish_depth" N  the bobber at least N tiles from the shore
 //   "fish_level" N  fishing level N or better
@@ -310,6 +311,7 @@ bool                item_droppable(item_id_t item);
 #define ITEM_ATTR_TACKLE       "tackle"
 #define ITEM_ATTR_ROD_BAIT     "rod_bait"
 #define ITEM_ATTR_ROD_TACKLE   "rod_tackle"
+#define ITEM_ATTR_ROD_LAVA     "rod_lava"   // 1 = the rod casts into lava too (others: "it would burn up")
 // Minigame tricks ("fish_trait" bits).
 #define FISH_TRAIT_FREEZE   0x001   // plays dead: caught in the bar it freezes a moment, then bolts
 #define FISH_TRAIT_STICKY   0x002   // sticky: while the bar is on it, the bar gets stuck (barely moves)

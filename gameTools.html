@@ -2547,11 +2547,12 @@ let showTeleporters = true;
 // Tile types (see TILE TYPES): mirror main.c's Tile types notes.
 const TILE_TYPE_MAX = 127, TILE_NAME_MAX = 31;
 const TILE_FLAG_TILLABLE = 0x01, TILE_FLAG_BUILDABLE = 0x02, TILE_FLAG_FISHABLE = 0x04, TILE_FLAG_GRASSY = 0x08, TILE_CELL_COVERED = 0x80;   // main.c TILE_FLAG_*
-// A Fishable asset's water kind (asset.water: undefined = a pond / lake, 'river', 'ocean'): main.c TILE_FLAG_RIVER / TILE_FLAG_OCEAN —
-// which fish bite there (the Fishing tab's "Water" condition, "fish_water").
-const TILE_FLAG_RIVER = 0x10, TILE_FLAG_OCEAN = 0x20;
-const WATER_KINDS = [undefined, 'river', 'ocean'];
-function waterKindName(w) { return w === 'river' ? 'River' : w === 'ocean' ? 'Ocean' : 'Pond / lake'; }
+// A Fishable asset's water kind (asset.water: undefined = a pond / lake, 'river', 'ocean', 'lava'): main.c TILE_FLAG_RIVER / _OCEAN / _LAVA —
+// which fish bite there (the Fishing tab's "Water" condition, "fish_water"). Lava: only "rod_lava" rods cast into it, only fish_water 8 bites.
+const TILE_FLAG_RIVER = 0x10, TILE_FLAG_OCEAN = 0x20, TILE_FLAG_LAVA = 0x40;
+const WATER_KINDS = [undefined, 'river', 'ocean', 'lava'];
+function waterKindName(w) { return w === 'river' ? 'River' : w === 'ocean' ? 'Ocean' : w === 'lava' ? 'Lava' : 'Pond / lake'; }
+function waterKindOk(w) { return w === 'river' || w === 'ocean' || w === 'lava' ? w : undefined; }
 function nextWaterKind(w) { return WATER_KINDS[(WATER_KINDS.indexOf(w) + 1) % WATER_KINDS.length]; }
 let showTiles = false;        // the "Show tiles" overlay
 const COORDS_KEY = 'captureit.showCoords';
@@ -6790,7 +6791,7 @@ function axRenderDetails() {
       fs.classList.toggle('on', !!a.fishable);
       c2.appendChild(fs);
       if (a.fishable) {   // which water it is: the fish that bite there (FISHING, "fish_water")
-        const wk = axButton(`Water: ${waterKindName(a.water)}`, 'Which water this is — Pond / lake, River or Ocean. Each fish says which it bites in (the Fishing tab). Click to change. Export the map again after changing it.', () => { axRecordAssets([i], `water kind ${axAssetLabel(i)}`); a.water = nextWaterKind(a.water); if (showTiles) redrawAll(); renderAssetList(); }, editing);
+        const wk = axButton(`Water: ${waterKindName(a.water)}`, 'Which water this is — Pond / lake, River, Ocean or Lava (lava: only a rod with "Can fish in lava" casts into it). Each fish says which it bites in (the Fishing tab). Click to change. Export the map again after changing it.', () => { axRecordAssets([i], `water kind ${axAssetLabel(i)}`); a.water = nextWaterKind(a.water); if (showTiles) redrawAll(); renderAssetList(); }, editing);
         wk.classList.toggle('on', !!a.water);
         c2.appendChild(wk);
       }
@@ -7906,7 +7907,7 @@ function axApplyMeta(a, m, bundleRef) {
   a.tillable = !!m.tillable;
   a.buildable = !!m.buildable;
   a.fishable = !!m.fishable;
-  a.water = m.water === 'river' || m.water === 'ocean' ? m.water : undefined;
+  a.water = waterKindOk(m.water);
   a.grassy = !!m.grassy;
   a.actions = Array.isArray(m.actions) && m.actions.length ? m.actions.map(String) : undefined;
   if (m.hitbox) { const hb = base64ToU8(m.hitbox, Uint8Array); if (hb.length === n) a.rgba_hitbox = hb; }
@@ -9201,7 +9202,7 @@ function loadBackupData(data) {
     } : undefined;
     makeImageFromPixels(ad.w, ad.h, color, alpha, img => {
       resolve({ name: ad.name, folder: ad.folder || '', walkable: ad.walkable, tillable: !!ad.tillable, buildable: !!ad.buildable, fishable: !!ad.fishable,
-                water: ad.water === 'river' || ad.water === 'ocean' ? ad.water : undefined, grassy: !!ad.grassy,
+                water: waterKindOk(ad.water), grassy: !!ad.grassy,
                 actions: Array.isArray(ad.actions) && ad.actions.length ? ad.actions.map(String) : undefined, w: ad.w, h: ad.h, uid: ad.uid || undefined, img, rgba_color: color, rgba_alpha: alpha, rgba_hitbox: hitbox, rgba_layer: layer, animation, breakable });
     });
   }));
@@ -9777,7 +9778,7 @@ function collectTileExport() {
       const a = placementSourceAsset(ground[c]), ok = tileAssetCanTill(a);
       t = typeNumber(tileTypeName(a ? a.name : ground[c].snapshot.name),
                      (ok && a.tillable ? TILE_FLAG_TILLABLE : 0) | (ok && a.buildable ? TILE_FLAG_BUILDABLE : 0) | (ok && a.fishable ? TILE_FLAG_FISHABLE : 0) | (ok && a.grassy ? TILE_FLAG_GRASSY : 0) |
-                     (ok && a.fishable && a.water === 'river' ? TILE_FLAG_RIVER : 0) | (ok && a.fishable && a.water === 'ocean' ? TILE_FLAG_OCEAN : 0));
+                     (ok && a.fishable && a.water === 'river' ? TILE_FLAG_RIVER : 0) | (ok && a.fishable && a.water === 'ocean' ? TILE_FLAG_OCEAN : 0) | (ok && a.fishable && a.water === 'lava' ? TILE_FLAG_LAVA : 0));
     } else if (importedTiles && (importedTiles.cells[c] & ~TILE_CELL_COVERED)) {
       const it = importedTiles.types[(importedTiles.cells[c] & ~TILE_CELL_COVERED) - 1];
       if (it) {
@@ -9826,8 +9827,8 @@ function drawTileOverlay() {
     const v = g.cells[c];
     if (!v) continue;
     const x = (c % cols) * T, y = Math.floor(c / cols) * T, flags = g.types[(v & ~TILE_CELL_COVERED) - 1].flags;
-    if (flags & TILE_FLAG_FISHABLE) {   // cyan = fishable water (a pond); teal = a river; deep blue = the ocean
-      ctx.fillStyle = (flags & TILE_FLAG_OCEAN) ? 'rgba(40,90,240,.38)' : (flags & TILE_FLAG_RIVER) ? 'rgba(40,220,150,.34)' : 'rgba(40,220,230,.30)';
+    if (flags & TILE_FLAG_FISHABLE) {   // cyan = fishable water (a pond); teal = a river; deep blue = the ocean; orange = lava
+      ctx.fillStyle = (flags & TILE_FLAG_LAVA) ? 'rgba(255,110,30,.38)' : (flags & TILE_FLAG_OCEAN) ? 'rgba(40,90,240,.38)' : (flags & TILE_FLAG_RIVER) ? 'rgba(40,220,150,.34)' : 'rgba(40,220,230,.30)';
       ctx.fillRect(x, y, T, T);
       ctx.setLineDash([]);
       ctx.strokeStyle = 'rgba(40,220,230,.9)';
@@ -9859,7 +9860,7 @@ function tileCursorChip(p) {
   const bits = [];
   if (t.flags & TILE_FLAG_TILLABLE) bits.push('tillable');
   if (t.flags & TILE_FLAG_BUILDABLE) bits.push('buildable');
-  if (t.flags & TILE_FLAG_FISHABLE) bits.push((t.flags & TILE_FLAG_OCEAN) ? 'fishable (ocean)' : (t.flags & TILE_FLAG_RIVER) ? 'fishable (river)' : 'fishable (pond)');
+  if (t.flags & TILE_FLAG_FISHABLE) bits.push((t.flags & TILE_FLAG_LAVA) ? 'fishable (lava)' : (t.flags & TILE_FLAG_OCEAN) ? 'fishable (ocean)' : (t.flags & TILE_FLAG_RIVER) ? 'fishable (river)' : 'fishable (pond)');
   if (t.flags & TILE_FLAG_GRASSY) bits.push('grassy');
   if (v & TILE_CELL_COVERED) bits.push('covered');
   const state = bits.join(', ');
@@ -20528,7 +20529,7 @@ const FSH_CFG = [
   { key: 'perfect_grade', label: 'Perfect = better grade', def: 1, min: 0, max: 1, unit: '', what: '1 = a perfect catch comes out a quality grade better' },
 ];
 const FSH_SEASONS = ['Spring', 'Summer', 'Fall', 'Winter'], FSH_DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-const FSH_WATERS = [{ bit: 1, name: 'Pond / lake' }, { bit: 2, name: 'River' }, { bit: 4, name: 'Ocean' }];
+const FSH_WATERS = [{ bit: 1, name: 'Pond / lake' }, { bit: 2, name: 'River' }, { bit: 4, name: 'Ocean' }, { bit: 8, name: 'Lava' }];   // 8: main.c TILE_FLAG_LAVA
 const FSH_MOVES = ['A mix of everything', 'Smooth glides', 'Sudden darts', 'Keeps to the bottom (sinker)', 'Keeps to the top (floater)'];
 const FSH_ROLES = [   // role, the attribute that makes it, its value when ticked, label
   { role: 'fish', attr: 'fish', on: 30, label: 'Fish (a rod catches it after a fight)' },
@@ -20761,11 +20762,11 @@ function fshWaterBits(attr) {
     FSH_WATERS.forEach(w => {
       const b = document.createElement('button');
       b.type = 'button'; b.textContent = w.name;
-      b.classList.toggle('on', v === 0 || !!(v & w.bit));
+      b.classList.toggle('on', (v === 0 && w.bit !== 8) || !!(v & w.bit));   // none = any water, but never lava
       b.onclick = () => { let cur = fshGet(attr, 0) || 7; cur ^= w.bit; if (!cur) cur = w.bit; fshSet(attr, cur === 7 ? 0 : cur, 0); draw(); fshRenderOdds(); };
       wrap.appendChild(b);
     });
-    const hint = document.createElement('span'); hint.className = 'fshNote'; hint.textContent = v === 0 ? ' (any water)' : ''; wrap.appendChild(hint);
+    const hint = document.createElement('span'); hint.className = 'fshNote'; hint.textContent = v === 0 ? ' (any water, not lava)' : ''; wrap.appendChild(hint);
   };
   draw();
   return wrap;
@@ -20849,7 +20850,12 @@ function fshFxCard(role) {
     const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = fshGet('rod_bait', 0) > 0;
     cb.onchange = () => { fshSet('rod_bait', cb.checked ? 1 : 0, 0); fshRenderOdds(); };
     tb.append(cb, ' Takes bait');
-    c.appendChild(fshRow(tb, fshSelectEl('Tackle slots', 'rod_tackle', 0, [[0, 'none'], [1, '1'], [2, '2']]), fshNum('Catch bar', 'rod_bar', 64, 24, 260, 'px (64 = normal; the water is 280)')));
+    const lb = document.createElement('label'); lb.className = 'fshField';   // rod_lava: casts into Lava water (main.c FISHING)
+    const lc = document.createElement('input'); lc.type = 'checkbox'; lc.checked = fshGet('rod_lava', 0) > 0;
+    lc.onchange = () => { fshSet('rod_lava', lc.checked ? 1 : 0, 0); fshRenderOdds(); };
+    lb.append(lc, ' Can fish in lava');
+    lb.title = 'Casts into water whose kind is Lava (Map Editor) — other rods would burn up. Only fish with Water: Lava bite there.';
+    c.appendChild(fshRow(tb, lb, fshSelectEl('Tackle slots', 'rod_tackle', 0, [[0, 'none'], [1, '1'], [2, '2']]), fshNum('Catch bar', 'rod_bar', 64, 24, 260, 'px (64 = normal; the water is 280)')));
   }
   const g = document.createElement('div'); g.className = 'fshGrid';
   for (const f of FSH_FX) {
@@ -21150,6 +21156,7 @@ function fshCondOk(av, pre, c) {
     const dd = g('days', 0); if (dd && !((dd >> c.day) & 1)) return false;
   }
   const wa = g('water', 0); if (wa && c.water && !(wa & c.water)) return false;
+  if (c.water === 8 && !(wa & 8)) return false;   // lava: only what says it lives there (main.c fish_cond_ok)
   if (c.depth < g('depth', 0)) return false;
   if (c.level < g('level', 0)) return false;
   const maps = Object.keys(av).filter(k => k.startsWith(pre + '_map:') && av[k] > 0).map(k => k.slice(pre.length + 5));

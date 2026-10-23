@@ -3,7 +3,7 @@
 // One animal = what walks about below + the item "pig" that lets it out.
 // 20 frames of 32x32, babies for 30 days; gives truffle every day it's fed (dropped).
 // Everything here is const: it stays in flash (no RAM). RGB565, 0x0000 = see-through.
-// ANIMALS-EDITOR {"name":"Pig","fw":32,"fh":32,"frames":20,"bare":false,"colours":[{"name":"","bare":false,"baby":true,"product":""}],"growDays":30,"mirror":true,"seqs":{"down":[0,1,2,3],"right":[4,5,6,7],"up":[8,9,10,11],"left":[],"eat":[12,13,14,15],"sleep":[16,17,18,19]},"product":"truffle","days":1,"chance":50,"tool":"","rare":"","rareChance":0,"eats":4,"speed":1,"sound":"pig","price":16000,"iconW":17,"iconH":24,"iconAuto":true}
+// ANIMALS-EDITOR {"name":"Pig","fw":32,"fh":32,"frames":20,"bare":false,"colours":[{"name":"","bare":false,"baby":true,"product":""}],"growDays":30,"mirror":true,"seqs":{"down":[0,1,2,3],"right":[4,5,6,7],"up":[8,9,10,11],"left":[],"eat":[12,13,14,15],"sleep":[16,17,18,19]},"product":"truffle","days":1,"chance":50,"tool":"","rare":"","rareChance":0,"eats":4,"speed":1,"sound":"pig","price":16000,"iconW":17,"iconH":24,"iconAuto":true,"house":"barn"}
 #include "items.h"
 #include "animals.h"
 
@@ -3450,6 +3450,7 @@ const animal_def_t k_animal_pig = {
     .variant_products = NULL,
     .frames_baby = k_animal_pig_baby,
     .grow_days = 30,
+    .house = "barn",   // the farm building it lives in ("" = none: outdoors, where it's let out)
 };
 
 // The item that lets it out: hold it and tap open ground. The Ranch shop sells it for 16000.

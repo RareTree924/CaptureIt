@@ -39,6 +39,8 @@ static const item_attr_t k_rainbow_trout_attrs[] = {
     { "fish_min", 8 },
     { "fish_max", 24 },
     { "fish_tier", 2 },
+    { "fish_water", 3 },
+    { "fish_seasons", 2 },
 };
 
 const item_asset_t k_item_rainbow_trout = {
@@ -48,5 +50,5 @@ const item_asset_t k_item_rainbow_trout = {
     .passive = { .w=16, .h=16, .frame_count=1, .interval_ms=150, .loop_count=-1, .pixels=k_rainbow_trout_passive_pixels },
     .use = { .frame_count = 0 },
     .attrs = k_rainbow_trout_attrs,
-    .attr_count = 10,
+    .attr_count = 12,
 };

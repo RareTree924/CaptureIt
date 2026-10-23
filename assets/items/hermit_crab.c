@@ -36,6 +36,8 @@ static const item_attr_t k_hermit_crab_attrs[] = {
     { "fish_rarity", 20 },
     { "fish_min", 1 },
     { "fish_max", 5 },
+    { "pot", 15 },
+    { "pot_water", 4 },
 };
 
 const item_asset_t k_item_hermit_crab = {
@@ -45,5 +47,5 @@ const item_asset_t k_item_hermit_crab = {
     .passive = { .w=16, .h=16, .frame_count=1, .interval_ms=150, .loop_count=-1, .pixels=k_hermit_crab_passive_pixels },
     .use = { .frame_count = 0 },
     .attrs = k_hermit_crab_attrs,
-    .attr_count = 7,
+    .attr_count = 9,
 };

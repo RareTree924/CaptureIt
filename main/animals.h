@@ -44,6 +44,14 @@
 // every animal let out starts as a baby — frames_baby (laid out like
 // `frames`, every colour), called "Baby <name>" — eats and wanders like the
 // rest but makes nothing, and grows up after grow_days days.
+//
+// A home (Stardew's barns and coops): with `house` set ("barn", "coop"),
+// the animal lives in a farm building of that kind (buildings.h `houses`)
+// with room for it — it's let out on the map that building stands on, or in
+// its inside, and from then on sleeps in it, walks out of its animal door in
+// the morning when that's open, comes back at 5 pm, and eats hay from its
+// troughs at night when it found no grass (FARM in main.c). No house ("" or
+// NULL): it lives on the outdoor map it was let out on, the old way.
 #define ANIMAL_FRAME_MAX 32   // px, either side
 #define ANIMAL_SEQ_MAX   4
 
@@ -79,6 +87,7 @@ typedef struct {
     const uint16_t *frames_baby;     // its baby look, laid out like frames; NULL = no baby stage
     uint8_t         grow_days;       // days a baby takes to grow up (0 = no baby stage)
     const char *const *variant_products;   // per colour: the item it makes instead ("" = product); NULL = all make product
+    const char     *house;           // the farm building kind it lives in ("barn", "coop"); "" or NULL = none
 } animal_def_t;
 
 extern const animal_def_t *const s_animals[];

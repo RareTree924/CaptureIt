@@ -35,6 +35,7 @@ static const uint16_t k_truffle_passive_pixels[256] = {
 static const item_attr_t k_truffle_attrs[] = {
     { "sellable", 625 },
     { "quality", 1 },
+    { "treasure", 3 },
 };
 
 const item_asset_t k_item_truffle = {
@@ -44,5 +45,5 @@ const item_asset_t k_item_truffle = {
     .passive = { .w=16, .h=16, .frame_count=1, .interval_ms=150, .loop_count=-1, .pixels=k_truffle_passive_pixels },
     .use = { .frame_count = 0 },
     .attrs = k_truffle_attrs,
-    .attr_count = 2,
+    .attr_count = 3,
 };

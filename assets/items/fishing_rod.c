@@ -31,6 +31,8 @@ static const uint16_t k_fishing_rod_passive_pixels[256] = {
 static const item_attr_t k_fishing_rod_attrs[] = {
     { "droppable", 0 },
     { "rod", 1 },
+    { "rod_bait", 1 },
+    { "buyable", 50 },
 };
 
 const item_asset_t k_item_fishing_rod = {
@@ -40,5 +42,5 @@ const item_asset_t k_item_fishing_rod = {
     .passive = { .w=16, .h=16, .frame_count=1, .interval_ms=150, .loop_count=-1, .pixels=k_fishing_rod_passive_pixels },
     .use = { .frame_count = 0 },
     .attrs = k_fishing_rod_attrs,
-    .attr_count = 2,
+    .attr_count = 4,
 };

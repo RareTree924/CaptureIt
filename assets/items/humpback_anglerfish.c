@@ -40,7 +40,6 @@ static const item_attr_t k_humpback_anglerfish_attrs[] = {
     { "fish_max", 24 },
     { "fish_tier", 5 },
     { "mut", 300 },
-    { "fish_season", 4 },
 };
 
 const item_asset_t k_item_humpback_anglerfish = {
@@ -50,5 +49,5 @@ const item_asset_t k_item_humpback_anglerfish = {
     .passive = { .w=16, .h=16, .frame_count=1, .interval_ms=150, .loop_count=-1, .pixels=k_humpback_anglerfish_passive_pixels },
     .use = { .frame_count = 0 },
     .attrs = k_humpback_anglerfish_attrs,
-    .attr_count = 12,
+    .attr_count = 11,
 };

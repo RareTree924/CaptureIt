@@ -38,7 +38,10 @@ static const item_attr_t k_catfish_attrs[] = {
     { "fish_max", 40 },
     { "fish_tier", 3 },
     { "mut", 150 },
-    { "fish_season", 5 },
+    { "fish_water", 2 },
+    { "fish_seasons", 5 },
+    { "fish_from", 6 },
+    { "fish_to", 24 },
 };
 
 const item_asset_t k_item_catfish = {
@@ -48,5 +51,5 @@ const item_asset_t k_item_catfish = {
     .passive = { .w=16, .h=16, .frame_count=1, .interval_ms=150, .loop_count=-1, .pixels=k_catfish_passive_pixels },
     .use = { .frame_count = 0 },
     .attrs = k_catfish_attrs,
-    .attr_count = 10,
+    .attr_count = 13,
 };

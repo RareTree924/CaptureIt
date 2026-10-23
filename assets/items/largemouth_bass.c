@@ -38,7 +38,7 @@ static const item_attr_t k_largemouth_bass_attrs[] = {
     { "fish_min", 10 },
     { "fish_max", 25 },
     { "fish_tier", 2 },
-    { "fish_season", 3 },
+    { "fish_water", 1 },
 };
 
 const item_asset_t k_item_largemouth_bass = {

@@ -10,7 +10,7 @@ the ones that reuse the most existing code (cheapest to add).
 - ★ **Request board** — visitors post orders ("5 Silver tomatoes by Friday,
   $400"). Reuses shoppers, quality grades, the clock and the ledger. Gives
   farming and fishing a goal.
-- ✅ **Seasons** — done (30-day seasons, crops, fish, seasonal map art); see
+- ✅ **Seasons** — done (28-day seasons, crops, fish, seasonal map art); see
   `docs/SEASONS.md`. Next: seasonal festivals, a calendar screen, and
   seasonal shop stock beyond seeds.
 - ★ **Crafting bench** — instant recipes (wood + stone → fence, fish + salt
@@ -42,18 +42,13 @@ the ones that reuse the most existing code (cheapest to add).
 
 ## More fishing (later)
 
-- **Treasure chests** — a chance per catch for a chest with random loot
-  (non-fish items). Item attribute `fish_junk` / `fish_treasure`.
-- **Crab pots** — a placeable prop on water, baited, that fills overnight.
-  Reuses bait + machines.
-- **Bait with uses** — `bait_uses N`: one piece lasts N catches.
 - **Fish-specific bait** — bait that boosts one fish family (a family number
   on fish and bait).
 - **Legendary boss fish** — one per pool that only bites once, with a
   special minigame pattern.
 - **Aquarium bonuses** — a full tank of one tier sells shelf items for more,
   or gives luck.
-- **Ice fishing** — a third pool (Frozen tiles plus an ice rod), the same way
+- **Ice fishing** — another water kind (Frozen, plus an ice rod), the same way
   lava works now.
 
 ## Assets to make while away from Claude

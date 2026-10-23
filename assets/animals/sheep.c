@@ -3,7 +3,7 @@
 // One animal = what walks about below + the item "sheep" that lets it out.
 // 20 frames of 32x32 (and their bare look), babies for 30 days; gives wool every 3 days it's fed (taken with the "shears" tool).
 // Everything here is const: it stays in flash (no RAM). RGB565, 0x0000 = see-through.
-// ANIMALS-EDITOR {"name":"Sheep","fw":32,"fh":32,"frames":20,"bare":true,"colours":[{"name":"","bare":true,"baby":true,"product":""}],"growDays":30,"mirror":true,"seqs":{"down":[0,1,2,3],"right":[4,5,6,7],"up":[8,9,10,11],"left":[],"eat":[12,13,14,15],"sleep":[16,17,18,19]},"product":"wool","days":3,"chance":100,"tool":"shears","rare":"","rareChance":0,"eats":4,"speed":1,"sound":"sheep","price":10000,"iconW":21,"iconH":24,"iconAuto":true}
+// ANIMALS-EDITOR {"name":"Sheep","fw":32,"fh":32,"frames":20,"bare":true,"colours":[{"name":"","bare":true,"baby":true,"product":""}],"growDays":30,"mirror":true,"seqs":{"down":[0,1,2,3],"right":[4,5,6,7],"up":[8,9,10,11],"left":[],"eat":[12,13,14,15],"sleep":[16,17,18,19]},"product":"wool","days":3,"chance":100,"tool":"shears","rare":"","rareChance":0,"eats":4,"speed":1,"sound":"sheep","price":10000,"iconW":21,"iconH":24,"iconAuto":true,"house":"barn"}
 #include "items.h"
 #include "animals.h"
 
@@ -5160,6 +5160,7 @@ const animal_def_t k_animal_sheep = {
     .variant_products = NULL,
     .frames_baby = k_animal_sheep_baby,
     .grow_days = 30,
+    .house = "barn",   // the farm building it lives in ("" = none: outdoors, where it's let out)
 };
 
 // The item that lets it out: hold it and tap open ground. The Ranch shop sells it for 10000.

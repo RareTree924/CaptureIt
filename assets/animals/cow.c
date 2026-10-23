@@ -3,7 +3,7 @@
 // One animal = what walks about below + the item "cow" that lets it out.
 // 17 frames of 32x32 in 2 colours (White, Brown), babies for 30 days; gives milk every day it's fed (taken with the "milks" tool).
 // Everything here is const: it stays in flash (no RAM). RGB565, 0x0000 = see-through.
-// ANIMALS-EDITOR {"name":"Cow","fw":32,"fh":32,"frames":17,"bare":false,"colours":[{"name":"White","bare":false,"baby":true,"product":""},{"name":"Brown","bare":false,"baby":true,"product":""}],"growDays":30,"mirror":true,"seqs":{"down":[0,1,2,3],"right":[4,5,6,7],"up":[8,9,10,11],"left":[],"eat":[12,13,14,15],"sleep":[16]},"product":"milk","days":1,"chance":100,"tool":"milks","rare":"large_milk","rareChance":50,"eats":4,"speed":2,"sound":"cow","price":8000,"iconW":16,"iconH":24,"iconAuto":true}
+// ANIMALS-EDITOR {"name":"Cow","fw":32,"fh":32,"frames":17,"bare":false,"colours":[{"name":"White","bare":false,"baby":true,"product":""},{"name":"Brown","bare":false,"baby":true,"product":""}],"growDays":30,"mirror":true,"seqs":{"down":[0,1,2,3],"right":[4,5,6,7],"up":[8,9,10,11],"left":[],"eat":[12,13,14,15],"sleep":[16]},"product":"milk","days":1,"chance":100,"tool":"milks","rare":"large_milk","rareChance":50,"eats":4,"speed":2,"sound":"cow","price":8000,"iconW":16,"iconH":24,"iconAuto":true,"house":"barn"}
 #include "items.h"
 #include "animals.h"
 
@@ -5842,6 +5842,7 @@ const animal_def_t k_animal_cow = {
     .variant_products = NULL,
     .frames_baby = k_animal_cow_baby,
     .grow_days = 30,
+    .house = "barn",   // the farm building it lives in ("" = none: outdoors, where it's let out)
 };
 
 // The item that lets it out: hold it and tap open ground. The Ranch shop sells it for 8000.

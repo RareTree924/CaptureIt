@@ -3859,6 +3859,7 @@ static bool tp_bank_read(FILE *f, tp_bank_t *out)
 #define TILE_FLAG_RIVER        0x10  // the editor's water kind "River" on Fishable water (FISHING: "fish_water" 2)
 #define TILE_FLAG_OCEAN        0x20  // ...and "Ocean" (FISHING: "fish_water" 4); neither = a pond or lake ("fish_water" 1)
 #define TILE_FLAG_LAVA         0x40  // ...and "Lava" (FISHING: "fish_water" 8): only a "rod_lava" rod casts into it, only lava fish bite
+#define TILE_FLAG_FORAGE       0x80  // the editor's "Forage": forageables come up here every morning (FORAGE)
 #define TILE_CELL_COVERED      0x80
 #define TILE_NONE              0     // no tile type here (see above), off the map, or a map from before MAP11
 #define TILE_FARMLAND          254   // tilled with a hoe (FARMING) — the same on every map
@@ -3988,6 +3989,13 @@ bool tile_grassy(int tx, int ty)
     return t != TILE_NONE && (s_tiles->types[t].flags & TILE_FLAG_GRASSY) && !tile_covered(tx, ty);
 }
 
+// Ground ticked "Forage" in the editor, with nothing on it: forageables come up on it (FORAGE).
+bool tile_forage(int tx, int ty)
+{
+    uint8_t t = read_map_tile(tx, ty);
+    return t != TILE_NONE && (s_tiles->types[t].flags & TILE_FLAG_FORAGE) && !tile_covered(tx, ty);
+}
+
 // ---- Action triggers (MAP12 section) ---------------------------------------
 //  Objects that run ASSET ACTIONS (actions.h) when tapped — every placed copy
 //  of a library asset that has actions ticked in the editor. MAP12 = MAP11, then:
@@ -4103,6 +4111,10 @@ static void mapsave_mark_dirty(void);   // MAP SAVES section: the loaded map cha
 static void mapsave_flush(void);        // ...write it now (before another map loads)
 static void mapsave_load(void);         // ...put a freshly loaded map's saved changes back
 static void mapsave_show(void);         // ...and bake them into its pixels
+static void forage_catch_up(bool repaint);   // FORAGE section: the forage that came up while the player was away
+static void museum_map_loaded(void);         // MUSEUM: bakes this map's donations onto its shelves
+static void museum_rebake_all(void);         // ...again, after the night stage changed
+static void climate_map_loaded(void);        // CLIMATE (in SEASONS): the new map's climate, from <map>.climate
 static void nav_cancel(void);
 static bool nav_next_waypoint(int *wx, int *wy, bool *act, direction_t *face);
 static void nav_progress(bool moved);
@@ -4325,6 +4337,7 @@ bool load_map(const char *map_file)
     base = base ? base + 1 : path;
     snprintf(s_current_map_name, sizeof(s_current_map_name), "%.*s", (int)strcspn(base, "."), base);
     s_map_inst = inst;
+    climate_map_loaded();         // Normal, Hot, Cold, Dry or Lush (CLIMATE, in SEASONS)
     memcpy(&s_tp, &s_tp_new, sizeof(s_tp));
     s_trig.count = s_trig_new.count;
     memcpy(s_trig.items, s_trig_new.items, (size_t)s_trig_new.count * sizeof(trig_t));
@@ -4356,6 +4369,7 @@ bool load_map(const char *map_file)
     s_map_hash = s_load_hash;
     place_buildings_apply();      // buildings placed here (buildings.txt) — before the save, whose lines are checked against them
     mapsave_load();               // broken breakables + dropped stacks from /sdcard/saves (the .map is never written)
+    forage_catch_up(false);       // the forage that came up while the player was away (FORAGE) — baked by mapsave_show()
     // The fade repainted the whole screen, so the player sprite that was
     // on it is gone and the cached "pixels under the player" belong to the
     // OLD map — forget them, or the next move would paste them back.
@@ -4365,6 +4379,7 @@ bool load_map(const char *map_file)
     night_map_loaded(path, night_px, s_load_hash);   // at night, fades in already dark (and reads the animations' first frames)
     if (s_night_shown == 0) anim_frames_reload();       // in daylight: read them here
     mapsave_show();                                     // the restored changes, in that tint
+    museum_map_loaded();                                // the donations on this map's museum shelves (MUSEUM)
     farm_map_loaded_late();                             // the animals that are on this map now (FARM)
 
     fade_in_from_black(s_map_pixels, pixel_count); // shows frame 1 of every animation
@@ -4973,19 +4988,24 @@ static bool   s_msg_on_screen = false;
 static rect_t s_msg_rect;
 
 // The time-of-day panel (CLOCK section further down) is the fourth: fixed in
-// the top-left corner, just left of where a top-edge hotbar sits.
+// the top-left corner, just left of where a top-edge hotbar sits. Along its
+// bottom: the player's energy (ENERGY).
 #define CLOCK_X 4
 #define CLOCK_Y 4
 #define CLOCK_W 108   // ends at x = 112 = HOTBAR_X
-#define CLOCK_H 50
+#define CLOCK_TIME_H 50                   // the weekday, season and time...
+#define CLOCK_H (CLOCK_TIME_H + 16)       // ...and the energy bar under them
+#define CLOCK_TEMP_H 14                   // ...and, in a hot or cold climate, the temperature bar (TEMPERATURE)
+#define CLOCK_H_MAX  (CLOCK_H + CLOCK_TEMP_H)   // the most it covers: things keep out from under all of it
 static bool s_clock_on_screen = false;
+static int  s_clock_h = CLOCK_H;          // how tall it is now: CLOCK_H, or CLOCK_H_MAX with the temperature bar
 
 static bool ui_overlay_covers(int px, int py)
 {
     if (px >= HOTBAR_X && px < HOTBAR_X + HOTBAR_W && py >= s_hotbar_y && py < s_hotbar_y + HOTBAR_H) return true;
     if (s_msg_on_screen && px >= s_msg_rect.x && px < s_msg_rect.x + s_msg_rect.w &&
         py >= s_msg_rect.y && py < s_msg_rect.y + s_msg_rect.h) return true;
-    if (s_clock_on_screen && px >= CLOCK_X && px < CLOCK_X + CLOCK_W && py >= CLOCK_Y && py < CLOCK_Y + CLOCK_H) return true;
+    if (s_clock_on_screen && px >= CLOCK_X && px < CLOCK_X + CLOCK_W && py >= CLOCK_Y && py < CLOCK_Y + s_clock_h) return true;
     return px >= TOUCH_BTN_X && px < TOUCH_BTN_X + TOUCH_BTN_SIZE &&
            py >= TOUCH_BTN_Y && py < TOUCH_BTN_Y + TOUCH_BTN_SIZE;
 }
@@ -5011,7 +5031,7 @@ static void ui_overlays_redraw_if_overlap(int x, int y, int w, int h)
         y < TOUCH_BTN_Y + TOUCH_BTN_SIZE && TOUCH_BTN_Y < y + h) {
         PROF(PROF_BTN, draw_touch_menu_button_in(clip));
     }
-    if (s_clock_on_screen && x < CLOCK_X + CLOCK_W && CLOCK_X < x + w && y < CLOCK_Y + CLOCK_H && CLOCK_Y < y + h) {
+    if (s_clock_on_screen && x < CLOCK_X + CLOCK_W && CLOCK_X < x + w && y < CLOCK_Y + s_clock_h && CLOCK_Y < y + h) {
         PROF(PROF_CLOCK, clock_draw_overlay_in(clip));
     }
     if (s_msg_on_screen && x < s_msg_rect.x + s_msg_rect.w && s_msg_rect.x < x + w &&
@@ -5064,6 +5084,36 @@ static void game_ticks_update(void)
 #define PLAYER_ANIM_FRAMES 4
 #define PLAYER_ANIM_TICKS  7    // ~21 px of walking per frame; scale with PLAYER_SPEED_Q so the feet don't slide
 
+// Energy (ENERGY section, after SLEEP): tool swings and rod casts use it up;
+// at 0 or below the player is exhausted and walks at ENERGY_SLOW_PCT % speed.
+#define ENERGY_MAX       270
+#define ENERGY_PASSOUT   (-10)   // ...and down here they pass out
+#define ENERGY_SLOW_PCT  40
+static int  s_energy = ENERGY_MAX;
+static void energy_use(item_id_t item);   // ENERGY section: one use of a tool / rod
+static bool energy_exhausted(void) { return s_energy <= 0; }
+
+// Temperature (TEMPERATURE, in ENERGY): how hot (> 0) or cold (< 0) the
+// player has got in a hot or cold climate; at +-TEMP_MAX they pass out.
+#define TEMP_MAX 30000            // 100 %
+static int  s_temp = 0;
+static int  temp_pct(void) { return s_temp * 100 / TEMP_MAX; }
+static bool temp_bar_wanted(void);        // ENERGY section: the clock panel shows the bar
+
+// Skills (SKILLS, after GEAR): xp and a level (0..SKILL_LEVEL_MAX) in each.
+enum { SKILL_FARMING, SKILL_FORAGING, SKILL_MINING, SKILL_FISHING, SKILL_COUNT };
+static void    skill_xp(int skill, int xp);                      // xp earned (a level up says so)
+static int     skill_level(int skill);
+static uint8_t skill_roll_quality(item_id_t item, int skill);    // item_roll_quality(), better the higher the level
+#define SKILL_XP_ROCK        4    // a rock (a pickaxe breakable) broken: mining
+#define SKILL_XP_STUMP       3    // an axe breakable (a stump, a log): foraging
+#define SKILL_XP_TREE        12   // a tree felled: foraging (a fruit tree: farming)
+#define SKILL_XP_FORAGE      7    // a forageable picked up: foraging
+#define SKILL_XP_FRUIT       3    // a fruit shaken off a fruit tree: farming
+#define SKILL_MINE_EXTRA_PCT 4    // mining: % a level that a rock's drop gives one more
+static int  gear_protect_pct(bool heat);  // GEAR: how much the worn gear protects, %
+static void temp_tick(void);              // ...once per game frame
+
 typedef enum { PDIR_DOWN = 0, PDIR_UP, PDIR_LEFT, PDIR_RIGHT, PDIR_COUNT } player_dir_t;
 
 static int  s_player_x = LCD_H_RES / 2;
@@ -5109,6 +5159,8 @@ static const sprite_asset_t *sprite_asset_find(const char *name)
 //    pants  16x32, one per body frame      shirts       8x8, one a direction
 //    hair   16x32: down, right, up (+ left) accessories 16x16: down, side
 //    hats   20x20, one a direction
+//    gear   (assets/wardrobe/gear/, the player's GEAR) a whole 20x36 frame a
+//           cell, 4 a direction: worn over (instead of) pants, shirt, hat; boots
 //  stacked body, pants, shirt, accessory, hair, hat, arms into a
 //  WARD_CANVAS_W x WARD_CANVAS_H frame (CHAR_SW x CHAR_SH: a hat's brim
 //  sticks out of the 16x32 body box, which sits at WARD_BOX_X/Y in it). The
@@ -5139,6 +5191,12 @@ typedef struct {
 } outfit_t;
 
 static outfit_t  s_outfit;               // the player's (OUTFIT in NVS, see outfit_load())
+
+// GEAR (its section, after CRAFTING): what the player wears against the climate, a slot each —
+// out of the bag while worn. build_player_frames() draws it on them (the wardrobe's gear layer).
+enum { GEAR_HAT, GEAR_JACKET, GEAR_PANTS, GEAR_BOOTS, GEAR_SLOTS };
+static inv_slot_t s_gear[GEAR_SLOTS];
+static const ward_item_t *s_ward_wear[GEAR_SLOTS];   // ward_prepare(): the worn gear's art (NULL = none) — the player's compose only
 static uint16_t *s_player_px = NULL;     // PSRAM: the player's 16 walking then 16 carrying frames
 
 static uint32_t ward_rand(uint32_t *s) { *s = *s * 1664525u + 1013904223u; return *s >> 8; }
@@ -5325,6 +5383,8 @@ static struct {
     const ward_item_t *body, *pants, *shirt, *acc, *hair, *hat;
     int                fit;        // the pants' rows: 0, or 4 (their second fit, for this body)
     uint16_t           lut[6][256];   // body, pants, shirt, accessory, hair, hat
+    const ward_item_t *gear[GEAR_SLOTS];             // GEAR: worn over (and instead of) the hat, shirt, pants; boots
+    uint16_t           gear_lut[GEAR_SLOTS][256];
 } s_ward;
 
 static void ward_prepare(const outfit_t *o)
@@ -5339,6 +5399,14 @@ static void ward_prepare(const outfit_t *o)
     int16_t sleeve[3];   // the sleeves: the shirt's colour, or its own middle shade
     if (o->col[WC_SHIRT][0] >= 0 || !shirt) memcpy(sleeve, o->col[WC_SHIRT], sizeof(sleeve));
     else { sleeve[0] = shirt->refs[WARD_P_TINT].L; sleeve[1] = shirt->refs[WARD_P_TINT].a; sleeve[2] = shirt->refs[WARD_P_TINT].b; }
+    for (int k = 0; k < GEAR_SLOTS; k++) {   // GEAR: drawn as it is; a jacket's colour goes on the sleeves
+        s_ward.gear[k] = s_ward_wear[k];
+        if (s_ward.gear[k]) ward_lut(s_ward.gear[k], NULL, NULL, NULL, s_ward.gear_lut[k]);
+    }
+    if (s_ward.gear[GEAR_JACKET]) {
+        const ward_ref_t *j = &s_ward.gear[GEAR_JACKET]->refs[WARD_P_TINT];
+        sleeve[0] = j->L; sleeve[1] = j->a; sleeve[2] = j->b;
+    }
     if (s_ward.body)  ward_lut(s_ward.body,  NULL, o->col[WC_SKIN], sleeve, s_ward.lut[0]);
     if (s_ward.pants) ward_lut(s_ward.pants, o->col[WC_PANTS], NULL, NULL, s_ward.lut[1]);
     if (shirt)        ward_lut(shirt,        o->col[WC_SHIRT], NULL, NULL, s_ward.lut[2]);
@@ -5359,9 +5427,13 @@ static void ward_frame(int d, int f, bool held, uint16_t *cv)
         for (int y = 0; y < PLAYER_H; y++) for (int x = 0; x < PLAYER_W; x++) cv[(by + y) * CHAR_SW + bx + x] = 0x0841;
         return;
     }
+    const ward_item_t *const *g = s_ward.gear;   // GEAR: a whole frame a cell, at the canvas' (0, 0)
     ward_blit(cv, body, s_ward.lut[0], f, r, bx, by, false);
-    ward_blit(cv, s_ward.pants, s_ward.lut[1], f, s_ward.fit + r, bx, by, false);
-    ward_blit(cv, s_ward.shirt, s_ward.lut[2], 0, r, bx + WARD_SHIRT_X, by + WARD_SHIRT_Y + dy, false);
+    if (!g[GEAR_PANTS]) ward_blit(cv, s_ward.pants, s_ward.lut[1], f, s_ward.fit + r, bx, by, false);
+    ward_blit(cv, g[GEAR_PANTS], s_ward.gear_lut[GEAR_PANTS], f, r, 0, 0, false);
+    ward_blit(cv, g[GEAR_BOOTS], s_ward.gear_lut[GEAR_BOOTS], f, r, 0, 0, false);
+    if (!g[GEAR_JACKET]) ward_blit(cv, s_ward.shirt, s_ward.lut[2], 0, r, bx + WARD_SHIRT_X, by + WARD_SHIRT_Y + dy, false);
+    ward_blit(cv, g[GEAR_JACKET], s_ward.gear_lut[GEAR_JACKET], f, r, 0, 0, false);
     if (acc && d != PDIR_UP && (d == PDIR_DOWN || ward_cells(acc) > 1))
         ward_blit(cv, acc, s_ward.lut[3], 0, d == PDIR_DOWN ? 0 : 1, bx, by + WARD_ACC_Y + dy, d == PDIR_LEFT);
     if (hair) {
@@ -5369,7 +5441,8 @@ static void ward_frame(int d, int f, bool held, uint16_t *cv)
         int  cell     = own_left ? 3 : d == PDIR_DOWN ? 0 : d == PDIR_UP ? 2 : 1;
         ward_blit(cv, hair, s_ward.lut[4], 0, cell, bx, by + dy, d == PDIR_LEFT && !own_left);
     }
-    ward_blit(cv, s_ward.hat, s_ward.lut[5], 0, r, bx + WARD_HAT_X, by + WARD_HAT_Y + dy, false);
+    if (!g[GEAR_HAT]) ward_blit(cv, s_ward.hat, s_ward.lut[5], 0, r, bx + WARD_HAT_X, by + WARD_HAT_Y + dy, false);
+    ward_blit(cv, g[GEAR_HAT], s_ward.gear_lut[GEAR_HAT], f, r, 0, 0, false);
     ward_blit(cv, body, s_ward.lut[0], f, (held ? 8 : 4) + r, bx, by, false);   // the arms, over the shirt and the hat
 }
 
@@ -5413,7 +5486,12 @@ static void build_player_frames(void)
 {
     static const uint16_t k_none[CHAR_FRAME_PX] = { [0 ... CHAR_FRAME_PX - 1] = 0x0841 };   // no PSRAM: a box
     if (!s_player_px) s_player_px = heap_caps_malloc((size_t)2 * PDIR_COUNT * PLAYER_ANIM_FRAMES * CHAR_FRAME_PX * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
+    for (int k = 0; k < GEAR_SLOTS; k++) {   // GEAR: what they wear, by its item's id (no art: not seen)
+        int g = s_gear[k].count && s_gear[k].item < item_count ? ward_find(k_ward_gear, WARD_N_GEAR, item_get(s_gear[k].item)->id) : -1;
+        s_ward_wear[k] = g >= 0 ? &k_ward_gear[g] : NULL;
+    }
     if (s_player_px) ward_compose(&s_outfit, s_player_px, s_player_px + (size_t)PDIR_COUNT * PLAYER_ANIM_FRAMES * CHAR_FRAME_PX);
+    memset(s_ward_wear, 0, sizeof(s_ward_wear));   // (the shoppers and Customize wear none)
     for (int d = 0; d < PDIR_COUNT; d++)
         for (int f = 0; f < PLAYER_ANIM_FRAMES; f++) {
             size_t at = (size_t)(d * PLAYER_ANIM_FRAMES + f) * CHAR_FRAME_PX;
@@ -5698,6 +5776,11 @@ static const char *quality_label(uint8_t quality, char *buf, size_t n)
 //  still cover it. Sprite + held item are drawn, cached and erased as one
 //  unit (a "look"), so the item never leaves a trail.
 // ============================================================
+#define TEMP_SWEAT_PCT   40   // TEMPERATURE: this hot, beads of sweat...
+#define TEMP_SHIVER_PCT  40   // ...this cold, shivering...
+#define TEMP_STRONG_PCT  75   // ...and more of both from here
+#define SWEAT_FRAMES     18
+#define SWEAT_MS         70
 #define HELD_ITEM_MAX  32  // held-item art is shrunk to fit this...
 #define HELD_GIANT_MAX 48  // ...or blown up to this for a "giant" item (LEGENDARY TRAITS) — these bound the background cache below
 #define HELD_ITEM_GAP  1   // px between the top of the head and the item...
@@ -5720,6 +5803,8 @@ typedef struct {
     uint8_t         swipe;        // the swipe's frame + 1 (0 = none)
     uint8_t         spark;        // NEW ITEM: the sparkle's frame + 1 over their head (0 = none)
     uint8_t         tool_turn;    // TOOL SWING: how far the tool has come down, 0 (raised) .. 255 (landed)
+    uint8_t         sweat;        // TEMPERATURE: hot — 0 none, 1 a little, 2 a lot...
+    uint8_t         sweat_frame;  // ...the beads' frame
 } player_look_t;
 
 // Where a look's sprite goes: centred on the player, bottom on the feet
@@ -5930,6 +6015,7 @@ static bool tool_swing_start(void)
     s_swing.hit_due  = false;
     s_swing.start_ms = (uint32_t)(esp_timer_get_time() / 1000);
     tool_sfx_play(held);
+    energy_use(held);   // (ENERGY)
     return true;
 }
 
@@ -6105,6 +6191,8 @@ static player_look_t player_look_now(void)
 {
     uint32_t      now = (uint32_t)(esp_timer_get_time() / 1000);
     player_look_t l   = { .x = s_player_x, .y = s_player_y, .night = (uint8_t)s_night_shown };
+    int           pct = temp_pct();   // TEMPERATURE: cold — a shiver, a pixel either way (faster the colder)
+    if (pct <= -TEMP_SHIVER_PCT) l.x += ((now / (pct <= -TEMP_STRONG_PCT ? 45 : 90)) & 1) ? 1 : -1;
 
     // An override animation replaces the walk frame and hides the held item.
     const uint16_t *override = player_anim_frame_now(now);
@@ -6119,6 +6207,10 @@ static player_look_t player_look_now(void)
     l.item = inv_held_item();
     l.sw   = CHAR_SW;
     l.sh   = CHAR_SH;
+    if (pct >= TEMP_SWEAT_PCT) {   // TEMPERATURE: hot — beads of sweat
+        l.sweat       = pct >= TEMP_STRONG_PCT ? 2 : 1;
+        l.sweat_frame = (uint8_t)((now / SWEAT_MS) % SWEAT_FRAMES);
+    }
     player_dir_t row = player_dir_from_facing(s_player_facing);
     if (tool_swing_look(&l, now)) {   // TOOL SWING: the tool in their hands (arms down), not over the head
         l.item   = ITEM_NONE;
@@ -6154,7 +6246,8 @@ static bool player_look_equal(const player_look_t *a, const player_look_t *b)
     return a->x == b->x && a->y == b->y && a->sprite == b->sprite && a->sw == b->sw && a->sh == b->sh &&
            a->item == b->item && a->item_frame == b->item_frame && a->item_q == b->item_q && a->mfx == b->mfx &&
            a->squash == b->squash && a->lift == b->lift && a->drip == b->drip && a->night == b->night &&
-           a->tool == b->tool && a->tool_dir == b->tool_dir && a->swipe == b->swipe && a->spark == b->spark && a->tool_turn == b->tool_turn;
+           a->tool == b->tool && a->tool_dir == b->tool_dir && a->swipe == b->swipe && a->spark == b->spark && a->tool_turn == b->tool_turn &&
+           a->sweat == b->sweat && a->sweat_frame == b->sweat_frame;
 }
 
 // Screen rect a look covers: the sprite plus the held item above it (and,
@@ -6199,6 +6292,23 @@ static void wet_paint_drips(const player_look_t *l, int ix, int iy, int iw, cons
     }
 }
 
+// TEMPERATURE: beads of sweat on a hot player — a pixel each, forming at the
+// temples (and the cheeks, hotter) and running down the face; the lanes take turns.
+static void sweat_paint(const player_look_t *l, rect_t s)
+{
+    if (!l->sweat) return;
+    static const int8_t k_lane_x[4] = { 5, 14, 7, 12 };   // columns of the CHAR_SW-wide sprite
+    const uint16_t c = COLOR_RGB565(206, 236, 255);
+    int lanes = l->sweat >= 2 ? 4 : 2;
+    for (int k = 0; k < lanes; k++) {
+        int ph = (l->sweat_frame + k * 7) % SWEAT_FRAMES;
+        if (ph >= 11) continue;                             // between beads
+        int x = s.x + k_lane_x[k] * s.w / CHAR_SW;
+        int y = s.y + 12 * s.h / CHAR_SH + (ph < 4 ? 0 : ph - 3);   // forms, then runs down
+        draw_pixel(x, y, l->night ? night_px(&s_night_lut, c) : c);
+    }
+}
+
 // Draws a look — sprite, then the held item (colorkeyed) — and puts
 // foreground scenery back over both, so they go UNDER it.
 static void player_paint(const player_look_t *l)
@@ -6215,6 +6325,7 @@ static void player_paint(const player_look_t *l)
                 if (c != FB_TRANSPARENT_COLOR) draw_pixel(s.x + col, s.y + row, l->night ? night_px(&s_night_lut, c) : c);
             }
     }
+    sweat_paint(l, s);   // TEMPERATURE
     if (!behind) tool_paint(l);
     if (l->item != ITEM_NONE) {
         int iw, ih, ix, iy;
@@ -6454,7 +6565,7 @@ void update_player(void)
     static int s_move_accum_q = 0;
     int step = 0;
     if (dx != 0 || dy != 0) {
-        s_move_accum_q += PLAYER_SPEED_Q * s_dev_speed * s_game_ticks;
+        s_move_accum_q += PLAYER_SPEED_Q * s_dev_speed * s_game_ticks * (energy_exhausted() ? ENERGY_SLOW_PCT : 100) / 100;   // (ENERGY)
         step            = s_move_accum_q / 4;
         s_move_accum_q %= 4;
     } else {
@@ -6497,7 +6608,7 @@ void update_player(void)
     if (nav_on && !hold) nav_progress(moved);
     if (moved) {
         s_player_anim_counter += s_game_ticks;
-        if (s_player_anim_counter >= PLAYER_ANIM_TICKS) {
+        if (s_player_anim_counter >= (energy_exhausted() ? PLAYER_ANIM_TICKS * 100 / ENERGY_SLOW_PCT : PLAYER_ANIM_TICKS)) {
             s_player_anim_counter = 0;
             s_player_anim_frame = (s_player_anim_frame + 1) % PLAYER_ANIM_FRAMES;
         }
@@ -7251,7 +7362,7 @@ static void hud_refresh(void)
 //  when it ends. On a UI screen, ui_redraw() draws it last, over the panel.
 // ============================================================
 #define MSG_TEXT_MAX 96
-#define MSG_Y        (CLOCK_Y + CLOCK_H + 6)   // under the clock, the touch button and a top-edge hotbar, so it never overlaps them
+#define MSG_Y        (CLOCK_Y + CLOCK_H_MAX + 6)   // under the clock, the touch button and a top-edge hotbar, so it never overlaps them
 #define MSG_PAD_X    12
 #define MSG_PAD_Y    6
 #define MSG_RADIUS   6
@@ -7709,15 +7820,29 @@ static bool brk_drops_fit(const brk_level_t *L)
     return fits;
 }
 
+// The skill a breakable level is for (SKILLS): one the pickaxe breaks = mining, the axe = foraging; -1 = neither.
+static int brk_skill(const brk_level_t *L)
+{
+    static item_id_t pick = ITEM_NONE, axe = ITEM_NONE;
+    if (pick == ITEM_NONE) { pick = item_find("pickaxe"); axe = item_find("axe"); }
+    if (L->need_item == ITEM_NONE) return -1;
+    if (pick != ITEM_NONE && item_counts_as(L->need_item, pick)) return SKILL_MINING;
+    if (axe != ITEM_NONE && item_counts_as(L->need_item, axe))   return SKILL_FORAGING;
+    return -1;
+}
+
 // Pays out level L's drops (brk_on_action() already checked there is room).
+// A mining rock (SKILLS): mining xp, and each drop a level x SKILL_MINE_EXTRA_PCT % chance of one more.
 static void brk_pay_drops(const brk_level_t *L)
 {
     bool changed = false;
+    int  skill = brk_skill(L), extra = skill == SKILL_MINING ? skill_level(SKILL_MINING) * SKILL_MINE_EXTRA_PCT : 0;
     for (int d = 0; d < L->drop_count; d++) {
         const brk_drop_t *D = &L->drops[d];
         if (D->item == ITEM_NONE) continue;                          // id not in this build (logged at load)
         if (D->chance < 100 && (int)(esp_random() % 100) >= D->chance) continue;
         int n = D->min + (int)(esp_random() % (uint32_t)(D->max - D->min + 1));
+        if (n > 0 && extra && (int)(esp_random() % 100) < extra) n++;   // (SKILLS: mining)
         if (n == 0) continue;
         uint8_t q = wet_if_raining(QUALITY_MAKE(item_roll_quality(D->item, esp_random()), mut_roll(D->item, 1.0f)));   // MUTATIONS, WET ITEMS
         int left = inv_add_q(D->item, q, n);
@@ -7728,6 +7853,7 @@ static void brk_pay_drops(const brk_level_t *L)
         changed = true;
     }
     if (changed) hud_refresh();          // a hotbar count may have changed
+    if (skill >= 0) skill_xp(skill, skill == SKILL_MINING ? SKILL_XP_ROCK : SKILL_XP_STUMP);   // (SKILLS)
 }
 
 // b's current level is broken: become the next level (the leftover) or vanish.
@@ -8039,6 +8165,8 @@ typedef struct {
     int8_t  tx, ty;         // tile it lies on
     bool    baked;          // in s_map_pixels and on screen; false = waits for the game screen (dropped from the inventory)
     bool    armed;          // false until the player is off its tile, so a drop at their feet isn't picked straight back up
+    bool    forage;         // came up by itself (FORAGE): saved as a "forage" line, regrowth leaves it, drops don't stack on it
+    bool    pack;           // the BACKPACK (below): what the player lost passing out from the heat or cold
 } ground_item_t;
 
 static ground_item_t s_ground[GROUND_MAX];
@@ -8118,8 +8246,10 @@ static void ground_rebake_all(void)
 }
 
 // A new map is replacing the old one (and its pixels): everything on the ground is gone.
+static int s_pack_n;   // BACKPACK (below): the loaded map's backpack's stacks
 static void ground_clear(void)
 {
+    s_pack_n = 0;          // (its backpack is in its save)
     int lost = 0;
     for (int i = 0; i < GROUND_MAX; i++) {
         if (s_ground[i].count > 0) lost++;
@@ -8149,7 +8279,7 @@ static bool ground_tile_ok(int tx, int ty)
     for (int py = y + TILE_SIZE - PLAYER_FEET_H; py < y + TILE_SIZE; py++)
         for (int px = x; px < x + TILE_SIZE; px++)
             if (map_pixel_blocked(px, py)) return false;
-    if (anim_rects_overlap(x, y, TILE_SIZE, TILE_SIZE, CLOCK_X, CLOCK_Y, CLOCK_W, CLOCK_H)) return false;
+    if (anim_rects_overlap(x, y, TILE_SIZE, TILE_SIZE, CLOCK_X, CLOCK_Y, CLOCK_W, CLOCK_H_MAX)) return false;
     if (anim_rects_overlap(x, y, TILE_SIZE, TILE_SIZE, TOUCH_BTN_X, TOUCH_BTN_Y, TOUCH_BTN_SIZE, TOUCH_BTN_SIZE)) return false;
     for (int n = 0; n < s_anim.inst_count; n++) {
         const anim_instance_t *a = &s_anim.inst[n];
@@ -8167,7 +8297,7 @@ static bool ground_tile_ok(int tx, int ty)
 static bool ground_tile_takes(int tx, int ty, item_id_t item, uint8_t quality, int count)
 {
     int i = ground_at(tx, ty);
-    if (i >= 0) return s_ground[i].item == item && s_ground[i].quality == quality && s_ground[i].count + count <= 255;
+    if (i >= 0) return !s_ground[i].forage && !s_ground[i].pack && s_ground[i].item == item && s_ground[i].quality == quality && s_ground[i].count + count <= 255;
     return ground_tile_ok(tx, ty);
 }
 
@@ -8186,6 +8316,7 @@ static bool ground_under_ok(void)
 }
 
 static bool ground_drop_near(item_id_t item, uint8_t quality, int count, int ptx, int pty, int fdx, int fdy, bool here_first, bool cooldown);
+static void pack_pick_up(int i);   // BACKPACK (below)
 
 static bool ground_drop(item_id_t item, uint8_t quality, int count)
 {
@@ -8257,6 +8388,7 @@ static void ground_tick(void)
         if (g->tx != ptx || g->ty != pty) { g->armed = true; continue; }
         if (!g->armed || cooling) continue;   // still standing there when the cooldown ends: picked up then
         g->armed = false;              // one try per visit: a full bag doesn't retry every frame
+        if (g->pack) { pack_pick_up(i); continue; }   // the BACKPACK: its stacks, not itself
 
         int left = inv_add_q(g->item, wet_if_raining(g->quality), g->count), got = g->count - left;   // picked up in the rain: wet (WET ITEMS)
         if (got == 0) {
@@ -8266,6 +8398,7 @@ static void ground_tick(void)
         hud_refresh();
         mapsave_mark_dirty();
         newitem_sparkle();   // NEW ITEM
+        if (g->forage) skill_xp(SKILL_FORAGING, SKILL_XP_FORAGE);   // (SKILLS)
         if (got > 1) message(2000, "Picked up %s x%d", item_name(g->item), got);
         else         message(2000, "Picked up %s", item_name(g->item));
         if (left > 0) {                // the rest stays on the ground
@@ -8276,6 +8409,106 @@ static void ground_tick(void)
         g->count = 0;
         map_repaint_rect(x, y, TILE_SIZE, TILE_SIZE, NULL);
     }
+}
+
+// ---- BACKPACK ---------------------------------------------------------------
+//  Passing out from the heat or the cold (TEMPERATURE) costs the player
+//  everything in the bag but their tools (pack_is_tool(): swings, rods, the
+//  hoe, the can, the scythe, shears, the milk pail) and photo items (they're
+//  one of a kind). It's left where they fell as a backpack — the item
+//  "backpack" (assets/items/backpack.c, its art) lying on the ground like a
+//  dropped stack, but holding up to PACK_SLOTS stacks; walking onto it puts
+//  them back in the bag (what doesn't fit stays in it). One per map: falling
+//  again on the same map adds to it. Saved with the map (MAP SAVES:
+//  "backpack at tile X Y" + a "backpack item ID count N quality Q" line a
+//  stack); regrowth leaves it.
+#define PACK_SLOTS 48
+#define PACK_ITEM  "backpack"
+static inv_slot_t s_pack[PACK_SLOTS];
+
+static bool pack_is_tool(item_id_t it)
+{
+    return item_attr(it, ITEM_ATTR_TOOL, 0) > 0 || item_attr(it, ITEM_ATTR_ROD, 0) > 0 || item_attr(it, ITEM_ATTR_TILLS, 0) > 0 ||
+           item_attr(it, ITEM_ATTR_WATERS, 0) > 0 || item_attr(it, ITEM_ATTR_CUTS, 0) > 0 || item_attr(it, "shears", 0) > 0 ||
+           item_attr(it, "milks", 0) > 0;
+}
+
+static int pack_ground(void)
+{
+    for (int i = 0; i < GROUND_MAX; i++) if (s_ground[i].count > 0 && s_ground[i].pack) return i;
+    return -1;
+}
+
+// One stack into the loaded map's backpack (onto a same one, or a free slot). false = it's full.
+static bool pack_add(item_id_t item, uint8_t quality, int count)
+{
+    for (int k = 0; k < s_pack_n && count > 0; k++) {
+        inv_slot_t *s = &s_pack[k];
+        if (s->item != item || s->quality != quality) continue;
+        int room = 255 - s->count, n = count < room ? count : room;
+        s->count = (uint8_t)(s->count + n);
+        count -= n;
+    }
+    if (count <= 0) return true;
+    if (s_pack_n >= PACK_SLOTS) return false;
+    s_pack[s_pack_n++] = (inv_slot_t){ .item = item, .count = (uint8_t)count, .quality = quality };
+    return true;
+}
+
+// Passing out (TEMPERATURE): everything but the tools and photo items goes in the backpack, on
+// the ground where the player lies. How many stacks went in; -1 = there was nowhere to put it (kept).
+static int pack_drop_all(void)
+{
+    item_id_t bag = item_find(PACK_ITEM);
+    if (bag == ITEM_NONE || !s_map_loaded) return -1;
+    int ptx = (s_player_x + PLAYER_W / 2) / TILE_SIZE, pty = (s_player_y + PLAYER_H - 1) / TILE_SIZE;
+    int g = pack_ground();
+    if (g < 0) {
+        if (!ground_drop_near(bag, QUALITY_STANDARD, 1, ptx, pty, 0, 0, true, false)) return -1;
+        for (int i = 0; i < GROUND_MAX; i++)
+            if (s_ground[i].count > 0 && s_ground[i].item == bag && !s_ground[i].pack) { s_ground[i].pack = true; g = i; break; }
+        if (g < 0) return -1;
+    }
+    int n = 0, lost = 0;
+    for (int k = 0; k < INV_SLOTS; k++) {
+        inv_slot_t *s = &s_inv[k];
+        if (s->count == 0 || s->item >= item_count || pack_is_tool(s->item)) continue;   // (>= item_count: a photo item)
+        if (pack_add(s->item, s->quality, s->count)) n++; else lost++;
+        *s = (inv_slot_t){ ITEM_NONE, 0, QUALITY_STANDARD };
+    }
+    if (lost) ESP_LOGW(TAG, "backpack: full — %d stack%s lost", lost, lost == 1 ? "" : "s");
+    hud_refresh();
+    mapsave_mark_dirty();
+    ESP_LOGI(TAG, "backpack: %d stacks left on %s at tile (%d,%d)", n, current_map_name(), s_ground[g].tx, s_ground[g].ty);
+    return n;
+}
+
+// ground_tick(): the player walked onto the backpack — its stacks back into the bag.
+static void pack_pick_up(int i)
+{
+    int got = 0, left = 0;
+    for (int k = 0; k < s_pack_n; k++) {
+        inv_slot_t *s = &s_pack[k];
+        int rest = inv_add_q(s->item, s->quality, s->count);
+        if (rest < s->count) got++;
+        s->count = (uint8_t)rest;
+    }
+    int w = 0;                         // close up the empty slots
+    for (int k = 0; k < s_pack_n; k++) if (s_pack[k].count) s_pack[w++] = s_pack[k];
+    left  = w;
+    s_pack_n = w;
+    hud_refresh();
+    mapsave_mark_dirty();
+    if (got) newitem_sparkle();        // NEW ITEM
+    if (left) {
+        message(2500, got ? "Your bag is full - the rest is still in the backpack" : "No room in your bag for the backpack's things");
+        return;
+    }
+    message(2500, "You got your things back!");
+    ground_unbake(i);
+    s_ground[i].count = 0;
+    s_ground[i].pack  = false;
+    map_repaint_rect(s_ground[i].tx * TILE_SIZE, s_ground[i].ty * TILE_SIZE, TILE_SIZE, TILE_SIZE, NULL);
 }
 
 // ============================================================
@@ -8425,6 +8658,7 @@ static int      crows_eat(int pct, bool land);   // ...the crows take some crops
 static void     crows_ate_repaint(void);      // ...shows where they were taken
 static bool     crows_come_here(void);        // ...outdoors
 static void     crow_clear(void);             // ...the old map's crows (and sprinkler spray) go
+static void     bat_clear(void);              // BATS: and a bat flying over
 static bool     farm_morning(bool baked, bool repaint, bool force, int crow_pct);   // ...today's 6:00 on the loaded map
 static void     sprinkler_resume(void);       // ...a map loaded in the sprinkling hour, its morning already played
 
@@ -8542,6 +8776,98 @@ static const char *season_map_path(const char *path, char *out, size_t n)
     return out;
 }
 
+// ---- CLIMATE --------------------------------------------------------------
+//  Every map has one climate: Normal, Hot, Cold, Dry or Lush — the Map
+//  Editor's "Climate", exported as <map>.climate next to the .map (one line,
+//  "climate hot"; no file = Normal). A building's inside without a file of
+//  its own is indoors (CLIMATE_INDOORS): no climate, anything grows there,
+//  as with the seasons. What lives somewhere says where with a "climate" bit
+//  set on its item (items.h: 1 normal, 2 hot, 4 cold, 8 dry, 16 lush, 32
+//  volcanic, 64 glacial; none = any of the first five — Volcanic and Glacial
+//  only have what names them):
+//   - crops: the seed packet's (the Crops Editor) — planted only there (farm_on_action())
+//   - trees: the seed's (the Trees tab) — planted only there (tree_plant()); a
+//     map's own trees (the Map Editor's Tree tool) are as they were put
+//   - forage: comes up only there (FORAGE)
+//   - fish, junk, crab pot catches: bite / are caught only there (FISHING)
+//  And the climate itself:
+//   - Dry: it never rains there (rain_now(), rain_fell() — WEATHER); the
+//     farmland only gets the watering can
+//   - Lush: CLIMATE_LUSH_FORAGE more forage each morning (FORAGE), and bare
+//     Grassy ground grows grass back twice as often (FARMING)
+//   - Hot, Cold: the player heats up / cools down (TEMPERATURE: out cold after
+//     5 game hours); Volcanic, Glacial: the same in a quarter of an hour, and
+//     it never rains there
+//  Dev link: "climate" (show) / "climate NAME" (pretend, until the next map loads).
+#define CLIMATE_NORMAL      0
+#define CLIMATE_HOT         1
+#define CLIMATE_COLD        2
+#define CLIMATE_DRY         3
+#define CLIMATE_LUSH        4
+#define CLIMATE_VOLCANIC    5      // the extremes: TEMPERATURE runs out in a quarter of an hour, and only
+#define CLIMATE_GLACIAL     6      // ...what names them lives there (none = any of the mild five)
+#define CLIMATE_COUNT       7
+#define CLIMATE_INDOORS     255    // a building's inside with no climate of its own: anything goes
+#define CLIMATE_ALL         0x7F   // every climate's bit
+#define CLIMATE_MILD        0x1F   // Normal..Lush: what "none" means
+#define CLIMATE_LUSH_FORAGE 2      // Lush: this many more forageables each morning
+static const char *const k_climate_name[CLIMATE_COUNT] = { "Normal", "Hot", "Cold", "Dry", "Lush", "Volcanic", "Glacial" };
+static const char *const k_climate_word[CLIMATE_COUNT] = { "normal", "hot", "cold", "dry", "lush", "volcanic", "glacial" };
+static uint8_t s_climate = CLIMATE_NORMAL;   // the loaded map's (climate_map_loaded())
+static bool map_path_for(const char *name, char *out, size_t n);   // TELEPORTERS: a map's name -> its file
+
+// Does climate bit set `mask` (0 = any of the mild five) take the loaded map's?
+static bool climate_fits(int32_t mask)
+{
+    mask &= CLIMATE_ALL;
+    if (mask == 0) mask = CLIMATE_MILD;
+    return s_climate == CLIMATE_INDOORS || ((mask >> s_climate) & 1);
+}
+static int32_t item_climates(item_id_t it) { return item_attr(it, ITEM_ATTR_CLIMATE, 0) & CLIMATE_ALL; }
+static bool    climate_rains(void) { return s_climate != CLIMATE_DRY && s_climate != CLIMATE_VOLCANIC && s_climate != CLIMATE_GLACIAL; }
+static bool    item_climate_ok(item_id_t it) { return climate_fits(item_climates(it)); }
+
+// "Hot/Dry" (brief) or "hot or dry"; "any climate" for none or all.
+static void climate_list(int32_t mask, char *out, size_t n, bool brief)
+{
+    mask &= CLIMATE_ALL;
+    if (mask == 0 || mask == CLIMATE_ALL) { snprintf(out, n, "any climate"); return; }
+    int len = 0, i = 0;
+    out[0] = '\0';
+    for (int k = 0; k < CLIMATE_COUNT && len >= 0 && (size_t)len < n; k++) {
+        if (!((mask >> k) & 1)) continue;
+        len += snprintf(out + len, n - (size_t)len, "%s%s", i ? (brief ? "/" : " or ") : "", brief ? k_climate_name[k] : k_climate_word[k]);
+        i++;
+    }
+}
+
+// load_map(), once the new map's name and building are set: its climate, from <map>.climate.
+static void climate_map_loaded(void)
+{
+    static char path[MAP_PATH_MAX];
+    char line[48];
+    s_climate = s_map_inst ? CLIMATE_INDOORS : CLIMATE_NORMAL;
+    if (!map_path_for(current_map_name(), path, sizeof(path))) return;
+    char *dot = strrchr(path, '.');
+    if (!dot || (size_t)(dot - path) + sizeof(".climate") > sizeof(path)) return;
+    strcpy(dot, ".climate");
+    FILE *f = fopen(path, "r");
+    if (!f) return;
+    while (fgets(line, sizeof(line), f)) {
+        char *p = line;
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == '#' || strncasecmp(p, "climate", 7) != 0) continue;
+        p += 7;
+        while (*p == ' ' || *p == '\t') p++;
+        for (int k = 0; k < CLIMATE_COUNT; k++) {
+            size_t len = strlen(k_climate_word[k]);
+            if (strncasecmp(p, k_climate_word[k], len) == 0 && !isalnum((unsigned char)p[len])) s_climate = (uint8_t)k;
+        }
+    }
+    fclose(f);
+    ESP_LOGI(TAG, "climate: %s is %s", current_map_name(), s_climate == CLIMATE_INDOORS ? "indoors" : k_climate_word[s_climate]);
+}
+
 // How many one harvest of crop c gives: 1, or extra_min..extra_max with extra_chance% odds.
 static int farm_yield(const crop_def_t *c)
 {
@@ -8606,7 +8932,7 @@ static bool farm_tile_ok(int tx, int ty, bool check_player)
     for (int py = y + TILE_SIZE - PLAYER_FEET_H; py < y + TILE_SIZE; py++)  // the player could stand there
         for (int px = x; px < x + TILE_SIZE; px++)
             if (map_pixel_blocked(px, py)) return false;
-    if (anim_rects_overlap(x, ry, CROP_W, CROP_H, CLOCK_X, CLOCK_Y, CLOCK_W, CLOCK_H)) return false;
+    if (anim_rects_overlap(x, ry, CROP_W, CROP_H, CLOCK_X, CLOCK_Y, CLOCK_W, CLOCK_H_MAX)) return false;
     if (anim_rects_overlap(x, ry, CROP_W, CROP_H, TOUCH_BTN_X, TOUCH_BTN_Y, TOUCH_BTN_SIZE, TOUCH_BTN_SIZE)) return false;
     for (int n = 0; n < s_anim.inst_count; n++) {
         const anim_instance_t *a = &s_anim.inst[n];
@@ -8740,12 +9066,10 @@ static void farm_clear(void)
     s_morning_day   = clock_minute_of_day() >= FARM_MORNING_MIN ? s_farm_day : s_farm_day - 1;   // ...and so is its morning
     soil_wet_forget();
     crow_clear();
+    bat_clear();                              // (BATS: a new map, no bat over it)
 }
 
 // ---- Farmland ----
-_Static_assert(FARMLAND_DRY_W == TILE_SIZE && FARMLAND_DRY_H == TILE_SIZE &&
-               FARMLAND_WATERED_W == TILE_SIZE && FARMLAND_WATERED_H == TILE_SIZE,
-               "assets/farmland_dry.png and farmland_watered.png must be one tile (16x16)");
 
 #define ITEM_TILLS(item)  ((item) != ITEM_NONE && item_attr((item), ITEM_ATTR_TILLS, 0) > 0)
 #define ITEM_WATERS(item) ((item) != ITEM_NONE && item_attr((item), ITEM_ATTR_WATERS, 0) > 0)
@@ -8777,7 +9101,7 @@ static bool ground_spot_free(int tx, int ty)
     for (int py = y + TILE_SIZE - PLAYER_FEET_H; py < y + TILE_SIZE; py++)
         for (int px = x; px < x + TILE_SIZE; px++)
             if (map_pixel_blocked(px, py)) return false;
-    if (anim_rects_overlap(x, y, TILE_SIZE, TILE_SIZE, CLOCK_X, CLOCK_Y, CLOCK_W, CLOCK_H)) return false;
+    if (anim_rects_overlap(x, y, TILE_SIZE, TILE_SIZE, CLOCK_X, CLOCK_Y, CLOCK_W, CLOCK_H_MAX)) return false;
     if (anim_rects_overlap(x, y, TILE_SIZE, TILE_SIZE, TOUCH_BTN_X, TOUCH_BTN_Y, TOUCH_BTN_SIZE, TOUCH_BTN_SIZE)) return false;
     for (int n = 0; n < s_anim.inst_count; n++) {
         const anim_instance_t *a = &s_anim.inst[n];
@@ -8800,14 +9124,82 @@ static bool soil_tile_ok(int tx, int ty)
     return soil_spot_ok(tx, ty) && s_soil[ty][tx] == SOIL_NONE && farm_at(tx, ty) < 0 && ground_at(tx, ty) < 0;
 }
 
-// Writes tile (tx,ty)'s farmland into the map pixels, over its ground only. Screen untouched.
+// ---- the farmland's look: Stardew's hoed dirt, joined up ----
+// Each farmland tile is drawn with one of 16 cells of a 4x4 sheet, picked by
+// which of its four neighbours are farmland too (wet or dry): a tile with
+// one to its left uses the "joined on the left" cell, and so on. Winter (not
+// inside a building) has its own snowy sheets. The cells don't all cover
+// each other, so a tile drawn again — a new neighbour, watered, dried — first
+// gets back the ground it was baked over: s_soil_under, a 16x16 copy per
+// farmland tile, taken from the fresh map pixels each time they're replaced
+// (soil_bake_all()) or when the tile is first tilled. PSRAM, grown as needed.
+static const uint8_t k_soil_cell[16] = {   // mask (up 1, down 2, left 4, right 8) -> cell (row * 4 + col)
+    0,  3 * 4 + 0, 1 * 4 + 0, 2 * 4 + 0,  3 * 4 + 3, 2 * 4 + 3, 0 * 4 + 3, 1 * 4 + 3,
+    3 * 4 + 1, 2 * 4 + 1, 0 * 4 + 1, 1 * 4 + 1,  3 * 4 + 2, 2 * 4 + 2, 0 * 4 + 2, 1 * 4 + 2,
+};
+_Static_assert(FARMLAND_DRY_W == 4 * TILE_SIZE && FARMLAND_DRY_H == 4 * TILE_SIZE && FARMLAND_WATERED_W == 4 * TILE_SIZE &&
+               FARMLAND_WATERED_H == 4 * TILE_SIZE && FARMLAND_WINTER_DRY_W == 4 * TILE_SIZE && FARMLAND_WINTER_DRY_H == 4 * TILE_SIZE &&
+               FARMLAND_WINTER_WATERED_W == 4 * TILE_SIZE && FARMLAND_WINTER_WATERED_H == 4 * TILE_SIZE,
+               "assets/farmland_*.png must be 4x4 cells of 16x16 (Stardew's hoed dirt layout)");
+#define SOIL_UNDER_CHUNK 64                 // tiles the copy pool grows by
+#define SOIL_TILE_PX     (TILE_SIZE * TILE_SIZE)
+EXT_RAM_BSS_ATTR static uint16_t s_soil_under_ix[TILE_ROWS][TILE_COLS];   // slot + 1 in s_soil_under, 0 = no copy
+static uint16_t *s_soil_under;              // PSRAM, SOIL_TILE_PX a slot
+static int       s_soil_under_n, s_soil_under_cap;
+
+// Which of tile (tx,ty)'s neighbours are farmland: up 1, down 2, left 4, right 8.
+static int soil_mask(int tx, int ty)
+{
+    int m = 0;
+    if (ty > 0 && s_soil[ty - 1][tx] != SOIL_NONE)             m |= 1;
+    if (ty < TILE_ROWS - 1 && s_soil[ty + 1][tx] != SOIL_NONE) m |= 2;
+    if (tx > 0 && s_soil[ty][tx - 1] != SOIL_NONE)             m |= 4;
+    if (tx < TILE_COLS - 1 && s_soil[ty][tx + 1] != SOIL_NONE) m |= 8;
+    return m;
+}
+
+// Keeps what's on the map at tile (tx,ty) now as the ground under its farmland (if it hasn't one yet).
+static void soil_under_keep(int tx, int ty)
+{
+    if (s_soil_under_ix[ty][tx]) return;
+    if (s_soil_under_n == s_soil_under_cap) {
+        uint16_t *grown = heap_caps_realloc(s_soil_under, (size_t)(s_soil_under_cap + SOIL_UNDER_CHUNK) * SOIL_TILE_PX * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
+        if (!grown) { ESP_LOGW(TAG, "farmland: no PSRAM to keep the ground under a tile"); return; }
+        s_soil_under      = grown;
+        s_soil_under_cap += SOIL_UNDER_CHUNK;
+    }
+    uint16_t *dst = s_soil_under + (size_t)s_soil_under_n * SOIL_TILE_PX;
+    for (int row = 0; row < TILE_SIZE; row++)
+        memcpy(dst + row * TILE_SIZE, &s_map_pixels[(ty * TILE_SIZE + row) * s_map_w + tx * TILE_SIZE], TILE_SIZE * sizeof(uint16_t));
+    s_soil_under_ix[ty][tx] = (uint16_t)++s_soil_under_n;
+}
+
+// Forgets every copy (the map pixels were replaced). The pool is kept for reuse.
+static void soil_under_reset(void)
+{
+    memset(s_soil_under_ix, 0, sizeof(s_soil_under_ix));
+    s_soil_under_n = 0;
+}
+
+// Writes tile (tx,ty)'s farmland into the map pixels, over its ground only: the
+// ground it was baked over back first, then the cell its neighbours call for. Screen untouched.
 static void soil_bake(int tx, int ty)
 {
-    const uint16_t *art = s_soil[ty][tx] == SOIL_WATERED ? farmland_watered : farmland_dry;
+    soil_under_keep(tx, ty);   // (first time: the ground as it is now)
+    int slot = s_soil_under_ix[ty][tx];
+    if (slot) {
+        const uint16_t *src = s_soil_under + (size_t)(slot - 1) * SOIL_TILE_PX;
+        for (int row = 0; row < TILE_SIZE; row++)
+            memcpy(&s_map_pixels[(ty * TILE_SIZE + row) * s_map_w + tx * TILE_SIZE], src + row * TILE_SIZE, TILE_SIZE * sizeof(uint16_t));
+    }
+    bool wet = s_soil[ty][tx] == SOIL_WATERED, winter = clock_season() == 3 && !s_map_inst;   // (inside a building: no snow)
+    const uint16_t *sheet = winter ? (wet ? farmland_winter_watered : farmland_winter_dry) : (wet ? farmland_watered : farmland_dry);
+    int cell = k_soil_cell[soil_mask(tx, ty)];
+    const uint16_t *art = sheet + (cell / 4) * TILE_SIZE * FARMLAND_DRY_W + (cell % 4) * TILE_SIZE;
     for (int row = 0; row < TILE_SIZE; row++) {
         for (int col = 0; col < TILE_SIZE; col++) {
             int mi = (ty * TILE_SIZE + row) * s_map_w + tx * TILE_SIZE + col;
-            uint16_t c = art[row * TILE_SIZE + col];
+            uint16_t c = art[row * FARMLAND_DRY_W + col];
             if (c == FB_TRANSPARENT_COLOR || bit_get(s_map_fgmask, mi)) continue;   // foreground scenery stays in front
             s_map_pixels[mi] = s_night_shown ? night_px(&s_night_lut, c) : c;
         }
@@ -8817,29 +9209,62 @@ static void soil_bake(int tx, int ty)
 // Bakes all the farmland (fresh map pixels: a map loading, a night stage). Before crops and dropped stacks.
 static void soil_bake_all(void)
 {
+    soil_under_reset();   // the ground under each tile, as these fresh pixels have it
     for (int ty = 0; ty < TILE_ROWS; ty++)
         for (int tx = 0; tx < TILE_COLS; tx++)
             if (s_soil[ty][tx] != SOIL_NONE) soil_bake(tx, ty);
 }
 
-// Makes tile (tx,ty) farmland in `state` and shows it: whatever lies on it
-// or hangs over it (a dropped stack, crops) comes off, the farmland goes
-// in, and they go back on top.
-static void soil_set(int tx, int ty, uint8_t state)
+static uint8_t s_soil_was[TILE_ROWS][TILE_COLS];   // the farmland before a change to many tiles at once
+
+// Farmland tiles changed (s_soil_was = before): lift what lies on the tiles
+// that need drawing again — the changed ones, and the neighbours of ones that
+// became farmland (their joins changed) — bake them and every crop again, put
+// it back. repaint: and show it (false = the screen gets repainted whole
+// anyway: waking up).
+static void soil_redraw(bool repaint)
 {
-    int  g       = ground_at(tx, ty);
-    bool g_baked = g >= 0 && s_ground[g].baked;
+    EXT_RAM_BSS_ATTR static uint8_t redo[TILE_ROWS][TILE_COLS];
+    memset(redo, 0, sizeof(redo));
+    for (int ty = 0; ty < TILE_ROWS; ty++)
+        for (int tx = 0; tx < TILE_COLS; tx++) {
+            if (s_soil[ty][tx] == s_soil_was[ty][tx]) continue;
+            redo[ty][tx] = 1;
+            if ((s_soil[ty][tx] == SOIL_NONE) == (s_soil_was[ty][tx] == SOIL_NONE)) continue;   // only wet <-> dry: the joins stay
+            if (ty > 0)             redo[ty - 1][tx] = 1;
+            if (ty < TILE_ROWS - 1) redo[ty + 1][tx] = 1;
+            if (tx > 0)             redo[ty][tx - 1] = 1;
+            if (tx < TILE_COLS - 1) redo[ty][tx + 1] = 1;
+        }
     int8_t before[FARM_MAX];
+    bool   lifted[GROUND_MAX] = { 0 };
     for (int i = 0; i < FARM_MAX; i++) before[i] = s_farm[i].shown;
-    if (g_baked) ground_unbake(g);
+    for (int g = 0; g < GROUND_MAX; g++) {
+        const ground_item_t *s = &s_ground[g];
+        if (s->count > 0 && s->baked && redo[s->ty][s->tx]) { ground_unbake(g); lifted[g] = true; }
+    }
     farm_unbake_all();
-    s_soil[ty][tx] = state;
-    soil_bake(tx, ty);
+    for (int ty = 0; ty < TILE_ROWS; ty++)
+        for (int tx = 0; tx < TILE_COLS; tx++)
+            if (redo[ty][tx] && s_soil[ty][tx] != SOIL_NONE) soil_bake(tx, ty);
     farm_bake_all();
-    if (g_baked) ground_bake(g);
-    map_repaint_rect(tx * TILE_SIZE, ty * TILE_SIZE, TILE_SIZE, TILE_SIZE, NULL);
+    for (int g = 0; g < GROUND_MAX; g++) if (lifted[g]) ground_bake(g);
+    if (!repaint) return;
+    for (int ty = 0; ty < TILE_ROWS; ty++)
+        for (int tx = 0; tx < TILE_COLS; tx++)
+            if (redo[ty][tx]) map_repaint_rect(tx * TILE_SIZE, ty * TILE_SIZE, TILE_SIZE, TILE_SIZE, NULL);
     for (int i = 0; i < FARM_MAX; i++)   // a crop that grew a stage meanwhile
         if (s_farm[i].used && s_farm[i].shown != before[i]) farm_repaint(s_farm[i].tx, s_farm[i].ty);
+}
+
+// Makes tile (tx,ty) farmland in `state` and shows it: whatever lies on it
+// or hangs over it (a dropped stack, crops) comes off, the farmland goes
+// in (its neighbours join up with it), and they go back on top.
+static void soil_set(int tx, int ty, uint8_t state)
+{
+    memcpy(s_soil_was, s_soil, sizeof(s_soil_was));
+    s_soil[ty][tx] = state;
+    soil_redraw(true);
     mapsave_mark_dirty();
 }
 
@@ -8853,34 +9278,9 @@ bool soil_water(int tx, int ty, bool watered)
     return true;
 }
 
-static uint8_t s_soil_was[TILE_ROWS][TILE_COLS];   // the farmland before a change to many tiles at once
-
 // Many farmland tiles changed state at once (s_soil_was = before), and maybe
-// some crops' stages: lift what lies on the changed tiles, bake the new
-// farmland and every crop again, put it back. repaint: and show it (false =
-// the screen gets repainted whole anyway: waking up).
-static void soil_show_changes(bool repaint)
-{
-    int8_t before[FARM_MAX];
-    bool   lifted[GROUND_MAX] = { 0 };
-    for (int i = 0; i < FARM_MAX; i++) before[i] = s_farm[i].shown;
-    for (int g = 0; g < GROUND_MAX; g++) {
-        const ground_item_t *s = &s_ground[g];
-        if (s->count > 0 && s->baked && s_soil[s->ty][s->tx] != s_soil_was[s->ty][s->tx]) { ground_unbake(g); lifted[g] = true; }
-    }
-    farm_unbake_all();
-    for (int ty = 0; ty < TILE_ROWS; ty++)
-        for (int tx = 0; tx < TILE_COLS; tx++)
-            if (s_soil[ty][tx] != s_soil_was[ty][tx] && s_soil[ty][tx] != SOIL_NONE) soil_bake(tx, ty);
-    farm_bake_all();
-    for (int g = 0; g < GROUND_MAX; g++) if (lifted[g]) ground_bake(g);
-    if (!repaint) return;
-    for (int ty = 0; ty < TILE_ROWS; ty++)
-        for (int tx = 0; tx < TILE_COLS; tx++)
-            if (s_soil[ty][tx] != s_soil_was[ty][tx]) map_repaint_rect(tx * TILE_SIZE, ty * TILE_SIZE, TILE_SIZE, TILE_SIZE, NULL);
-    for (int i = 0; i < FARM_MAX; i++)
-        if (s_farm[i].used && s_farm[i].shown != before[i]) farm_repaint(s_farm[i].tx, s_farm[i].ty);
-}
+// some crops' stages: see soil_redraw().
+static void soil_show_changes(bool repaint) { soil_redraw(repaint); }
 
 // Rain on the loaded map: every bit of dry farmland is watered (farm_tick(), once a game minute while it
 // rains; waking up after rain in the night). repaint: as in soil_show_changes().
@@ -9093,7 +9493,7 @@ static void grass_night(void)
         }
     for (int ty = 0; ty < TILE_ROWS && count < GRASS_MAX; ty++)   // wild grass grows back on bare Grassy ground
         for (int tx = 0; tx < TILE_COLS && count < GRASS_MAX; tx++) {
-            if (had[ty][tx] || s_grass[ty][tx] || !tile_grassy(tx, ty) || (int)(esp_random() % 100) >= GRASS_REGROW_PCT) continue;
+            if (had[ty][tx] || s_grass[ty][tx] || !tile_grassy(tx, ty) || (int)(esp_random() % 100) >= GRASS_REGROW_PCT * (s_climate == CLIMATE_LUSH ? 2 : 1)) continue;   // (CLIMATE: Lush)
             if (ground_at(tx, ty) >= 0 || farm_at(tx, ty) >= 0 || !grass_spot_ok(tx, ty)) continue;
             s_grass[ty][tx] = 1;
             count++;
@@ -9335,7 +9735,7 @@ static void farm_on_action(void)
             message(2500, "%s: %d more watered day%s%s", item_name(item), left, left == 1 ? "" : "s", dry ? " - needs water!" : "");
             return;
         }
-        uint8_t q = wet_if_raining(QUALITY_MAKE(item_roll_quality(item, esp_random()), mut_roll(item, 1.0f)));   // MUTATIONS, WET ITEMS
+        uint8_t q = wet_if_raining(QUALITY_MAKE(skill_roll_quality(item, SKILL_FARMING), mut_roll(item, 1.0f)));   // MUTATIONS, WET ITEMS, SKILLS
         if (soil_just_watered(tx, ty)) q |= QUALITY_WET;   // its farmland was watered less than an hour ago
         int n = farm_yield(c), spill = item == ITEM_NONE ? n : inv_add_q(item, q, n);
         if (spill == n) {          // not even one fit: the crop stays
@@ -9346,6 +9746,10 @@ static void farm_on_action(void)
             ESP_LOGW(TAG, "farm: %d x %s didn't fit anywhere — lost", spill, item_name(item));
         hud_refresh();
         if (item != ITEM_NONE) newitem_sparkle();   // NEW ITEM
+        if (item != ITEM_NONE) {                    // SKILLS: farming xp, more for a dearer crop (Stardew's: 16 ln(0.018 price + 1))
+            int xp = (int)lroundf(16.0f * logf(0.018f * (float)item_sell_price(item) + 1.0f));
+            skill_xp(SKILL_FARMING, xp > 0 ? xp : 1);
+        }
         char ql[32];
         quality_label(q, ql, sizeof(ql));   // "Radioactive Gold" (MUTATIONS)
         if (q != QUALITY_STANDARD && n > 1) message(2500, "Harvested %d %s %s!", n, ql, item_name(item));
@@ -9372,6 +9776,12 @@ static void farm_on_action(void)
         char when[40];
         season_list(crop_seasons(crop), when, sizeof(when), false);
         message(2500, "%s only grow in %s", item_name(inv_held_item()), when);
+        return;
+    }
+    if (!item_climate_ok(inv_held_item())) {               // CLIMATE: not this map's
+        char where[48];
+        climate_list(item_climates(inv_held_item()), where, sizeof(where), false);
+        message(2500, "%s won't grow in a %s climate (only %s)", item_name(inv_held_item()), k_climate_word[s_climate], where);
         return;
     }
     if (!farm_tile_ok(tx, ty, true)) {
@@ -9402,6 +9812,7 @@ static void farm_tick(void)
     herd_catch_up(true, true);   // the barn animals' midnight (FARM) — before the grass grows in the night
     if (farm_catch_up(true, true)) mapsave_mark_dirty();
     farm_morning(true, true, false, CROW_PCT);   // 6:00: the sprinklers come on, the crows come (SPRINKLERS + SCARECROWS)
+    forage_catch_up(true);                       // 6:00: new forage comes up (FORAGE — ground_tick() shows it)
     if (rain_now()) soil_rain(true);
 }
 
@@ -9454,6 +9865,10 @@ static bool farm_restore(const char *id, int tx, int ty, int grown, int day, boo
 //    since day 4               game day of the first change since the map was fresh (REGROWTH)
 //    broken 3 at 120 64 size 48 64 level 1 of 2 hits 0
 //    dropped 5 wood at tile 12 7       (+ "quality 2" when it isn't standard)
+//    forage daffodil at tile 3 9       a forageable that came up by itself (+ "quality 2") — FORAGE
+//    forage day 31                     the last morning forage came up here (FORAGE)
+//    backpack at tile 5 8              what the player lost passing out here (BACKPACK, in GROUND ITEMS)...
+//    backpack item tomato count 5 quality 0   ...a line for each stack in it
 //    farm day 31                       the game day the farmland and crops are up to (FARMING)
 //    morning day 31                    the last day whose 6:00 (sprinklers, crows) was played here (SPRINKLERS + SCARECROWS)
 //    soil at tile 9 14                 (+ "watered" — farmland the hoe made, FARMING)
@@ -9521,6 +9936,14 @@ static const map_regen_t s_map_regen[] = {
 static uint32_t clock_day(void);          // CLOCK section: days since the world began
 int             clock_minute_of_day(void);
 static bool     world_save(void);         // SAVE SLOTS section: the clock and player go on the card with every map save
+static void     energy_write(FILE *f, char *line, size_t n);                       // ENERGY section: world.txt's lines...
+static void     energy_home_load(const char *map, int inst, int x, int y);       // ...its "home" line read back
+static void     energy_reset(void);                                              // ...a new game: full, no home
+static void     skills_write(FILE *f, char *line, size_t n);                       // SKILLS: world.txt's "skill" lines...
+static void     skills_load(const char *name, int xp);                           // ...one read back
+static void     skills_reset(void);
+static void     museum_load(const char *dir);                                    // MUSEUM: museum.txt in the save
+static void     museum_reset(void);
 
 #define SAVE_SLOTS_MAX 6                            // saves: /sdcard/saves/save1 .. save6 (SAVE SLOTS)
 static char s_save_dir[40] = SAVES_ROOT "/save1";   // the save slot being played (save_slot_use())
@@ -9583,12 +10006,15 @@ static void mapsave_delete(void)
 // What a save has a line for: a breakable that isn't as placed, a stack on
 // the ground (not a photo item — those only last until reboot).
 static bool mapsave_brk_changed(const brk_inst_t *b)   { return b->level > 0 || b->hits_done > 0; }
-static bool mapsave_ground_kept(const ground_item_t *g) { return g->count > 0 && g->item < item_count; }
+static bool mapsave_ground_kept(const ground_item_t *g) { return g->count > 0 && g->item < item_count && !g->forage && !g->pack; }
+static bool mapsave_forage_kept(const ground_item_t *g) { return g->count > 0 && g->item < item_count && g->forage; }
 
 static bool tree_any(void);                                  // TREES section: any trees here...
 static void tree_write(FILE *f, char *line, size_t n);       // ...their lines
 static bool tree_restore(const char *id, const int *v);      // ...one read back
 static bool tree_seed_from_map(void);                        // ...the map's own trees (<map>.trees), the first time
+static bool forage_tiles_any(void);                          // FORAGE section: the map has Forage tiles
+static int32_t s_forage_day;                                 // ...the last morning forage came up on it
 
 // Writes the loaded map's save. Lines are formatted into a static buffer
 // and written with fputs (not fprintf): the main task's stack is small.
@@ -9598,16 +10024,18 @@ static bool mapsave_write(void)
     if (!mapsave_path(s_map_path, ".sav", path, sizeof(path)) ||
         !mapsave_path(s_map_path, ".tmp", tmp, sizeof(tmp))) return false;
 
-    int broken = 0, dropped = 0, planted = 0, tilled = 0, props = place_props_count(), animals = ranch_animal_count(), grassed = grass_count();
+    int broken = 0, dropped = 0, foraged = 0, planted = 0, tilled = 0, props = place_props_count(), animals = ranch_animal_count(), grassed = grass_count();
     for (int n = 0; n < s_brk.count; n++) broken  += mapsave_brk_changed(&s_brk.inst[n]);
     for (int i = 0; i < GROUND_MAX; i++)  dropped += mapsave_ground_kept(&s_ground[i]);
+    for (int i = 0; i < GROUND_MAX; i++)  foraged += mapsave_forage_kept(&s_ground[i]);
     for (int i = 0; i < FARM_MAX; i++)    planted += s_farm[i].used;
     for (int ty = 0; ty < TILE_ROWS; ty++)
         for (int tx = 0; tx < TILE_COLS; tx++) tilled += s_soil[ty][tx] != SOIL_NONE;
     if (broken == 0 && dropped == 0 && planted == 0 && tilled == 0 && props == 0 && animals == 0 && grassed == 0 && !grassy_any() &&
-        !tree_any() && !s_tree_seeded) {   // back to as exported: no save, and the regrowth timer stops
+        !tree_any() && !s_tree_seeded && !forage_tiles_any() && pack_ground() < 0) {   // back to as exported: no save, and the regrowth timer stops
         // (a map with Grassy ground keeps one: without it, its wild grass would start full again — FARMING;
-        // one whose own trees were put on it, the same: they'd come back — TREES)
+        // one whose own trees were put on it, the same: they'd come back — TREES; one with Forage tiles,
+        // its "forage day": a new lot would come up on the next visit — FORAGE)
         mapsave_delete();
         s_save_since_day = -1;
         ESP_LOGI(TAG, "save: %s is as exported again — no save kept", s_map_path);
@@ -9643,6 +10071,27 @@ static bool mapsave_write(void)
         else            snprintf(line, sizeof(line), "dropped %d %s at tile %d %d\n", g->count, item_get(g->item)->id, g->tx, g->ty);
         fputs(line, f);
     }
+    for (int i = 0; i < GROUND_MAX; i++) {   // (FORAGE)
+        const ground_item_t *g = &s_ground[i];
+        if (!mapsave_forage_kept(g)) continue;
+        if (g->quality) snprintf(line, sizeof(line), "forage %s at tile %d %d quality %d\n", item_get(g->item)->id, g->tx, g->ty, g->quality);
+        else            snprintf(line, sizeof(line), "forage %s at tile %d %d\n", item_get(g->item)->id, g->tx, g->ty);
+        fputs(line, f);
+    }
+    if (forage_tiles_any() && s_forage_day >= 0) {
+        snprintf(line, sizeof(line), "forage day %ld\n", (long)s_forage_day);
+        fputs(line, f);
+    }
+    int pg = pack_ground();             // (BACKPACK)
+    if (pg >= 0) {
+        snprintf(line, sizeof(line), "backpack at tile %d %d\n", s_ground[pg].tx, s_ground[pg].ty);
+        fputs(line, f);
+        for (int k = 0; k < s_pack_n; k++) {
+            if (s_pack[k].count == 0 || s_pack[k].item >= item_count) continue;
+            snprintf(line, sizeof(line), "backpack item %s count %d quality %d\n", item_get(s_pack[k].item)->id, s_pack[k].count, s_pack[k].quality);
+            fputs(line, f);
+        }
+    }
     if (soil_any() || farm_covers_any() || ranch_any() || tree_any()) {   // the day the farmland, crops, animals, grass and trees are up to (FARMING)
         snprintf(line, sizeof(line), "farm day %ld\n", (long)s_farm_day);
         fputs(line, f);
@@ -9672,8 +10121,8 @@ static bool mapsave_write(void)
     unlink(path);                      // FAT's rename won't replace an existing file
     if (rename(tmp, path) != 0) return false;
     world_save();                      // so "since day" never runs ahead of the clock on the card
-    ESP_LOGI(TAG, "save: %s written (%d broken, %d dropped, %d farmland, %d crops, %d props, %d animals, %d grass, since day %ld)",
-             path, broken, dropped, tilled, planted, props, animals, grassed, (long)s_save_since_day);
+    ESP_LOGI(TAG, "save: %s written (%d broken, %d dropped, %d forage, %d farmland, %d crops, %d props, %d animals, %d grass, since day %ld)",
+             path, broken, dropped, foraged, tilled, planted, props, animals, grassed, (long)s_save_since_day);
     return true;
 }
 
@@ -9768,7 +10217,20 @@ static bool mapsave_restore_brk(const int *v)
 }
 
 // One "dropped" line. false = skipped (logged).
-static bool mapsave_restore_ground(const char *id, int count, int tx, int ty, int quality)
+static bool mapsave_restore_ground(const char *id, int count, int tx, int ty, int quality, bool forage);
+
+// A "backpack at tile" line: the backpack there — or as near as it fits now.
+static bool pack_restore(int tx, int ty)
+{
+    item_id_t bag = item_find(PACK_ITEM);
+    if (bag == ITEM_NONE || pack_ground() >= 0 || !ground_under_ok()) return false;
+    if (!ground_drop_near(bag, QUALITY_STANDARD, 1, tx, ty, 0, 0, true, false)) return false;
+    for (int i = 0; i < GROUND_MAX; i++)
+        if (s_ground[i].count > 0 && s_ground[i].item == bag && !s_ground[i].pack) { s_ground[i].pack = true; s_ground[i].baked = false; return true; }
+    return false;
+}
+
+static bool mapsave_restore_ground(const char *id, int count, int tx, int ty, int quality, bool forage)
 {
     item_id_t item = item_find(id);
     if (item == ITEM_NONE) {
@@ -9782,7 +10244,7 @@ static bool mapsave_restore_ground(const char *id, int count, int tx, int ty, in
     int i;
     for (i = 0; i < GROUND_MAX && s_ground[i].count > 0; i++) {}
     if (i == GROUND_MAX || !ground_under_ok()) return false;
-    s_ground[i] = (ground_item_t){ .item = item, .count = (uint8_t)count, .tx = (int8_t)tx, .ty = (int8_t)ty,   // baked by mapsave_show()
+    s_ground[i] = (ground_item_t){ .item = item, .count = (uint8_t)count, .tx = (int8_t)tx, .ty = (int8_t)ty, .forage = forage,   // baked by mapsave_show()
                                    .quality = (uint8_t)(quality > 0 && quality <= 255 && item_quality_ok((uint8_t)quality) ? quality : QUALITY_STANDARD) };
     return true;
 }
@@ -9800,6 +10262,7 @@ static void mapsave_load(void)
     s_save_warned    = false;
     s_save_since_day = -1;
     s_regen_seen_min = -1;
+    s_forage_day     = -1;             // no "forage day" line (or no save): the first visit (FORAGE)
     if (!mapsave_path(s_map_path, ".sav", path, sizeof(path))) return;
     FILE *f = fopen(path, "r");
     if (!f) {                          // a power cut between removing the old save and renaming the new one?
@@ -9833,7 +10296,7 @@ static void mapsave_load(void)
     fgets(line, sizeof(line), f);      // the header again
 
     // Pass 2: apply it.
-    int  broken = 0, dropped = 0, tilled = 0, planted = 0, props = 0, animals = 0, grassed = 0, treed = 0, skipped = 0, saved_count = -1;
+    int  broken = 0, dropped = 0, foraged = 0, tilled = 0, planted = 0, props = 0, animals = 0, grassed = 0, treed = 0, skipped = 0, saved_count = -1;
     int  farm_day = -1;                // no "farm day" line (an older save): the crops count as up to date
     int  morning_day = -1;             // no "morning day" line (an older save): the farm day's morning counts as played
     bool other_export = false;
@@ -9867,6 +10330,16 @@ static void mapsave_load(void)
             if (!place_restore_machine(v, any)) skipped++;
         } else if (mapsave_match(word, nw, "gate at tile # # open", v, &any)) {   // a gate left open (FENCES)
             if (!place_restore_gate(v[0], v[1])) skipped++;
+        } else if (mapsave_match(word, nw, "backpack at tile # #", v, &any)) {   // (BACKPACK) — kept by regrowth
+            if (pack_restore(v[0], v[1])) foraged++; else skipped++;
+        } else if (mapsave_match(word, nw, "backpack item * count # quality #", v, &any)) {
+            item_id_t it = item_find(any);
+            if (it == ITEM_NONE || v[0] < 1 || v[0] > 255 || !item_quality_ok((uint8_t)v[1]) || !pack_add(it, (uint8_t)v[1], v[0])) skipped++;
+        } else if (mapsave_match(word, nw, "forage day #", v, &any)) {   // the last morning forage came up (FORAGE) — kept by regrowth
+            s_forage_day = v[0];
+        } else if (mapsave_match(word, nw, "forage * at tile # #", v, &any) ||
+                   mapsave_match(word, nw, "forage * at tile # # quality #", v, &any)) {   // it came up by itself: regrowth leaves it
+            if (mapsave_restore_ground(any, 1, v[0], v[1], nw > 6 ? v[2] : 0, true)) foraged++; else skipped++;
         } else if (mapsave_match(word, nw, "trees seeded", v, &any)) {   // the map's own trees were put on it once (TREES)
             s_tree_seeded = true;
         } else if (mapsave_match(word, nw, "tree * at tile # # stage # age # moss # shaken # fruit # # hits #", v, &any)) {   // kept by regrowth
@@ -9884,7 +10357,7 @@ static void mapsave_load(void)
             if (mapsave_restore_brk(v)) broken++; else skipped++;
         } else if (mapsave_match(word, nw, "dropped # * at tile # #", v, &any) ||
                    mapsave_match(word, nw, "dropped # * at tile # # quality #", v, &any)) {
-            if (mapsave_restore_ground(any, v[0], v[1], v[2], nw > 7 ? v[3] : 0)) dropped++; else skipped++;
+            if (mapsave_restore_ground(any, v[0], v[1], v[2], nw > 7 ? v[3] : 0, false)) dropped++; else skipped++;
         } else if (!mapsave_match(word, nw, "map *", v, &any) && !mapsave_match(word, nw, "since day #", v, &any)) {
             ESP_LOGW(TAG, "save: %s has a line starting \"%s\" it doesn't understand — skipped", path, word[0]);
             skipped++;
@@ -9909,7 +10382,7 @@ static void mapsave_load(void)
     // with only them.
     if (regrown) {
         mapsave_delete();
-        if (planted || tilled || props || animals || grassed || treed || s_tree_seeded) mapsave_mark_dirty();
+        if (planted || tilled || props || animals || grassed || treed || s_tree_seeded || foraged || forage_tiles_any() || pack_ground() >= 0) mapsave_mark_dirty();
     } else if (since >= 0 && since <= today) {
         s_save_since_day = since;
     } else if (broken || dropped) {
@@ -9919,8 +10392,8 @@ static void mapsave_load(void)
 
     if (other_export || (saved_count >= 0 && saved_count != s_brk.count))
         ESP_LOGW(TAG, "save: %s was written for another export of %s — only what still fits the map is restored", path, s_map_path);
-    ESP_LOGI(TAG, "save: %s restored (%d broken, %d dropped, %d farmland, %d crops, %d props, %d animals, %d grass, %d skipped)",
-             path, broken, dropped, tilled, planted, props, animals, grassed, skipped);
+    ESP_LOGI(TAG, "save: %s restored (%d broken, %d dropped, %d forage, %d farmland, %d crops, %d props, %d animals, %d grass, %d skipped)",
+             path, broken, dropped, foraged, tilled, planted, props, animals, grassed, skipped);
     if (skipped) message(4000, "Map changed: %d saved change%s skipped", skipped, skipped == 1 ? "" : "s");
 }
 
@@ -9982,7 +10455,7 @@ static bool mapsave_regrow_now(void)
         if ((grown >> n) & 1) brk_compose_show(&s_brk.inst[n]);
     for (int i = 0; i < GROUND_MAX; i++) {
         ground_item_t *g = &s_ground[i];
-        if (g->count == 0) continue;
+        if (g->count == 0 || g->forage || g->pack) continue;   // forage came up by itself, the backpack is the player's: they stay
         if (g->baked) {
             ground_unbake(i);
             map_repaint_rect(g->tx * TILE_SIZE, g->ty * TILE_SIZE, TILE_SIZE, TILE_SIZE, NULL);
@@ -9992,7 +10465,8 @@ static bool mapsave_regrow_now(void)
     mapsave_delete();
     s_save_dirty     = false;
     s_save_since_day = -1;
-    if (farm_covers_any() || soil_any() || place_props_any() || ranch_any() || tree_any() || s_tree_seeded) mapsave_mark_dirty();   // farmland, crops, props, animals, grass and trees stay: a new save with just them
+    if (farm_covers_any() || soil_any() || place_props_any() || ranch_any() || tree_any() || s_tree_seeded || forage_tiles_any() || pack_ground() >= 0)
+        mapsave_mark_dirty();   // farmland, crops, props, animals, grass, trees and forage stay: a new save with just them
     return true;
 }
 
@@ -10594,7 +11068,8 @@ static void tree_drop_settle(tree_drop_t *d, bool here)
 // Fruit k of grown tree t (look l) lets go `delay` ms from now — or, with nowhere to land, goes straight into the bag.
 static void tree_drop_fruit(const tree_t *t, const tree_look_t *l, int k, item_id_t item, uint32_t delay)
 {
-    uint8_t q = wet_if_raining(QUALITY_MAKE(item_roll_quality(item, esp_random()), mut_roll(item, 1.0f)));   // MUTATIONS, WET ITEMS
+    uint8_t q = wet_if_raining(QUALITY_MAKE(skill_roll_quality(item, SKILL_FARMING), mut_roll(item, 1.0f)));   // MUTATIONS, WET ITEMS, SKILLS
+    skill_xp(SKILL_FARMING, SKILL_XP_FRUIT);   // (fruit trees are farming)
     int i, tx, ty, fx, fy;
     for (i = 0; i < TREE_DROPS_MAX && s_tdrop[i].used; i++) {}
     if (i == TREE_DROPS_MAX || !tree_drop_pick(t, k, item, q, &tx, &ty)) {   // no room to fall: into the bag
@@ -10748,6 +11223,11 @@ static void tree_fell(int i)
                              .t0 = tree_now_ms(), .wood = d->wood ? item_find(d->wood) : ITEM_NONE, .seed = tree_seed_item(t->def),
                              .wood_n = (uint8_t)tree_roll(d->wood_min, d->wood_max), .seed_n = (uint8_t)(d->fruit ? 0 : tree_roll(0, d->seed_max)),   // (a fruit tree never drops its sapling)
                              .name = tree_name(t) };
+    if (!d->fruit) {   // SKILLS: a wild tree is foraging (more wood the higher it is), a fruit tree farming
+        int w = s_tfall.wood_n + skill_level(SKILL_FORAGING) / 3;
+        s_tfall.wood_n = (uint8_t)(w > 255 ? 255 : w);
+    }
+    skill_xp(d->fruit ? SKILL_FARMING : SKILL_FORAGING, SKILL_XP_TREE);
     if (d->sfx_fall && d->sfx_fall[0]) sfx_play(d->sfx_fall);
     tree_snapshot();
     t->stage = TREE_STUMP;
@@ -10861,6 +11341,12 @@ static bool tree_plant_ok(int tx, int ty, bool check_player)
 
 static void tree_plant(int def, int tx, int ty)
 {
+    if (!item_climate_ok(inv_held_item())) {   // CLIMATE: not this map's
+        char where[48];
+        climate_list(item_climates(inv_held_item()), where, sizeof(where), false);
+        message(2500, "A %s won't grow in a %s climate (only %s)", s_trees[def]->name ? s_trees[def]->name : s_trees[def]->id, k_climate_word[s_climate], where);
+        return;
+    }
     if (!tree_plant_ok(tx, ty, true)) { message(2000, "Can't plant a tree here"); return; }
     grass_set(tx, ty, 0);   // (planting in grass digs it up)
     tree_snapshot();
@@ -10960,6 +11446,188 @@ static bool tree_seed_from_map(void)
     ESP_LOGI(TAG, "trees: %s — %d of its own trees put on it (%d lines skipped: a tree not in this build, or off the map)", path, n, bad);
     return true;
 }
+
+// ============================================================
+//  FORAGE — wild things to pick up, Stardew Valley style. Every morning a
+//  few forageables come up on the loaded map's Forage tiles (TILE_FLAG_FORAGE
+//  — the Map Editor's "Forage" on a 16x16 ground asset, with nothing drawn
+//  on it). A forageable is any item with "forage" W (items.h; the Item
+//  Editor's Forage card): W is its weight against the others that could
+//  come up here today — in season ("forage_seasons"), allowed on this map
+//  ("forage_map:<name>"). tools/slice_forage.py made the first ones from
+//  Stardew's forage sheet.
+//
+//  They lie on the ground as GROUND ITEMS (one each, a rolled quality and
+//  maybe a mutation), marked forage: baked into the map, picked up by
+//  walking onto them, saved with the map as "forage <id> at tile x y" lines
+//  (MAP SAVES — regrowth leaves them, they're the map's own). Each morning
+//  (FARM_MORNING_MIN, 6:00) the ones out of season go and FORAGE_DAY_MIN..
+//  FORAGE_DAY_MAX more come up, up to FORAGE_MAP_MAX lying there at once.
+//  A map the player wasn't on plays the mornings it missed when it loads
+//  (FORAGE_CATCH_UP at most); its first visit gets one. The last morning
+//  played is the save's "forage day <d>" line — a map with Forage tiles
+//  always keeps a save, so leaving and coming back brings nothing new.
+//  Only what lives in the map's climate comes up (CLIMATE: "climate" bits);
+//  a Lush map gets CLIMATE_LUSH_FORAGE more each morning.
+//  Dev link: "forage" (a morning now), "forage list", "forage clear".
+// ============================================================
+#define FORAGE_MAP_MAX   8    // forageables lying on one map at once
+#define FORAGE_DAY_MIN   1    // new ones each morning: this many...
+#define FORAGE_DAY_MAX   4    // ...to this many (fewer once the map's near full)
+#define FORAGE_CATCH_UP  3    // mornings played at most for a map that was left a while
+
+static int32_t s_forage_day = -1;   // the last game day whose morning was played on the loaded map (-1 = never: a first visit)
+
+static bool forage_item(item_id_t it) { return it != ITEM_NONE && item_attr(it, ITEM_ATTR_FORAGE, 0) > 0; }
+
+// Does `it` come up in this season, on this map?
+static bool forage_ok_here(item_id_t it, int season)
+{
+    int seasons = (int)item_attr(it, ITEM_ATTR_FORAGE_SEASONS, 0);
+    if (seasons && !((seasons >> season) & 1)) return false;
+    if (!item_climate_ok(it)) return false;   // (CLIMATE)
+    const item_asset_t *a = item_get(it);
+    size_t len = strlen(ITEM_ATTR_FORAGE_MAP);
+    bool listed = false;
+    for (int i = 0; a && i < a->attr_count; i++) {
+        if (strncmp(a->attrs[i].name, ITEM_ATTR_FORAGE_MAP, len) != 0 || a->attrs[i].value <= 0) continue;
+        if (strcasecmp(a->attrs[i].name + len, current_map_name()) == 0) return true;
+        listed = true;
+    }
+    return !listed;
+}
+
+// Has the loaded map any Forage ground at all?
+static bool forage_tiles_any(void)
+{
+    if (!s_map_loaded || !s_tiles) return false;
+    for (int t = 1; t <= s_tiles->type_count; t++)
+        if (s_tiles->types[t].flags & TILE_FLAG_FORAGE) return true;
+    return false;
+}
+
+// One forageable for this morning, picked by weight. ITEM_NONE = none comes up here now.
+static item_id_t forage_pick(int season)
+{
+    uint32_t total = 0;
+    for (item_id_t it = 1; it < item_count; it++)
+        if (forage_item(it) && forage_ok_here(it, season)) total += (uint32_t)item_attr(it, ITEM_ATTR_FORAGE, 0);
+    if (!total) return ITEM_NONE;
+    uint32_t r = esp_random() % total;
+    for (item_id_t it = 1; it < item_count; it++) {
+        if (!forage_item(it) || !forage_ok_here(it, season)) continue;
+        uint32_t w = (uint32_t)item_attr(it, ITEM_ATTR_FORAGE, 0);
+        if (r < w) return it;
+        r -= w;
+    }
+    return ITEM_NONE;
+}
+
+// Can one come up on (tx,ty)? Forage ground with nothing on it — no farmland, grass, stack or
+// anything ground_tile_ok() keeps off — and not where the player stands.
+static bool forage_tile_free(int tx, int ty)
+{
+    int ptx = (s_player_x + PLAYER_W / 2) / TILE_SIZE, pty = (s_player_y + PLAYER_H - 1) / TILE_SIZE;
+    return tile_forage(tx, ty) && !(tx == ptx && ty == pty) && s_soil[ty][tx] == SOIL_NONE && s_grass[ty][tx] == 0 &&
+           ground_at(tx, ty) < 0 && ground_tile_ok(tx, ty);
+}
+
+// A free Forage tile at random. false = none.
+static bool forage_spot(int *tx, int *ty)
+{
+    int free = 0;
+    for (int y = 0; y < TILE_ROWS; y++)
+        for (int x = 0; x < TILE_COLS; x++) free += forage_tile_free(x, y);
+    if (!free) return false;
+    int k = (int)(esp_random() % (uint32_t)free);
+    for (int y = 0; y < TILE_ROWS; y++)
+        for (int x = 0; x < TILE_COLS; x++)
+            if (forage_tile_free(x, y) && k-- == 0) { *tx = x; *ty = y; return true; }
+    return false;
+}
+
+// Takes forageable i off the ground (out of season). repaint: and off the screen.
+static void forage_remove(int i, bool repaint)
+{
+    ground_item_t *g = &s_ground[i];
+    if (g->baked) {
+        ground_unbake(i);
+        if (repaint) map_repaint_rect(g->tx * TILE_SIZE, g->ty * TILE_SIZE, TILE_SIZE, TILE_SIZE, NULL);
+    }
+    g->count = 0;
+}
+
+// One morning on the loaded map: the ones out of season go, new ones come up.
+// They're baked later (ground_tick(), mapsave_show(), sleep). How many came up.
+static int forage_morning(bool repaint)
+{
+    int season = clock_season(), lying = 0, added = 0;
+    for (int i = 0; i < GROUND_MAX; i++) {
+        const ground_item_t *g = &s_ground[i];
+        if (g->count == 0 || !g->forage) continue;
+        if (!forage_ok_here(g->item, season)) forage_remove(i, repaint);
+        else lying++;
+    }
+    int want = FORAGE_DAY_MIN + (int)(esp_random() % (FORAGE_DAY_MAX - FORAGE_DAY_MIN + 1));
+    if (s_climate == CLIMATE_LUSH) want += CLIMATE_LUSH_FORAGE;   // (CLIMATE)
+    if (want > FORAGE_MAP_MAX - lying) want = FORAGE_MAP_MAX - lying;
+    if (want <= 0 || !ground_under_ok()) return 0;
+    for (int n = 0; n < want; n++) {
+        item_id_t it = forage_pick(season);
+        int tx, ty, i;
+        if (it == ITEM_NONE || !forage_spot(&tx, &ty)) break;
+        for (i = 0; i < GROUND_MAX && s_ground[i].count > 0; i++) {}
+        if (i == GROUND_MAX) break;
+        uint8_t q = QUALITY_MAKE(skill_roll_quality(it, SKILL_FORAGING), mut_roll(it, 1.0f));   // MUTATIONS, SKILLS
+        s_ground[i] = (ground_item_t){ .item = it, .count = 1, .quality = q, .tx = (int8_t)tx, .ty = (int8_t)ty, .forage = true };
+        added++;
+    }
+    return added;
+}
+
+// Plays the mornings the loaded map missed (once it's 6:00: before that, the
+// last one due is yesterday's). From load_map() (after mapsave_load()), each
+// game minute (farm_tick()) and on waking (SLEEP). repaint: removals show now.
+static void forage_catch_up(bool repaint)
+{
+    if (!s_map_loaded || !forage_tiles_any()) return;
+    int32_t today = (int32_t)clock_day();
+    int32_t due   = clock_minute_of_day() >= FARM_MORNING_MIN ? today : today - 1;
+    if (s_forage_day >= due && s_forage_day <= today) return;
+    int mornings = (s_forage_day < 0 || s_forage_day > today) ? 1 : (int)(due - s_forage_day);   // (a save "from the future": world.txt went)
+    if (mornings > FORAGE_CATCH_UP) mornings = FORAGE_CATCH_UP;
+    int added = 0;
+    for (int k = 0; k < mornings; k++) added += forage_morning(repaint);
+    s_forage_day = due;
+    s_save_dirty    = true;    // the save says so — without starting the regrowth timer (MAP SAVES): nothing the player did
+    s_save_dirty_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    if (added) ESP_LOGI(TAG, "forage: %d came up on %s (day %ld, %d morning%s)", added, current_map_name(), (long)due, mornings, mornings == 1 ? "" : "s");
+}
+
+#if DEV_LINK_ENABLED
+// DEV LINK "forage": a morning now · "forage list" · "forage clear" (every forageable off this map).
+static void forage_dev_cmd(const char *args)
+{
+    while (*args == ' ') args++;
+    if (strcmp(args, "list") == 0) {
+        for (int i = 0; i < GROUND_MAX; i++)
+            if (s_ground[i].count > 0 && s_ground[i].forage)
+                dev_out("@@FORAGE %s at %d %d quality %d", item_get(s_ground[i].item)->id, s_ground[i].tx, s_ground[i].ty, s_ground[i].quality);
+        dev_out("@@OK forage day %ld, %s", (long)s_forage_day, forage_tiles_any() ? "has Forage tiles" : "no Forage tiles on this map");
+    } else if (strcmp(args, "clear") == 0) {
+        for (int i = 0; i < GROUND_MAX; i++)
+            if (s_ground[i].count > 0 && s_ground[i].forage) forage_remove(i, true);
+        mapsave_mark_dirty();
+        dev_out("@@OK forage cleared");
+    } else if (!forage_tiles_any()) {
+        dev_out("@@ERR no Forage tiles on this map (tick Forage on a ground asset in the Map Editor, export again)");
+    } else {
+        int n = forage_morning(true);
+        mapsave_mark_dirty();
+        dev_out("@@OK %d came up", n);
+    }
+}
+#endif
 
 // ============================================================
 //  PLACEMENT — props (furniture: shelves, crates, rugs) and buildings that
@@ -11311,7 +11979,7 @@ static bool place_ok(const place_geom_t *g, bool check_player, const char **why)
             for (int tx = g->tx; tx < g->tx + g->fw; tx++)
                 if (!tile_fishable(tx, ty)) { *why = "Crab pots go in the water"; return false; }
     }
-    if (anim_rects_overlap(r.x, r.y, r.w, r.h, CLOCK_X, CLOCK_Y, CLOCK_W, CLOCK_H)) return false;
+    if (anim_rects_overlap(r.x, r.y, r.w, r.h, CLOCK_X, CLOCK_Y, CLOCK_W, CLOCK_H_MAX)) return false;
     if (anim_rects_overlap(r.x, r.y, r.w, r.h, TOUCH_BTN_X, TOUCH_BTN_Y, TOUCH_BTN_SIZE, TOUCH_BTN_SIZE)) return false;
     *why = "Something's in the way";
     for (int n = 0; n < s_anim.inst_count; n++) {
@@ -12867,6 +13535,8 @@ _Static_assert(CROW_SHEET_W == (CROW_SIT_FRAMES + CROW_FLY_FRAMES) * CROW_PX && 
 
 static bool map_gets_rain(void);        // WEATHER section
 static void spray_clear(void);          // ...the sprinklers' drops in the air
+static void bat_paint_rect(int x, int y, int w, int h);   // BATS (after DAY / NIGHT): one flying over at night
+static void bat_tick(void);                               // ...on its way across (update_input())
 static void npc_dirty_add(rect_t r);    // MARKET: repainted at the end of the frame (market_tick())
 
 typedef struct {
@@ -13182,6 +13852,7 @@ static void farmfx_paint_rect(int x, int y, int w, int h)
     crow_paint_rect(x, y, w, h);
     range_paint_rect(x, y, w, h);
     tree_fx_paint_rect(x, y, w, h);   // a felled tree coming down, falling leaves (TREES)
+    bat_paint_rect(x, y, w, h);       // a bat flying over at night (BATS)
 }
 
 // ============================================================
@@ -14180,7 +14851,7 @@ static void open_menu(menu_id_t id);   // defined after the settings table
 #define SLIDER_MAX 100.0f
 
 // ---- UI state ----
-typedef enum { UI_NONE, UI_INVENTORY, UI_MENU, UI_KEYBOARD, UI_SHOP, UI_SHELF, UI_OFFER, UI_AUCTION, UI_LEDGER, UI_FISHING, UI_SLEEP, UI_FISHBOOK, UI_CRAFT, UI_BOARD } ui_screen_t;
+typedef enum { UI_NONE, UI_INVENTORY, UI_MENU, UI_KEYBOARD, UI_SHOP, UI_SHELF, UI_OFFER, UI_AUCTION, UI_LEDGER, UI_FISHING, UI_SLEEP, UI_FISHBOOK, UI_CRAFT, UI_BOARD, UI_GEAR, UI_SKILLS, UI_MUSEUM, UI_KITCHEN } ui_screen_t;
 
 // LEDGER section (after the CLOCK): every buy and sell, for the ledger screen and ledger.csv.
 static void ledger_add(bool sell, item_id_t item, uint8_t quality, int count, uint32_t amount, const char *who, const char *where);
@@ -14201,6 +14872,18 @@ static void   fish_ui_shape(int x, int y, int scale, uint16_t mono);
 
 // CRAFTING section (after FISH BOOK): the inventory's crafting tab.
 static bool   craft_open(void);
+static bool   gear_open(void);               // GEAR section (after CRAFTING): the gear tab
+static bool   skills_open(void);             // SKILLS (after GEAR): the skills tab
+static void   skills_draw(void);
+static void   update_skills_touch(const input_frame_t *in);
+static void   museum_draw(void);             // MUSEUM: the donation picker
+static void   update_museum_touch(const input_frame_t *in);
+static rect_t museum_rect(void);
+static void   kitchen_draw(void);            // KITCHEN: cooking
+static void   update_kitchen_touch(const input_frame_t *in);
+static rect_t kitchen_rect(void);
+static void   gear_draw(void);
+static void   update_gear_touch(const input_frame_t *in);
 static void   craft_draw(void);
 static void   update_craft_touch(const input_frame_t *in);
 static rect_t craft_rect(void);
@@ -14873,7 +15556,7 @@ static void draw_leather_panel(int px, int py, int pw, int ph)
 #define INV_TAB_GAP  4
 #define INV_TAB_RISE 26     // how far an unpicked tab stands up over its panel (the picked one 4 px less)
 #define INV_TAB_X(k) (INV_PANEL_X + 18 + (k) * (INV_TAB_W + INV_TAB_GAP))
-enum { INV_TAB_BAG = 0, INV_TAB_CRAFT, INV_TABS };
+enum { INV_TAB_BAG = 0, INV_TAB_CRAFT, INV_TAB_GEAR, INV_TAB_SKILLS, INV_TABS };
 
 static rect_t inv_tabs_rect(int panel_y)
 {
@@ -14912,11 +15595,29 @@ static void inv_draw_tabs(int panel_y, int active, bool front)
             draw_round_rect(cx - 7, cy - 6, 14, 7, 3, 1, INV_COL_EDGE);
             fill_rect(cx - 1, cy - 1, 3, 3, INV_COL_GOLD);
             fill_rect(cx - 4, cy - 9, 8, 2, INV_COL_EDGE);
-        } else {                  // a hammer: wooden handle, steel head
+        } else if (k == INV_TAB_CRAFT) {   // a hammer: wooden handle, steel head
             for (int i = 0; i < 12; i++) fill_rect(cx - 5 + i * 9 / 12, cy + 8 - i, 3, 2, i == 0 ? INV_COL_EDGE : COLOR_RGB565(170, 112, 56));
             fill_round_rect(cx - 2, cy - 8, 12, 7, 2, steel_gray(200), 255);
             draw_round_rect(cx - 2, cy - 8, 12, 7, 2, 1, MTL_COL_GEAR_DK);
             fill_rect(cx - 1, cy - 7, 8, 1, steel_gray(236));
+        } else if (k == INV_TAB_SKILLS) {   // SKILLS: a gold star
+            static const int8_t k_star[10][2] = { { 0, -9 }, { 2, -3 }, { 9, -3 }, { 3, 1 }, { 6, 8 }, { 0, 4 }, { -6, 8 }, { -3, 1 }, { -9, -3 }, { -2, -3 } };
+            for (int y = -9; y <= 8; y++)   // filled by the even-odd rule across the star's ten corners
+                for (int x = -9; x <= 9; x++) {
+                    bool in = false;
+                    for (int a = 0, b = 9; a < 10; b = a++)
+                        if ((k_star[a][1] > y) != (k_star[b][1] > y) &&
+                            x < (k_star[b][0] - k_star[a][0]) * (y - k_star[a][1]) / (k_star[b][1] - k_star[a][1]) + k_star[a][0]) in = !in;
+                    if (in) draw_pixel(cx + x, cy + y, y < -2 ? COLOR_RGB565(255, 230, 120) : INV_COL_GOLD);
+                }
+        } else {                  // GEAR: a jacket — body, sleeves, a zip
+            uint16_t c = COLOR_RGB565(64, 104, 176), d = COLOR_RGB565(40, 66, 122);
+            fill_round_rect(cx - 5, cy - 7, 10, 15, 2, c, 255);
+            fill_rect(cx - 9, cy - 6, 4, 11, d);
+            fill_rect(cx + 5, cy - 6, 4, 11, d);
+            draw_round_rect(cx - 5, cy - 7, 10, 15, 2, 1, INV_COL_EDGE);
+            fill_rect(cx, cy - 6, 1, 13, COLOR_RGB565(230, 232, 240));
+            fill_rect(cx - 3, cy - 8, 6, 2, COLOR_RGB565(240, 240, 248));
         }
     }
 }
@@ -15093,6 +15794,8 @@ static void update_inventory_touch(const input_frame_t *in)
 #endif
     if (!s_inv_sell_mode && pt_in(tx, ty, INV_BOOK_X - 3, INV_BTN_Y - 6, INV_BTN + 6, INV_BTN + 12)) { inv_activate(-1, 3); return; }
     if (!s_inv_sell_mode && inv_tab_at(INV_PANEL_Y, tx, ty) == INV_TAB_CRAFT) { inv_activate(-1, 4); return; }
+    if (!s_inv_sell_mode && inv_tab_at(INV_PANEL_Y, tx, ty) == INV_TAB_GEAR) { inv_carry_return(); gear_open(); return; }
+    if (!s_inv_sell_mode && inv_tab_at(INV_PANEL_Y, tx, ty) == INV_TAB_SKILLS) { inv_carry_return(); skills_open(); return; }
     for (int k = 0; k < 3; k++) {   // a chip on a rod's card: that bait / tackle off the line, carried (FISHING)
         rect_t c = s_inv_rig_chip[k];
         if (c.w && pt_in(tx, ty, c.x - 2, c.y - 4, c.w + 4, c.h + 8)) {
@@ -15376,8 +16079,13 @@ static void shop_draw_card(void)
     draw_text(x + w - 12 - pw, y + 8, p, 2, INV_COL_GOLD);
     char line[80];
     int  c = crop_of_seed(item), have = inv_count_of(item);
-    char when[24];   // SEASONS
+    char when[48];   // SEASONS (+ CLIMATE)
     if (c >= 0) season_list(crop_seasons(c), when, sizeof(when), true);
+    if (c >= 0 && item_climates(item)) {
+        size_t len = strlen(when);
+        snprintf(when + len, sizeof(when) - len, ", ");
+        climate_list(item_climates(item), when + len + 2, sizeof(when) - len - 2, true);
+    }
     if (c >= 0 && s_crops[c]->regrow_days)
         snprintf(line, sizeof(line), "%s. Ripe in %d days, then every %d.  In bag: %d",
                  when, s_crops[c]->grow_days, s_crops[c]->regrow_days, have);
@@ -17939,7 +18647,7 @@ static item_id_t ra_product(const animal_t *a, uint8_t *quality)
     const animal_def_t *d = ra_def(a);
     item_id_t item = d->rare[0] && (int)(esp_random() % 100) < d->rare_chance ? item_find(d->rare) : ITEM_NONE;
     if (item == ITEM_NONE) item = ra_product_id(a)[0] ? item_find(ra_product_id(a)) : ITEM_NONE;
-    if (item != ITEM_NONE) *quality = wet_if_raining(QUALITY_MAKE(item_roll_quality(item, esp_random()), mut_roll(item, 1.0f)));   // MUTATIONS, WET ITEMS
+    if (item != ITEM_NONE) *quality = wet_if_raining(QUALITY_MAKE(skill_roll_quality(item, SKILL_FARMING), mut_roll(item, 1.0f)));   // MUTATIONS, WET ITEMS, SKILLS
     return item;
 }
 
@@ -19703,6 +20411,7 @@ typedef struct {        // where and when, for the conditions (fish_cond_ok())
     int  hour, wday, season, water, depth, level;
     bool rain, magic;
     const char *map;
+    uint8_t climate;    // the map's (CLIMATE); CLIMATE_INDOORS = any
 } fish_ctx_t;
 
 typedef struct {
@@ -19998,6 +20707,7 @@ static void fish_ctx_now(fish_ctx_t *c, int tx, int ty, bool magic)
     c->level  = fish_level();
     c->magic  = magic;
     c->map    = tx >= 0 ? current_map_name() : NULL;
+    c->climate = tx >= 0 ? s_climate : CLIMATE_INDOORS;
 }
 
 static bool fish_hour_in(int hour, int from, int to)
@@ -20029,6 +20739,9 @@ static bool fish_cond_ok(item_id_t it, const char *pre, const fish_ctx_t *c)
     if (c->level < (int)FC_ATTR("level", 0)) return false;
     if (FC_ATTR("once", 0) > 0 && fishbook_caught(it)) return false;
     #undef FC_ATTR
+    int32_t climates = item_climates(it);   // (CLIMATE: "climate", fish and pot catches alike; none = the mild five)
+    if (!climates) climates = CLIMATE_MILD;
+    if (c->climate != CLIMATE_INDOORS && !((climates >> c->climate) & 1)) return false;
     if (c->map) {   // "<pre>_map:<name>": only on those maps
         const item_asset_t *a = item_get(it);
         int len = snprintf(n, sizeof(n), "%s_map:", pre);
@@ -20323,6 +21036,7 @@ static bool fish_on_action(void)
     s_fish.last_ms = fish_now_ms();
     nav_cancel();
     sfx_play("fish_cast");
+    energy_use(s_fish.rod);   // (ENERGY)
     return true;
 }
 
@@ -21541,6 +22255,11 @@ static void book_draw_page(void)
             if (strncmp(nm, ITEM_ATTR_FISH_MAP, strlen(ITEM_ATTR_FISH_MAP)) != 0 || a->attrs[i].value <= 0) continue;
             len += snprintf(t + len, sizeof(t) - len, "%s%s", first ? " - in " : ", ", nm + strlen(ITEM_ATTR_FISH_MAP));
             first = false;
+        }
+        if (item_climates(it) && len < (int)sizeof(t) - 4) {   // (CLIMATE)
+            char cl[40];
+            climate_list(item_climates(it), cl, sizeof(cl), true);
+            snprintf(t + len, sizeof(t) - len, ", %s", cl);
         }
         draw_text_clip(lx, y, t, 1, INV_COL_TEXT, cw1); y += L1;
     }
@@ -23073,6 +23792,8 @@ static void update_craft_touch(const input_frame_t *in)
         s_craft_dragging = false;
         if (pt_in(tx, ty, CRAFT_CLOSE_X - 6, CRAFT_BTN_Y - 6, INV_BTN + 12, INV_BTN + 12)) { ui_close(); return; }
         if (inv_tab_at(CRAFT_PANEL_Y, tx, ty) == INV_TAB_BAG) { ui_open_inventory(); return; }
+        if (inv_tab_at(CRAFT_PANEL_Y, tx, ty) == INV_TAB_GEAR) { gear_open(); return; }
+        if (inv_tab_at(CRAFT_PANEL_Y, tx, ty) == INV_TAB_SKILLS) { skills_open(); return; }
         if (pt_in(tx, ty, CRAFT_GRID_X - 2, CRAFT_GRID_Y - 2, INV_GRID_W + 4, CRAFT_GRID_H + 4)) {
             s_craft_dragging    = true;   // it counts as a tap when the finger lifts without having dragged
             s_craft_dragged     = false;
@@ -23139,6 +23860,875 @@ static void craft_dev_cmd(char *args)
         else if (craft_make(k, why, sizeof(why))) { hud_refresh(); dev_out("@@OK %s", s_craft_said); }
         else dev_out("@@ERR %s", why);
     }
+}
+#endif
+
+// ============================================================
+//  GEAR — clothes against the climate (TEMPERATURE): the inventory's third
+//  tab (UI_GEAR). Four slots — hat, jacket, pants, boots — each holding one
+//  item with "gear" N (1..4: GEAR_HAT + 1 .., items.h). A worn piece is out of
+//  the bag (so passing out never leaves it in a BACKPACK); world.txt keeps
+//  them ("gear SLOT ID QUALITY"). It's drawn on the player from
+//  assets/wardrobe/gear/<item id>.png — the wardrobe's gear layer (WARDROBE:
+//  ward_frame()), over the outfit's own hat / shirt / pants, and the sleeves
+//  take the jacket's colour.
+//  Protection: a piece's "protect_heat" P or "protect_cold" P is its share
+//  (%) — a full set is 100. Against Hot / Cold it slows heating up / cooling
+//  down by that much (all four: you can stay); against Volcanic / Glacial it
+//  stretches the time from TEMP_EXTREME_MIN (15 min) to GEAR_EXTREME_MIN (7 h)
+//  — temp_push() in ENERGY. tools/make_gear.py made the Thermal (heat) and
+//  Arctic (cold) sets; the General store sells them.
+//  The screen: the four slots down the left (tap one to take it off), the
+//  player as they look in the middle (tap to turn them round), the gear in
+//  the bag on the right (tap a piece to put it on — what was in its slot
+//  goes back into the bag), and what it all protects against at the bottom.
+// ============================================================
+#define GEAR_BAG_SHOWN 8                         // gear in the bag shown on the screen (2 columns of 4)
+#define GEAR_DOLL_K    3                         // the player, this many times their size
+#define GEAR_DOLL_X    (INV_GRID_X + 150)
+#define GEAR_DOLL_Y    (INV_GRID_Y + 8)
+#define GEAR_BAG_X     (INV_GRID_X + INV_GRID_W - 2 * INV_CELL - INV_CELL_GAP)
+#define GEAR_INFO_Y    (INV_GRID_Y + GEAR_SLOTS * (INV_CELL + INV_CELL_GAP) + 6)
+
+static const char *const k_gear_slot_name[GEAR_SLOTS] = { "HAT", "JACKET", "PANTS", "BOOTS" };
+static int  s_gear_dir = PDIR_DOWN;              // which way the player on the screen faces
+static char s_gear_said[48];                     // the info line's last news ("" = the protection)
+
+// Its slot (GEAR_HAT..), or -1: not gear.
+static int gear_slot_of(item_id_t it)
+{
+    int s = it != ITEM_NONE ? (int)item_attr(it, "gear", 0) : 0;
+    return s >= 1 && s <= GEAR_SLOTS ? s - 1 : -1;
+}
+
+static int gear_protect_pct(bool heat)
+{
+    int p = 0;
+    for (int k = 0; k < GEAR_SLOTS; k++)
+        if (s_gear[k].count) p += (int)item_attr(s_gear[k].item, heat ? "protect_heat" : "protect_cold", 0);
+    return p < 0 ? 0 : p > 100 ? 100 : p;
+}
+
+// The bag slots holding gear, in bag order (up to GEAR_BAG_SHOWN).
+static int gear_bag(int out[GEAR_BAG_SHOWN])
+{
+    int n = 0;
+    for (int k = 0; k < INV_SLOTS && n < GEAR_BAG_SHOWN; k++)
+        if (s_inv[k].count && gear_slot_of(s_inv[k].item) >= 0) out[n++] = k;
+    return n;
+}
+
+static bool gear_open(void)
+{
+#if ESPNOW_CAMERA_ENABLED
+    if (camera_owns_screen()) return false;
+#endif
+    if (s_ui_screen == UI_KEYBOARD) return false;
+    inv_carry_return();
+    if (!ui_begin()) return false;
+    s_ui_screen    = UI_GEAR;
+    s_active_menu  = NULL;
+    s_gear_said[0] = '\0';
+    return true;
+}
+
+// Something was put on or taken off: the player's look, the bar, the save.
+static void gear_changed(void)
+{
+    build_player_frames();
+    s_player_drawn.sprite = NULL;   // (the same frames, new pixels: the next frame draws the player again)
+    clock_invalidate();             // (the temperature bar: what the gear holds off)
+    hud_refresh();
+    world_save();
+    s_ui_needs_redraw = true;
+}
+
+static void gear_wear(int bag_slot)
+{
+    inv_slot_t piece = s_inv[bag_slot];
+    int k = gear_slot_of(piece.item);
+    if (k < 0) return;
+    s_inv[bag_slot] = s_gear[k];          // what was worn there goes where the new piece was (or the slot empties)
+    if (!s_inv[bag_slot].count) s_inv[bag_slot] = (inv_slot_t){ ITEM_NONE, 0, QUALITY_STANDARD };
+    s_gear[k] = (inv_slot_t){ .item = piece.item, .count = 1, .quality = piece.quality };
+    if (piece.count > 1) {                // (a stack of them: the rest stays in the bag)
+        int left = inv_add_q(piece.item, piece.quality, piece.count - 1);
+        if (left) ESP_LOGW(TAG, "gear: %d %s didn't fit back in the bag", left, item_name(piece.item));
+    }
+    snprintf(s_gear_said, sizeof(s_gear_said), "PUT ON: %s", item_name(piece.item));
+    gear_changed();
+}
+
+static void gear_take_off(int k)
+{
+    if (!s_gear[k].count) return;
+    if (inv_add_q(s_gear[k].item, s_gear[k].quality, 1) != 0) { snprintf(s_gear_said, sizeof(s_gear_said), "NO ROOM IN YOUR BAG"); s_ui_needs_redraw = true; return; }
+    snprintf(s_gear_said, sizeof(s_gear_said), "TOOK OFF: %s", item_name(s_gear[k].item));
+    s_gear[k] = (inv_slot_t){ ITEM_NONE, 0, QUALITY_STANDARD };
+    gear_changed();
+}
+
+static void gear_slot_xy(int k, int *x, int *y) { *x = INV_GRID_X; *y = INV_GRID_Y + k * (INV_CELL + INV_CELL_GAP); }
+static void gear_bag_xy(int i, int *x, int *y)  { *x = GEAR_BAG_X + (i % 2) * (INV_CELL + INV_CELL_GAP); *y = INV_GRID_Y + (i / 2) * (INV_CELL + INV_CELL_GAP); }
+
+static void blit_scaled_keyed(const uint16_t *src, int w, int h, int x, int y, int k);   // TITLE ART
+
+static void gear_draw(void)
+{
+    const int px = INV_PANEL_X, py = INV_PANEL_Y, pw = INV_PANEL_W;
+    inv_draw_tabs(py, INV_TAB_GEAR, false);
+    draw_leather_panel(px, py, pw, INV_PANEL_H);
+    inv_draw_tabs(py, INV_TAB_GEAR, true);
+    draw_text_centered(px + INV_BTN + 16, py + 17, pw - 2 * (INV_BTN + 16), "GEAR", INV_COL_TEXT, INV_COL_SHINE);
+    draw_close_button(INV_CLOSE_X, INV_BTN_Y, INV_BTN, false, COLOR_WHITE);
+
+    // the four slots, each with its name and what's in it
+    for (int k = 0; k < GEAR_SLOTS; k++) {
+        int x, y;
+        gear_slot_xy(k, &x, &y);
+        inv_draw_slot(x, y, INV_CELL, &s_gear[k], false);
+        draw_text(x + INV_CELL + 6, y + 5, k_gear_slot_name[k], 1, INV_COL_TEXT_DIM);
+        if (s_gear[k].count) {
+            char t[32];
+            draw_text_clip(x + INV_CELL + 6, y + 16, item_name(s_gear[k].item), 1, INV_COL_TEXT, GEAR_DOLL_X - x - INV_CELL - 12);
+            int h = (int)item_attr(s_gear[k].item, "protect_heat", 0), c = (int)item_attr(s_gear[k].item, "protect_cold", 0);
+            if (h || c) {
+                snprintf(t, sizeof(t), h ? "+%d%% HEAT" : "+%d%% COLD", h ? h : c);
+                draw_text(x + INV_CELL + 6, y + 26, t, 1, h ? COLOR_RGB565(200, 80, 40) : COLOR_RGB565(50, 110, 200));
+            }
+        } else {
+            draw_text(x + INV_CELL + 6, y + 16, "-", 1, INV_COL_TEXT_DIM);
+        }
+    }
+
+    // the player, as they look (tap: turn them round)
+    const int dw = CHAR_SW * GEAR_DOLL_K, dh = CHAR_SH * GEAR_DOLL_K;
+    fill_round_rect(GEAR_DOLL_X - 6, GEAR_DOLL_Y - 4, dw + 12, dh + 8, 6, INV_COL_SLOT_DK, 255);
+    blit_scaled_keyed(s_player_frames[s_gear_dir][0], CHAR_SW, CHAR_SH, GEAR_DOLL_X, GEAR_DOLL_Y, GEAR_DOLL_K);
+    draw_text_centered(GEAR_DOLL_X - 6, GEAR_DOLL_Y + dh + 8, dw + 12, "TURN", INV_COL_TEXT_DIM, INV_COL_SHINE);
+
+    // the gear in the bag
+    int bag[GEAR_BAG_SHOWN], n = gear_bag(bag);
+    draw_text(GEAR_BAG_X, INV_GRID_Y - 11, "IN BAG", 1, INV_COL_TEXT_DIM);
+    for (int i = 0; i < GEAR_BAG_SHOWN; i++) {
+        int x, y;
+        gear_bag_xy(i, &x, &y);
+        inv_slot_t none = { ITEM_NONE, 0, QUALITY_STANDARD };
+        inv_draw_slot(x, y, INV_CELL, i < n ? &s_inv[bag[i]] : &none, false);
+    }
+
+    // the info line: what just happened, or what it all protects against
+    char t[64];
+    if (s_gear_said[0]) snprintf(t, sizeof(t), "%s", s_gear_said);
+    else if (!n && !s_gear[0].count && !s_gear[1].count && !s_gear[2].count && !s_gear[3].count) snprintf(t, sizeof(t), "NO GEAR YET - THE GENERAL STORE SELLS IT");
+    else snprintf(t, sizeof(t), "VS HEAT %d%%   VS COLD %d%%", gear_protect_pct(true), gear_protect_pct(false));
+    draw_text_centered(INV_GRID_X, GEAR_INFO_Y, INV_GRID_W, t, INV_COL_TEXT, INV_COL_SHINE);
+}
+
+// Tap a worn piece to take it off, one in the bag to put it on, the player to turn them.
+static void update_gear_touch(const input_frame_t *in)
+{
+    if (!in->touch_pressed_edge || in->touch_menu_btn) return;
+    int tx = in->touch_x, ty = in->touch_y;
+    if (pt_in(tx, ty, INV_CLOSE_X - 6, INV_BTN_Y - 6, INV_BTN + 12, INV_BTN + 12)) { ui_close(); return; }
+    int tab = inv_tab_at(INV_PANEL_Y, tx, ty);
+    if (tab == INV_TAB_BAG)   { ui_open_inventory(); return; }
+    if (tab == INV_TAB_CRAFT) { craft_open(); return; }
+    if (tab == INV_TAB_SKILLS) { skills_open(); return; }
+    for (int k = 0; k < GEAR_SLOTS; k++) {
+        int x, y;
+        gear_slot_xy(k, &x, &y);
+        if (pt_in(tx, ty, x - 2, y - 2, INV_CELL + 4, INV_CELL + 4)) { gear_take_off(k); return; }
+    }
+    int bag[GEAR_BAG_SHOWN], n = gear_bag(bag);
+    for (int i = 0; i < n; i++) {
+        int x, y;
+        gear_bag_xy(i, &x, &y);
+        if (pt_in(tx, ty, x - 2, y - 2, INV_CELL + 4, INV_CELL + 4)) { gear_wear(bag[i]); return; }
+    }
+    if (pt_in(tx, ty, GEAR_DOLL_X - 6, GEAR_DOLL_Y - 4, CHAR_SW * GEAR_DOLL_K + 12, CHAR_SH * GEAR_DOLL_K + 20)) {
+        static const int8_t k_next[PDIR_COUNT] = { [PDIR_DOWN] = PDIR_LEFT, [PDIR_LEFT] = PDIR_UP, [PDIR_UP] = PDIR_RIGHT, [PDIR_RIGHT] = PDIR_DOWN };
+        s_gear_dir = k_next[s_gear_dir];
+        s_ui_needs_redraw = true;
+    }
+}
+
+#if DEV_LINK_ENABLED
+// DEV LINK "gear" (what's worn) / "gear ID" (put on one from the bag) / "gear off SLOT" / "gear open".
+static void gear_dev_cmd(int nw, char **w)
+{
+    if (nw >= 2 && strcmp(w[1], "open") == 0) { dev_out(gear_open() ? "@@OK gear tab" : "@@ERR can't open it now"); return; }
+    if (nw >= 3 && strcmp(w[1], "off") == 0) { int k = atoi(w[2]); if (k >= 0 && k < GEAR_SLOTS) gear_take_off(k); }
+    else if (nw >= 2) {
+        item_id_t it = item_find(w[1]);
+        int slot = -1;
+        for (int k = 0; k < INV_SLOTS && slot < 0; k++) if (s_inv[k].count && s_inv[k].item == it) slot = k;
+        if (slot < 0 || gear_slot_of(it) < 0) { dev_out("@@ERR no %s gear in the bag (give it first)", w[1]); return; }
+        gear_wear(slot);
+    }
+    for (int k = 0; k < GEAR_SLOTS; k++)
+        dev_out("@@GEAR %s %s", k_gear_slot_name[k], s_gear[k].count ? item_get(s_gear[k].item)->id : "-");
+    dev_out("@@OK heat %d%% cold %d%%", gear_protect_pct(true), gear_protect_pct(false));
+}
+#endif
+
+// ============================================================
+//  SKILLS — Stardew Valley's: farming, foraging, mining, fishing, each with
+//  xp and a level 0..SKILL_LEVEL_MAX (the same xp steps as fishing's,
+//  k_fish_level_xp: 100, 380, 770 ... 15000). Fishing keeps its own xp
+//  (FISHING: "fishxp" in world.txt); the other three are world.txt's
+//  "skill farming|foraging|mining XP" lines. A level up says so (sfx "levelup").
+//  Where xp comes from (SKILL_XP_*):
+//    farming   harvesting a crop (Stardew's 16 ln(0.018 x its price + 1)), a
+//              fruit off a fruit tree, felling a fruit tree
+//    foraging  picking up forage (FORAGE), felling a wild tree (TREES), an axe
+//              breakable (a stump or log on the map)
+//    mining    a pickaxe breakable broken (a rock, a gem node)
+//    fishing   catching things (FISHING, as before)
+//  What a level does:
+//    farming   crops, fruit and animal products roll their quality again
+//              level/4 times, keeping the best (skill_roll_quality())
+//    foraging  the same for forage; a felled wild tree gives level/3 more wood
+//    mining    each of a rock's drops: level x SKILL_MINE_EXTRA_PCT % for one more
+//    fishing   as before (a bigger catch bar, rarer fish)
+//  The inventory's fourth tab (a star) shows them (UI_SKILLS).
+//  Dev link: "skill" (all), "skill NAME XP" (set).
+// ============================================================
+#define SKILL_LEVEL_MAX FISH_LEVEL_MAX
+static const char *const k_skill_name[SKILL_COUNT] = { "Farming", "Foraging", "Mining", "Fishing" };
+static const char *const k_skill_word[SKILL_COUNT] = { "farming", "foraging", "mining", "fishing" };
+static const char *const k_skill_perk[SKILL_COUNT] = {
+    "Crops, fruit and animal goods: better quality",
+    "Forage: better quality; trees: more wood",
+    "Rocks: a chance of one more of each drop",
+    "A bigger catch bar, rarer fish",
+};
+static int32_t s_skill_xp[SKILL_FISHING];   // farming, foraging, mining (fishing: s_fish_xp)
+
+static int32_t skill_xp_of(int k) { return k == SKILL_FISHING ? s_fish_xp : s_skill_xp[k]; }
+
+static int skill_level(int k)
+{
+    if (k == SKILL_FISHING) return fish_level();
+    int l = 0;
+    while (l < SKILL_LEVEL_MAX && s_skill_xp[k] >= k_fish_level_xp[l]) l++;
+    return l;
+}
+
+static void skill_xp(int k, int xp)
+{
+    if (k < 0 || k >= SKILL_COUNT || xp <= 0) return;
+    if (k == SKILL_FISHING) { fish_xp_add(xp); return; }   // (FISHING says its own level ups)
+    int before = skill_level(k);
+    s_skill_xp[k] = s_skill_xp[k] + xp > 999999 ? 999999 : s_skill_xp[k] + xp;
+    int after = skill_level(k);
+    if (after > before) {
+        message(4000, "%s level %d! %s", k_skill_name[k], after, k_skill_perk[k]);
+        sfx_play("levelup");
+        ESP_LOGI(TAG, "skills: %s level %d (%ld xp)", k_skill_word[k], after, (long)s_skill_xp[k]);
+    }
+}
+
+static uint8_t skill_roll_quality(item_id_t item, int k)
+{
+    uint8_t q = item_roll_quality(item, esp_random());
+    for (int n = skill_level(k) / 4; n > 0; n--) {
+        uint8_t q2 = item_roll_quality(item, esp_random());
+        if (q2 > q) q = q2;
+    }
+    return q;
+}
+
+static void skills_reset(void) { memset(s_skill_xp, 0, sizeof(s_skill_xp)); }
+
+static void skills_write(FILE *f, char *line, size_t n)
+{
+    for (int k = 0; k < SKILL_FISHING; k++) {
+        if (!s_skill_xp[k]) continue;
+        snprintf(line, n, "skill %s %ld\n", k_skill_word[k], (long)s_skill_xp[k]);
+        fputs(line, f);
+    }
+}
+
+static void skills_load(const char *name, int xp)
+{
+    for (int k = 0; k < SKILL_FISHING; k++)
+        if (strcmp(name, k_skill_word[k]) == 0) s_skill_xp[k] = xp < 0 ? 0 : xp > 999999 ? 999999 : xp;
+}
+
+static bool skills_open(void)
+{
+#if ESPNOW_CAMERA_ENABLED
+    if (camera_owns_screen()) return false;
+#endif
+    if (s_ui_screen == UI_KEYBOARD) return false;
+    inv_carry_return();
+    if (!ui_begin()) return false;
+    s_ui_screen   = UI_SKILLS;
+    s_active_menu = NULL;
+    return true;
+}
+
+static void skills_draw(void)
+{
+    static const char *const k_icon[SKILL_COUNT] = { "hoe", "daffodil", "pickaxe", "fishing_rod" };
+    const int px = INV_PANEL_X, py = INV_PANEL_Y, pw = INV_PANEL_W, row_h = 42;
+    inv_draw_tabs(py, INV_TAB_SKILLS, false);
+    draw_leather_panel(px, py, pw, INV_PANEL_H);
+    inv_draw_tabs(py, INV_TAB_SKILLS, true);
+    draw_text_centered(px + INV_BTN + 16, py + 17, pw - 2 * (INV_BTN + 16), "SKILLS", INV_COL_TEXT, INV_COL_SHINE);
+    draw_close_button(INV_CLOSE_X, INV_BTN_Y, INV_BTN, false, COLOR_WHITE);
+    for (int k = 0; k < SKILL_COUNT; k++) {
+        int x = INV_GRID_X, y = INV_GRID_Y + k * row_h, lvl = skill_level(k);
+        int32_t xp = skill_xp_of(k), lo = lvl ? k_fish_level_xp[lvl - 1] : 0, hi = lvl < SKILL_LEVEL_MAX ? k_fish_level_xp[lvl] : lo;
+        fill_round_rect(x, y, INV_CELL, INV_CELL, 5, INV_COL_SLOT, 255);
+        draw_round_rect(x, y, INV_CELL, INV_CELL, 5, 1, INV_COL_EDGE);
+        item_id_t ic = item_find(k_icon[k]);
+        if (ic != ITEM_NONE) draw_item_icon(x + INV_CELL / 2, y + INV_CELL / 2, ic);
+        char t[40];
+        draw_text(x + INV_CELL + 8, y + 1, k_skill_name[k], 2, INV_COL_TEXT);
+        snprintf(t, sizeof(t), "LEVEL %d", lvl);
+        draw_text(x + INV_GRID_W - text_width(t, 2), y + 1, t, 2, INV_COL_GOLD);
+        const int bx = x + INV_CELL + 8, bw = INV_GRID_W - INV_CELL - 8, by = y + 18;   // the bar to the next level
+        fill_rect(bx, by, bw, 7, INV_COL_SLOT_DK);
+        int fill = hi > lo ? (int)((int64_t)(bw - 2) * (xp - lo) / (hi - lo)) : bw - 2;
+        if (fill > 0) fill_rect(bx + 1, by + 1, fill, 5, COLOR_RGB565(96, 184, 72));
+        draw_rect(bx, by, bw, 7, INV_COL_EDGE);
+        if (lvl < SKILL_LEVEL_MAX) snprintf(t, sizeof(t), "%ld / %ld xp", (long)xp, (long)hi);
+        else                       snprintf(t, sizeof(t), "%ld xp - the top", (long)xp);
+        draw_text(bx, by + 10, t, 1, INV_COL_TEXT_DIM);
+        draw_text_clip(bx + text_width(t, 1) + 8, by + 10, k_skill_perk[k], 1, INV_COL_TEXT_DIM, bw - text_width(t, 1) - 8);
+    }
+}
+
+static void update_skills_touch(const input_frame_t *in)
+{
+    if (!in->touch_pressed_edge || in->touch_menu_btn) return;
+    int tx = in->touch_x, ty = in->touch_y;
+    if (pt_in(tx, ty, INV_CLOSE_X - 6, INV_BTN_Y - 6, INV_BTN + 12, INV_BTN + 12)) { ui_close(); return; }
+    int tab = inv_tab_at(INV_PANEL_Y, tx, ty);
+    if (tab == INV_TAB_BAG)   ui_open_inventory();
+    else if (tab == INV_TAB_CRAFT) craft_open();
+    else if (tab == INV_TAB_GEAR)  gear_open();
+}
+
+// ============================================================
+//  GEODES — items with "geode" 1 (tools/slice_mines.py: Geode, Frozen Geode,
+//  Magma Geode, Omni Geode). A blacksmith (a map object with the
+//  "blacksmith" action) cracks the one held, for GEODE_CRACK_COST: out comes
+//  a mineral, picked by weight from every item with "geode:<this geode's id>"
+//  W (items.h); none = a stone. Plays "geode".
+// ============================================================
+#define GEODE_CRACK_COST 25
+static bool museum_has(item_id_t it);   // MUSEUM (next): one's been donated
+
+// What geode `g` holds this time (ITEM_NONE: nothing says it's in it).
+static item_id_t geode_pick(item_id_t g)
+{
+    char key[48];
+    snprintf(key, sizeof(key), "geode:%s", item_get(g)->id);
+    uint32_t total = 0;
+    for (item_id_t it = 1; it < item_count; it++) { int32_t w = item_attr(it, key, 0); if (w > 0) total += (uint32_t)w; }
+    if (!total) return ITEM_NONE;
+    uint32_t r = esp_random() % total;
+    for (item_id_t it = 1; it < item_count; it++) {
+        int32_t w = item_attr(it, key, 0);
+        if (w <= 0) continue;
+        if (r < (uint32_t)w) return it;
+        r -= (uint32_t)w;
+    }
+    return ITEM_NONE;
+}
+
+// The "blacksmith" action (main/actions.c): cracks the held geode.
+void blacksmith_tapped(void)
+{
+    item_id_t g = inv_held_item();
+    if (g == ITEM_NONE || item_attr(g, "geode", 0) <= 0) {
+        bool any = false;
+        for (int k = 0; k < INV_SLOTS && !any; k++) any = s_inv[k].count && s_inv[k].item < item_count && item_attr(s_inv[k].item, "geode", 0) > 0;
+        message(3500, any ? "Hold a geode and tap here to crack it open ($%d)" : "Bring me geodes from the mines: I'll crack them open ($%d)", GEODE_CRACK_COST);
+        return;
+    }
+    if (money_get() < GEODE_CRACK_COST) { message(3000, "Cracking a geode costs $%d", GEODE_CRACK_COST); return; }
+    item_id_t got = geode_pick(g);
+    if (got == ITEM_NONE) got = item_find("stone");
+    uint8_t q = got != ITEM_NONE ? item_roll_quality(got, esp_random()) : QUALITY_STANDARD;
+    if (got != ITEM_NONE && inv_add_q(got, q, 1) != 0) { message(3000, "No room in your bag for what's inside"); return; }
+    money_spend(GEODE_CRACK_COST);
+    inv_slot_t *s = &s_inv[s_inv_held];
+    if (--s->count == 0) *s = (inv_slot_t){ ITEM_NONE, 0, QUALITY_STANDARD };
+    hud_refresh();
+    sfx_play("geode");
+    if (got == ITEM_NONE) { message(3000, "The %s was empty!", item_name(g)); return; }
+    newitem_sparkle();
+    message(3500, "The %s had %s inside!%s", item_name(g), item_name(got),
+            item_attr(got, "museum", 0) > 0 && !museum_has(got) ? " (the museum wants one)" : "");
+    world_save();
+}
+
+// ============================================================
+//  MUSEUM — donations. Every item with "museum" 1 (the minerals: tools/
+//  slice_mines.py) can be donated once. Shelves are map objects with the
+//  "museum_shelf" action (the user's museum map): tapping an empty one opens
+//  the donation picker (UI_MUSEUM) — the donatable things in the bag not
+//  donated yet; the one picked leaves the bag and goes on that shelf. A
+//  shelf holding one says what it is. The donated item sits on its shelf:
+//  its icon (16x16) centred across the object, its bottom at the object's
+//  middle row (MUSEUM_SIT_Y), baked into the map pixels like a dropped stack
+//  (GROUND ITEMS), over foreground scenery.
+//  Kept with the save: museum.txt, a line each — "donated ID map NAME at X
+//  Y day D" (X Y = the shelf object's top-left, px). A shelf that's moved
+//  (the map edited) leaves its donation in the collection, on no shelf.
+//  Dev link: "museum" (list).
+// ============================================================
+#define MUSEUM_MAX       160                 // donations in a save
+#define MUSEUM_SHOW_MAX  TRIG_MAX            // on one map's shelves
+#define MUSEUM_SIT_Y     4                   // the icon's bottom: this many px below the shelf object's middle
+#define MUSEUM_PICK_COLS 7
+#define MUSEUM_PICK_ROWS 2
+#define MUSEUM_W         ((INV_CELL + INV_CELL_GAP) * MUSEUM_PICK_COLS - INV_CELL_GAP + 2 * INV_PAD)
+#define MUSEUM_H         200
+#define MUSEUM_X         ((LCD_H_RES - MUSEUM_W) / 2)
+#define MUSEUM_Y         ((LCD_V_RES - MUSEUM_H) / 2)
+#define MUSEUM_GRID_Y    (MUSEUM_Y + 70)
+#define MUSEUM_CLOSE_X   (MUSEUM_X + MUSEUM_W - 10 - INV_BTN)
+
+typedef struct {
+    item_id_t item;
+    char      map[32];   // (s_current_map_name's size)
+    int16_t   x, y;        // the shelf object's top-left
+    int32_t   day;         // donated on
+} museum_t;
+static museum_t s_museum[MUSEUM_MAX];
+static int      s_museum_n;
+
+typedef struct { int16_t m, x, y; bool baked; } museum_show_t;   // a donation on a shelf of the loaded map
+static museum_show_t s_mshow[MUSEUM_SHOW_MAX];
+static int           s_mshow_n;
+static uint16_t     *s_mshow_under = NULL;    // PSRAM, MUSEUM_SHOW_MAX x 16x16: the map pixels under each
+
+static int     s_museum_shelf = -1;          // UI_MUSEUM: the s_trig[] shelf being filled
+static item_id_t s_museum_pick[MUSEUM_PICK_COLS * MUSEUM_PICK_ROWS];
+static int     s_museum_pick_n;
+
+static void museum_reset(void) { s_museum_n = 0; }
+
+static int museum_total(void)
+{
+    int n = 0;
+    for (item_id_t it = 1; it < item_count; it++) n += item_attr(it, "museum", 0) > 0;
+    return n;
+}
+
+static bool museum_has(item_id_t it)
+{
+    for (int i = 0; i < s_museum_n; i++) if (s_museum[i].item == it) return true;
+    return false;
+}
+
+static void museum_path(const char *dir, char *out, size_t n) { snprintf(out, n, "%s/museum.txt", dir); }
+
+static void museum_save(void)
+{
+    static char path[MAPSAVE_PATH_MAX], line[MAPSAVE_LINE_MAX];
+    museum_path(s_save_dir, path, sizeof(path));
+    mapsave_make_dirs(path);
+    FILE *f = fopen(path, "w");
+    if (!f) { ESP_LOGE(TAG, "museum: can't write %s", path); return; }
+    fputs("# The museum's donations: the item, the map and shelf (its top-left, px) it's on, the day\n", f);
+    for (int i = 0; i < s_museum_n; i++) {
+        const museum_t *m = &s_museum[i];
+        if (m->item >= item_count) continue;
+        snprintf(line, sizeof(line), "donated %s map %s at %d %d day %ld\n", item_get(m->item)->id, m->map, m->x, m->y, (long)m->day);
+        fputs(line, f);
+    }
+    fclose(f);
+}
+
+static void museum_load(const char *dir)
+{
+    static char path[MAPSAVE_PATH_MAX], line[MAPSAVE_LINE_MAX];
+    static char *word[MAPSAVE_WORDS];
+    museum_reset();
+    museum_path(dir, path, sizeof(path));
+    FILE *f = fopen(path, "r");
+    if (!f) return;
+    while (fgets(line, sizeof(line), f) && s_museum_n < MUSEUM_MAX) {
+        int nw = mapsave_words(line, word);   // donated ID map NAME at X Y day D
+        if (nw != 9 || strcmp(word[0], "donated") != 0 || strcmp(word[2], "map") != 0 || strcmp(word[4], "at") != 0) continue;
+        item_id_t it = item_find(word[1]);
+        if (it == ITEM_NONE || museum_has(it)) continue;
+        museum_t *m = &s_museum[s_museum_n++];
+        *m = (museum_t){ .item = it, .x = (int16_t)atoi(word[5]), .y = (int16_t)atoi(word[6]), .day = atoi(word[8]) };
+        snprintf(m->map, sizeof(m->map), "%s", word[3]);
+    }
+    fclose(f);
+    ESP_LOGI(TAG, "museum: %d donated", s_museum_n);
+}
+
+// Where donation display k's icon goes.
+static void museum_show_xy(const trig_t *t, int *x, int *y)
+{
+    *x = t->x + (t->w - TILE_SIZE) / 2;
+    *y = t->y + t->h / 2 + MUSEUM_SIT_Y - TILE_SIZE;
+    if (*x < 0) *x = 0;
+    if (*y < 0) *y = 0;
+    if (*x > LCD_H_RES - TILE_SIZE) *x = LCD_H_RES - TILE_SIZE;
+    if (*y > LCD_V_RES - TILE_SIZE) *y = LCD_V_RES - TILE_SIZE;
+}
+
+static void museum_bake(int k)
+{
+    museum_show_t *s = &s_mshow[k];
+    uint16_t spr[GROUND_TILE_PX], *under = &s_mshow_under[k * GROUND_TILE_PX];
+    ground_sprite(s_museum[s->m].item, QUALITY_STANDARD, spr);
+    for (int row = 0; row < TILE_SIZE; row++)
+        for (int col = 0; col < TILE_SIZE; col++) {
+            int mi = (s->y + row) * s_map_w + s->x + col;
+            under[row * TILE_SIZE + col] = s_map_pixels[mi];
+            uint16_t c = spr[row * TILE_SIZE + col];
+            if (c != FB_TRANSPARENT_COLOR) s_map_pixels[mi] = s_night_shown ? night_px(&s_night_lut, c) : c;
+        }
+    s->baked = true;
+}
+
+static void museum_map_loaded(void)
+{
+    s_mshow_n = 0;
+    int a = asset_action_find("museum_shelf");
+    if (a < 0 || !s_museum_n) return;
+    if (!s_mshow_under) s_mshow_under = heap_caps_malloc(MUSEUM_SHOW_MAX * GROUND_TILE_PX * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
+    if (!s_mshow_under) return;
+    for (int t = 0; t < s_trig.count && s_mshow_n < MUSEUM_SHOW_MAX; t++) {
+        const trig_t *tr = &s_trig.items[t];
+        if (!trig_has_action(tr, a)) continue;
+        for (int i = 0; i < s_museum_n; i++) {
+            const museum_t *m = &s_museum[i];
+            if (m->x != tr->x || m->y != tr->y || strcmp(m->map, current_map_name()) != 0) continue;
+            museum_show_t *s = &s_mshow[s_mshow_n++];
+            int x, y;
+            museum_show_xy(tr, &x, &y);
+            *s = (museum_show_t){ .m = (int16_t)i, .x = (int16_t)x, .y = (int16_t)y };
+            museum_bake(s_mshow_n - 1);
+            break;
+        }
+    }
+}
+
+static void museum_rebake_all(void)
+{
+    for (int k = 0; k < s_mshow_n; k++) if (s_mshow[k].baked) museum_bake(k);
+}
+
+// The donation on shelf object t (-1: none).
+static int museum_on_shelf(const trig_t *t)
+{
+    for (int i = 0; i < s_museum_n; i++)
+        if (s_museum[i].x == t->x && s_museum[i].y == t->y && strcmp(s_museum[i].map, current_map_name()) == 0) return i;
+    return -1;
+}
+
+static rect_t museum_rect(void) { return (rect_t){ MUSEUM_X, MUSEUM_Y, MUSEUM_W, MUSEUM_H }; }
+
+// The "museum_shelf" action (main/actions.c): the shelf at (x, y, w, h).
+void museum_shelf_tapped(int x, int y, int w, int h)
+{
+    int a = asset_action_find("museum_shelf"), shelf = -1;
+    for (int t = 0; t < s_trig.count && shelf < 0; t++)
+        if (s_trig.items[t].x == x && s_trig.items[t].y == y && s_trig.items[t].w == w && s_trig.items[t].h == h && trig_has_action(&s_trig.items[t], a)) shelf = t;
+    if (shelf < 0) return;
+    int on = museum_on_shelf(&s_trig.items[shelf]);
+    if (on >= 0) {
+        message(3500, "%s - donated on day %ld. The collection: %d of %d", item_name(s_museum[on].item), (long)s_museum[on].day + 1, s_museum_n, museum_total());
+        return;
+    }
+    s_museum_pick_n = 0;   // what the bag could donate: one of each, not donated yet
+    for (int k = 0; k < INV_SLOTS && s_museum_pick_n < MUSEUM_PICK_COLS * MUSEUM_PICK_ROWS; k++) {
+        item_id_t it = s_inv[k].item;
+        if (!s_inv[k].count || it >= item_count || item_attr(it, "museum", 0) <= 0 || museum_has(it)) continue;
+        bool dup = false;
+        for (int j = 0; j < s_museum_pick_n && !dup; j++) dup = s_museum_pick[j] == it;
+        if (!dup) s_museum_pick[s_museum_pick_n++] = it;
+    }
+    if (!s_museum_pick_n) {
+        message(3500, "An empty shelf. Bring minerals you haven't donated yet (%d of %d)", s_museum_n, museum_total());
+        return;
+    }
+#if ESPNOW_CAMERA_ENABLED
+    if (camera_owns_screen()) return;
+#endif
+    if (s_ui_screen == UI_KEYBOARD || !ui_begin()) return;
+    s_ui_screen    = UI_MUSEUM;
+    s_active_menu  = NULL;
+    s_museum_shelf = shelf;
+}
+
+static void museum_pick_xy(int i, int *x, int *y)
+{
+    *x = MUSEUM_X + INV_PAD + (i % MUSEUM_PICK_COLS) * (INV_CELL + INV_CELL_GAP);
+    *y = MUSEUM_GRID_Y + (i / MUSEUM_PICK_COLS) * (INV_CELL + INV_CELL_GAP);
+}
+
+static void museum_draw(void)
+{
+    draw_leather_panel(MUSEUM_X, MUSEUM_Y, MUSEUM_W, MUSEUM_H);
+    draw_text_centered(MUSEUM_X + INV_BTN + 16, MUSEUM_Y + 17, MUSEUM_W - 2 * (INV_BTN + 16), "DONATE", INV_COL_TEXT, INV_COL_SHINE);
+    draw_close_button(MUSEUM_CLOSE_X, MUSEUM_Y + 10, INV_BTN, false, COLOR_WHITE);
+    char t[48];
+    snprintf(t, sizeof(t), "THE COLLECTION: %d OF %d", s_museum_n, museum_total());
+    draw_text_centered(MUSEUM_X, MUSEUM_Y + 46, MUSEUM_W, t, INV_COL_TEXT_DIM, INV_COL_SHINE);
+    for (int i = 0; i < MUSEUM_PICK_COLS * MUSEUM_PICK_ROWS; i++) {
+        int x, y;
+        museum_pick_xy(i, &x, &y);
+        inv_slot_t s = { i < s_museum_pick_n ? s_museum_pick[i] : ITEM_NONE, i < s_museum_pick_n ? 1 : 0, QUALITY_STANDARD };
+        inv_draw_slot(x, y, INV_CELL, &s, false);
+    }
+    draw_text_centered(MUSEUM_X, MUSEUM_GRID_Y + MUSEUM_PICK_ROWS * (INV_CELL + INV_CELL_GAP) + 8, MUSEUM_W, "TAP ONE TO PUT IT ON THIS SHELF", INV_COL_TEXT, INV_COL_SHINE);
+}
+
+static void museum_donate(item_id_t it)
+{
+    const trig_t *t = &s_trig.items[s_museum_shelf];
+    int slot = -1;
+    for (int k = 0; k < INV_SLOTS; k++)   // the plainest stack of it goes
+        if (s_inv[k].count && s_inv[k].item == it && (slot < 0 || s_inv[k].quality < s_inv[slot].quality)) slot = k;
+    if (slot < 0 || s_museum_n >= MUSEUM_MAX) return;
+    if (--s_inv[slot].count == 0) s_inv[slot] = (inv_slot_t){ ITEM_NONE, 0, QUALITY_STANDARD };
+    museum_t *m = &s_museum[s_museum_n++];
+    *m = (museum_t){ .item = it, .x = t->x, .y = t->y, .day = (int32_t)clock_day() };
+    snprintf(m->map, sizeof(m->map), "%s", current_map_name());
+    museum_save();
+    world_save();
+    hud_refresh();
+    ui_close();
+    if (s_mshow_under || (s_mshow_under = heap_caps_malloc(MUSEUM_SHOW_MAX * GROUND_TILE_PX * sizeof(uint16_t), MALLOC_CAP_SPIRAM))) {
+        if (s_mshow_n < MUSEUM_SHOW_MAX) {
+            int x, y;
+            museum_show_xy(t, &x, &y);
+            s_mshow[s_mshow_n] = (museum_show_t){ .m = (int16_t)(s_museum_n - 1), .x = (int16_t)x, .y = (int16_t)y };
+            museum_bake(s_mshow_n++);
+            map_repaint_rect(x, y, TILE_SIZE, TILE_SIZE, NULL);
+        }
+    }
+    sfx_play("donate");
+    message(4000, "Thank you for the %s! The collection: %d of %d", item_name(it), s_museum_n, museum_total());
+}
+
+static void update_museum_touch(const input_frame_t *in)
+{
+    if (!in->touch_pressed_edge || in->touch_menu_btn) return;
+    int tx = in->touch_x, ty = in->touch_y;
+    if (pt_in(tx, ty, MUSEUM_CLOSE_X - 6, MUSEUM_Y + 4, INV_BTN + 12, INV_BTN + 12)) { ui_close(); return; }
+    for (int i = 0; i < s_museum_pick_n; i++) {
+        int x, y;
+        museum_pick_xy(i, &x, &y);
+        if (pt_in(tx, ty, x - 2, y - 2, INV_CELL + 4, INV_CELL + 4)) { museum_donate(s_museum_pick[i]); return; }
+    }
+}
+
+#if DEV_LINK_ENABLED
+// DEV LINK "skill" / "skill NAME XP".
+static void skills_dev_cmd(int nw, char **w)
+{
+    for (int k = 0; nw >= 3 && k < SKILL_COUNT; k++) {
+        if (strcmp(w[1], k_skill_word[k]) != 0) continue;
+        int xp = atoi(w[2]);
+        if (k == SKILL_FISHING) s_fish_xp = xp < 0 ? 0 : xp;
+        else s_skill_xp[k] = xp < 0 ? 0 : xp;
+    }
+    for (int k = 0; k < SKILL_COUNT; k++) dev_out("@@SKILL %s level %d xp %ld", k_skill_word[k], skill_level(k), (long)skill_xp_of(k));
+    dev_out("@@OK");
+}
+
+// DEV LINK "museum": what's donated, where.
+static void museum_dev_cmd(void)
+{
+    for (int i = 0; i < s_museum_n; i++)
+        dev_out("@@MUSEUM %s map %s at %d %d day %ld", item_get(s_museum[i].item)->id, s_museum[i].map, s_museum[i].x, s_museum[i].y, (long)s_museum[i].day);
+    dev_out("@@OK %d of %d donated, %d on this map's shelves", s_museum_n, museum_total(), s_mshow_n);
+}
+#endif
+
+// ============================================================
+//  KITCHEN — cooking: a map object with the "kitchen" action opens it
+//  (UI_KITCHEN). Every item with "food" 1 (tools/slice_food.py made 73, from
+//  Stardew's dishes) is on it, KITCHEN_COLS x KITCHEN_ROWS a page (< > turn
+//  them). Tap a dish to pick it, tap it again to cook one: it goes in the
+//  bag (sfx "cook"). A dish's ingredients are its "cook:<item id>" N
+//  attributes (Downloads/stardew_food_recipes.txt has Stardew's) — taken
+//  from the bag, the plainest stacks first; a dish with none is free (all of
+//  them, for now). Dimmed: the bag hasn't got what it takes.
+//  Dev link: "kitchen" opens it, "kitchen ID" cooks one.
+// ============================================================
+#define KITCHEN_MAX     160                   // dishes listed
+#define KITCHEN_COLS    HOTBAR_SLOTS
+#define KITCHEN_ROWS    4
+#define KITCHEN_PAGE    (KITCHEN_COLS * KITCHEN_ROWS)
+#define KITCHEN_W       INV_PANEL_W
+#define KITCHEN_H       (INV_PAD + INV_HEADER_H + KITCHEN_ROWS * (INV_CELL + INV_CELL_GAP) + 70)
+#define KITCHEN_X       ((LCD_H_RES - KITCHEN_W) / 2)
+#define KITCHEN_Y       ((LCD_V_RES - KITCHEN_H) / 2)
+#define KITCHEN_GRID_X  (KITCHEN_X + INV_PAD)
+#define KITCHEN_GRID_Y  (KITCHEN_Y + INV_PAD + INV_HEADER_H)
+#define KITCHEN_INFO_Y  (KITCHEN_GRID_Y + KITCHEN_ROWS * (INV_CELL + INV_CELL_GAP) + 4)
+#define KITCHEN_NAV_Y   (KITCHEN_INFO_Y + 30)
+#define KITCHEN_NAV_W   44
+#define KITCHEN_CLOSE_X (KITCHEN_X + KITCHEN_W - 10 - INV_BTN)
+
+static item_id_t s_kitchen[KITCHEN_MAX];
+static int       s_kitchen_n, s_kitchen_page, s_kitchen_sel = -1;
+static char      s_kitchen_said[48];
+
+static rect_t kitchen_rect(void) { return (rect_t){ KITCHEN_X, KITCHEN_Y, KITCHEN_W, KITCHEN_H }; }
+static int    kitchen_pages(void) { return s_kitchen_n ? (s_kitchen_n + KITCHEN_PAGE - 1) / KITCHEN_PAGE : 1; }
+
+// Can dish `it` be cooked from the bag? why: what's missing (when it can't).
+static bool kitchen_can(item_id_t it, char *why, size_t n)
+{
+    const item_asset_t *a = item_get(it);
+    size_t pl = strlen("cook:");
+    for (int i = 0; a && i < a->attr_count; i++) {
+        if (strncmp(a->attrs[i].name, "cook:", pl) != 0 || a->attrs[i].value <= 0) continue;
+        item_id_t in = item_find(a->attrs[i].name + pl);
+        int have = in != ITEM_NONE ? inv_count_of(in) : 0;
+        if (have < a->attrs[i].value) {
+            if (why) snprintf(why, n, "NEEDS %ld %s", (long)a->attrs[i].value, in != ITEM_NONE ? item_name(in) : a->attrs[i].name + pl);
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool kitchen_open(void)
+{
+#if ESPNOW_CAMERA_ENABLED
+    if (camera_owns_screen()) return false;
+#endif
+    if (s_ui_screen == UI_KEYBOARD) return false;
+    s_kitchen_n = 0;
+    for (item_id_t it = 1; it < item_count && s_kitchen_n < KITCHEN_MAX; it++)
+        if (item_attr(it, "food", 0) > 0) s_kitchen[s_kitchen_n++] = it;
+    if (!s_kitchen_n) { message(3000, "Nothing to cook yet (no items with \"food\")"); return false; }
+    inv_carry_return();
+    if (!ui_begin()) return false;
+    s_ui_screen       = UI_KITCHEN;
+    s_active_menu     = NULL;
+    s_kitchen_sel     = -1;
+    s_kitchen_said[0] = '\0';
+    if (s_kitchen_page >= kitchen_pages()) s_kitchen_page = 0;
+    return true;
+}
+
+// The "kitchen" action (main/actions.c).
+bool kitchen_tapped(void) { return kitchen_open(); }
+
+static void kitchen_cell_xy(int k, int *x, int *y)
+{
+    k %= KITCHEN_PAGE;
+    *x = KITCHEN_GRID_X + (k % KITCHEN_COLS) * (INV_CELL + INV_CELL_GAP);
+    *y = KITCHEN_GRID_Y + (k / KITCHEN_COLS) * (INV_CELL + INV_CELL_GAP);
+}
+
+// Cooks one of dish `it`: its ingredients out of the bag, it in. false = it can't (why in s_kitchen_said).
+static bool kitchen_cook(item_id_t it)
+{
+    char why[48];
+    if (!kitchen_can(it, why, sizeof(why))) { snprintf(s_kitchen_said, sizeof(s_kitchen_said), "%s", why); return false; }
+    inv_slot_t saved[INV_SLOTS];
+    memcpy(saved, s_inv, sizeof(saved));
+    const item_asset_t *a = item_get(it);
+    size_t pl = strlen("cook:");
+    for (int i = 0; a && i < a->attr_count; i++) {   // the ingredients: the plainest stacks first
+        if (strncmp(a->attrs[i].name, "cook:", pl) != 0 || a->attrs[i].value <= 0) continue;
+        item_id_t in = item_find(a->attrs[i].name + pl);
+        for (int need = (int)a->attrs[i].value; need > 0;) {
+            int best = -1;
+            for (int k = 0; k < INV_SLOTS; k++)
+                if (s_inv[k].count && s_inv[k].item == in && (best < 0 || s_inv[k].quality < s_inv[best].quality)) best = k;
+            if (best < 0) break;
+            int take = s_inv[best].count < need ? s_inv[best].count : need;
+            s_inv[best].count = (uint8_t)(s_inv[best].count - take);
+            if (!s_inv[best].count) s_inv[best] = (inv_slot_t){ ITEM_NONE, 0, QUALITY_STANDARD };
+            need -= take;
+        }
+    }
+    if (inv_add_q(it, QUALITY_STANDARD, 1) != 0) {   // no room: nothing's used up
+        memcpy(s_inv, saved, sizeof(saved));
+        snprintf(s_kitchen_said, sizeof(s_kitchen_said), "NO ROOM IN YOUR BAG");
+        return false;
+    }
+    sfx_play("cook");
+    hud_refresh();
+    snprintf(s_kitchen_said, sizeof(s_kitchen_said), "MADE %s!", item_name(it));
+    for (char *c = s_kitchen_said; *c; c++) *c = (char)toupper((unsigned char)*c);
+    return true;
+}
+
+static void kitchen_draw(void)
+{
+    const int px = KITCHEN_X, py = KITCHEN_Y, pw = KITCHEN_W;
+    draw_leather_panel(px, py, pw, KITCHEN_H);
+    draw_text_centered(px + INV_BTN + 16, py + 17, pw - 2 * (INV_BTN + 16), "KITCHEN", INV_COL_TEXT, INV_COL_SHINE);
+    draw_close_button(KITCHEN_CLOSE_X, py + 10, INV_BTN, false, COLOR_WHITE);
+    for (int k = s_kitchen_page * KITCHEN_PAGE; k < s_kitchen_n && k < (s_kitchen_page + 1) * KITCHEN_PAGE; k++) {
+        int x, y;
+        kitchen_cell_xy(k, &x, &y);
+        inv_slot_t s = { s_kitchen[k], 1, QUALITY_STANDARD };
+        inv_draw_slot(x, y, INV_CELL, &s, false);
+        if (!kitchen_can(s_kitchen[k], NULL, 0)) fill_round_rect(x, y, INV_CELL, INV_CELL, 4, INV_COL_PANEL, 120);
+        if (k == s_kitchen_sel) draw_round_rect(x - 3, y - 3, INV_CELL + 6, INV_CELL + 6, 6, 2, COLOR_WHITE);
+    }
+    char t[64];
+    if (s_kitchen_said[0])    snprintf(t, sizeof(t), "%s", s_kitchen_said);
+    else if (s_kitchen_sel < 0) snprintf(t, sizeof(t), "TAP A DISH");
+    else                      snprintf(t, sizeof(t), "%s: TAP AGAIN TO COOK", item_name(s_kitchen[s_kitchen_sel]));
+    draw_text_centered(px + 8, KITCHEN_INFO_Y, pw - 16, t, INV_COL_TEXT, INV_COL_SHINE);
+    // the pages: < 1/3 >
+    for (int b = 0; b < 2; b++) {
+        int bx = b ? px + pw - INV_PAD - KITCHEN_NAV_W : px + INV_PAD;
+        bool on = b ? s_kitchen_page + 1 < kitchen_pages() : s_kitchen_page > 0;
+        fill_round_rect(bx, KITCHEN_NAV_Y, KITCHEN_NAV_W, 24, 5, on ? INV_COL_SLOT : INV_COL_SLOT_LT, 255);
+        draw_round_rect(bx, KITCHEN_NAV_Y, KITCHEN_NAV_W, 24, 5, 1, INV_COL_EDGE);
+        draw_text_centered(bx, KITCHEN_NAV_Y + 5, KITCHEN_NAV_W, b ? ">" : "<", on ? INV_COL_TEXT : INV_COL_TEXT_DIM, INV_COL_SHINE);
+    }
+    snprintf(t, sizeof(t), "PAGE %d OF %d", s_kitchen_page + 1, kitchen_pages());
+    draw_text_centered(px, KITCHEN_NAV_Y + 5, pw, t, INV_COL_TEXT_DIM, INV_COL_SHINE);
+}
+
+static void update_kitchen_touch(const input_frame_t *in)
+{
+    if (!in->touch_pressed_edge || in->touch_menu_btn) return;
+    int tx = in->touch_x, ty = in->touch_y;
+    if (pt_in(tx, ty, KITCHEN_CLOSE_X - 6, KITCHEN_Y + 4, INV_BTN + 12, INV_BTN + 12)) { ui_close(); return; }
+    for (int b = 0; b < 2; b++) {
+        int bx = b ? KITCHEN_X + KITCHEN_W - INV_PAD - KITCHEN_NAV_W : KITCHEN_X + INV_PAD;
+        if (!pt_in(tx, ty, bx - 4, KITCHEN_NAV_Y - 4, KITCHEN_NAV_W + 8, 32)) continue;
+        int p = s_kitchen_page + (b ? 1 : -1);
+        if (p >= 0 && p < kitchen_pages()) { s_kitchen_page = p; s_kitchen_sel = -1; s_kitchen_said[0] = '\0'; s_ui_needs_redraw = true; }
+        return;
+    }
+    for (int k = s_kitchen_page * KITCHEN_PAGE; k < s_kitchen_n && k < (s_kitchen_page + 1) * KITCHEN_PAGE; k++) {
+        int x, y;
+        kitchen_cell_xy(k, &x, &y);
+        if (!pt_in(tx, ty, x - 2, y - 2, INV_CELL + 4, INV_CELL + 4)) continue;
+        s_kitchen_said[0] = '\0';
+        if (k == s_kitchen_sel) kitchen_cook(s_kitchen[k]);
+        else s_kitchen_sel = k;
+        s_ui_needs_redraw = true;
+        return;
+    }
+}
+
+#if DEV_LINK_ENABLED
+// DEV LINK "kitchen" (open it) / "kitchen ID" (cook one).
+static void kitchen_dev_cmd(int nw, char **w)
+{
+    if (nw < 2) { dev_out(kitchen_open() ? "@@OK kitchen" : "@@ERR can't open it now"); return; }
+    item_id_t it = item_find(w[1]);
+    if (it == ITEM_NONE || item_attr(it, "food", 0) <= 0) { dev_out("@@ERR %s isn't a food", w[1]); return; }
+    bool ok = kitchen_cook(it);
+    dev_out(ok ? "@@OK %s" : "@@ERR %s", s_kitchen_said);
 }
 #endif
 
@@ -23891,6 +25481,13 @@ static void ui_redraw(void)
             rects[n++] = fishbook_rect();
         } else if (s_ui_screen == UI_BOARD) {
             rects[n++] = board_rect();
+        } else if (s_ui_screen == UI_GEAR || s_ui_screen == UI_SKILLS) {
+            rects[n++] = (rect_t){ INV_PANEL_X, INV_PANEL_Y, INV_PANEL_W, INV_PANEL_H };
+            rects[n++] = inv_tabs_rect(INV_PANEL_Y);
+        } else if (s_ui_screen == UI_MUSEUM) {
+            rects[n++] = museum_rect();
+        } else if (s_ui_screen == UI_KITCHEN) {
+            rects[n++] = kitchen_rect();
         } else if (s_ui_screen == UI_FISHING) {
             rects[n++] = fish_ui_rect();
         } else {
@@ -23915,6 +25512,10 @@ static void ui_redraw(void)
     else if (s_ui_screen == UI_FISHING) fish_draw();
     else if (s_ui_screen == UI_FISHBOOK) fishbook_draw();
     else if (s_ui_screen == UI_BOARD) board_draw();
+    else if (s_ui_screen == UI_GEAR) gear_draw();
+    else if (s_ui_screen == UI_SKILLS) skills_draw();
+    else if (s_ui_screen == UI_MUSEUM) museum_draw();
+    else if (s_ui_screen == UI_KITCHEN) kitchen_draw();
     else if (s_ui_screen == UI_CRAFT) craft_draw();
     else                             draw_menu();
     if (msg_new.w > 0) msg_blit();               // last: messages go over the panel
@@ -23952,6 +25553,14 @@ static void ui_update(const input_frame_t *in)
         update_fishbook_touch(in);
     } else if (s_ui_screen == UI_BOARD) {
         update_board_touch(in);
+    } else if (s_ui_screen == UI_GEAR) {
+        update_gear_touch(in);
+    } else if (s_ui_screen == UI_SKILLS) {
+        update_skills_touch(in);
+    } else if (s_ui_screen == UI_MUSEUM) {
+        update_museum_touch(in);
+    } else if (s_ui_screen == UI_KITCHEN) {
+        update_kitchen_touch(in);
     } else if (s_ui_screen == UI_CRAFT) {
         update_craft_touch(in);
     } else if (s_ui_screen == UI_MENU) {
@@ -25180,9 +26789,9 @@ static uint32_t  s_clock_min     = CLOCK_START_MIN;   // minute of the day, 0..M
 static int64_t   s_clock_us      = 0;                 // real time toward the next game minute
 static int64_t   s_clock_last_us = 0;                 // when clock_tick() last ran
 static int       s_clock_x       = 1;                 // DEV LINK "clock N": game minutes per real second (0 = stopped)
-static uint16_t *s_clock_img     = NULL;              // rendered panel, CLOCK_W x CLOCK_H (PSRAM)
-static int32_t   s_clock_img_key = -1;                // what the image shows (see clock_key()); -1 = render again
-static uint8_t   s_clock_row_inset[CLOCK_H];          // rounded corners: pixels to skip at each end of a row
+static uint16_t *s_clock_img     = NULL;              // rendered panel, CLOCK_W x s_clock_h (room for CLOCK_H_MAX; PSRAM)
+static int64_t   s_clock_img_key = -1;                // what the image shows (see clock_key()); -1 = render again
+static uint8_t   s_clock_row_inset[CLOCK_H_MAX];      // rounded corners: pixels to skip at each end of a row
 
 int clock_weekday(void)       { return (int)(s_clock_day % 7); }
 int clock_minute_of_day(void) { return (int)s_clock_min; }
@@ -25881,6 +27490,13 @@ static bool world_save(void)
             snprintf(line, sizeof(line), "can water %d\n", s_can_water);
             fputs(line, f);
         }
+        energy_write(f, line, sizeof(line));   // the energy, and where home is (ENERGY)
+        skills_write(f, line, sizeof(line));   // farming, foraging and mining xp (SKILLS; fishing's is "fishxp")
+        for (int k = 0; k < GEAR_SLOTS; k++) {   // what they wear (GEAR)
+            if (s_gear[k].count == 0 || s_gear[k].item >= item_count) continue;
+            snprintf(line, sizeof(line), "gear %d %s %d\n", k, item_get(s_gear[k].item)->id, s_gear[k].quality);
+            fputs(line, f);
+        }
         for (int i = 0; i < INV_SLOTS; i++) {
             if (s_inv[i].count == 0 || s_inv[i].item >= item_count) continue;   // empty, or a photo item
             snprintf(line, sizeof(line), "item %d %s %d %d\n", i, item_get(s_inv[i].item)->id, s_inv[i].count, s_inv[i].quality);
@@ -25935,6 +27551,9 @@ static bool world_read(int slot, bool apply, world_info_t *info)
         s_can_water    = -1;             // ...or from before the watering can ran dry: full
         fish_rig_reset();                // ...or from before bait and fishing levels: none (FISHING)
         req_reset();                     // ...or from before the photo requests: none done (MARKET BOARD)
+        energy_reset();                  // ...or from before energy: full, no home yet (ENERGY)
+        memset(s_gear, 0, sizeof(s_gear));   // ...or from before gear: none worn (GEAR)
+        skills_reset();                  // ...or from before skills: all level 0 (SKILLS)
     }
     int day = -1, minute = -1;
     while (fgets(line, sizeof(line), f)) {
@@ -25955,6 +27574,18 @@ static bool world_read(int slot, bool apply, world_info_t *info)
                 s_player_y = v[1];
             }
             if (v[2] >= DIR_CENTER && v[2] <= DIR_DOWN_RIGHT && v[2] != DIR_CENTER) s_player_facing = (direction_t)v[2];
+        } else if (mapsave_match(word, nw, "energy #", v, &any)) {   // ENERGY
+            s_energy = v[0] < ENERGY_PASSOUT + 1 ? ENERGY_PASSOUT + 1 : v[0] > ENERGY_MAX ? ENERGY_MAX : v[0];
+        } else if (mapsave_match(word, nw, "skill * #", v, &any)) {   // (SKILLS)
+            skills_load(any, v[0]);
+        } else if (mapsave_match(word, nw, "gear # * #", v, &any)) {   // (GEAR)
+            item_id_t it = item_find(any);
+            if (v[0] >= 0 && v[0] < GEAR_SLOTS && it != ITEM_NONE && item_attr(it, "gear", 0) == v[0] + 1)
+                s_gear[v[0]] = (inv_slot_t){ .item = it, .count = 1, .quality = (uint8_t)(item_quality_ok((uint8_t)v[1]) ? v[1] : 0) };
+        } else if (mapsave_match(word, nw, "temp #", v, &any)) {   // (TEMPERATURE)
+            s_temp = v[0] < -TEMP_MAX + 1 ? -TEMP_MAX + 1 : v[0] > TEMP_MAX - 1 ? TEMP_MAX - 1 : v[0];
+        } else if (mapsave_match(word, nw, "home * # # #", v, &any)) {
+            energy_home_load(any, v[0], v[1], v[2]);
         } else if (mapsave_match(word, nw, "can water #", v, &any)) {
             s_can_water = (int16_t)(v[0] < 0 ? -1 : v[0] > 9999 ? 9999 : v[0]);
         } else if (mapsave_match(word, nw, "weather #", v, &any)) {
@@ -25998,6 +27629,7 @@ static bool world_read(int slot, bool apply, world_info_t *info)
         farm_load(dir);                    // their barns' animals, doors, troughs and the silos' hay (FARM) — after buildings.txt
         ledger_load(dir);                  // the last 20 days of buying and selling (LEDGER)
         fishbook_load(dir);                // every fish caught (FISH BOOK)
+        museum_load(dir);                  // what's been donated, on which shelf (MUSEUM)
         market_load(dir);                 // shoppers, offers, auction lots (MARKET) — after photos.bin: it names its items
         ESP_LOGI(TAG, "save: %s — day %d, %02d:%02d, on %s", dir, day, minute / 60, minute % 60, info->map);
     }
@@ -26021,6 +27653,10 @@ static void world_new(void)
     fishbook_reset();                   // no fish caught (FISH BOOK)
     fish_rig_reset();                   // no bait or tackle on the line, fishing level 0 (FISHING)
     req_reset();                        // no photo requests done (MARKET BOARD; the capture book is the slot's captures.bin)
+    energy_reset();                     // full energy, no home yet (ENERGY)
+    memset(s_gear, 0, sizeof(s_gear));  // no gear on (GEAR)
+    skills_reset();                     // every skill at level 0 (SKILLS)
+    museum_reset();                     // nothing donated (MUSEUM)
     memset(s_inv, 0, sizeof(s_inv));
     item_custom_reset();                // no photo items from another game
     s_season_seen   = -1;               // Spring 1, Year 1 (SEASONS)
@@ -26084,12 +27720,65 @@ static void clock_tick(void)
 }
 
 // Everything the panel shows: weekday, stepped time, and the night stage
-// (the map under its translucent panel changes with it).
-static int32_t clock_key(void)
+// (the map under its translucent panel changes with it), the energy.
+static int64_t clock_key(void)
 {
     int32_t shown = (int32_t)(s_clock_min / CLOCK_STEP_MIN * CLOCK_STEP_MIN);
-    int32_t key = ((int32_t)clock_weekday() * MIN_PER_DAY + shown) * (NIGHT_STAGES + 1) + s_night_shown;
-    return key * (SEASON_DAYS * 4) + clock_season() * SEASON_DAYS + clock_season_day() - 1;   // (SEASONS)
+    int64_t key = ((int64_t)clock_weekday() * MIN_PER_DAY + shown) * (NIGHT_STAGES + 1) + s_night_shown;
+    key = key * (SEASON_DAYS * 4) + clock_season() * SEASON_DAYS + clock_season_day() - 1;   // (SEASONS)
+    key = key * 1024 + (s_energy - ENERGY_PASSOUT);                                      // (ENERGY: 0..ENERGY_MAX + 10)
+    key = key * 2 + (s_clock_h == CLOCK_H_MAX);                                           // (TEMPERATURE: the bar, and how full)
+    return key * 202 + temp_pct() + 101;
+}
+
+// TEMPERATURE: the bar under the energy — from the middle, red to the right as the player
+// heats up, blue to the left as they cool down; on it "HOT 45%" / "COLD 30%", or the climate.
+static void clock_draw_temp(void)
+{
+    const int y = CLOCK_H - 5, bx = 20, bw = CLOCK_W - bx - 9, bh = 11, mid = bx + bw / 2;
+    int pct = temp_pct();
+    uint16_t hot = COLOR_RGB565(222, 70, 40), cold = COLOR_RGB565(70, 150, 236);
+    uint16_t bulb = pct > 0 ? hot : pct < 0 ? cold : INV_COL_TEXT_DIM;
+    fill_rect(12, y, 3, 7, INV_COL_EDGE);   // a little thermometer
+    fill_rect(13, y + 1, 1, 6, bulb);
+    fill_circle(13, y + 8, 2, bulb);
+    fill_rect(bx, y, bw, bh, INV_COL_SLOT_DK);
+    int fill = (bw / 2 - 1) * (pct < 0 ? -pct : pct) / 100;
+    if (pct > 0) fill_rect(mid, y + 1, fill, bh - 2, hot);
+    if (pct < 0) fill_rect(mid - fill, y + 1, fill, bh - 2, cold);
+    fill_rect(mid, y + 1, 1, bh - 2, INV_COL_SHINE);   // comfortable
+    draw_rect(bx, y, bw, bh, INV_COL_EDGE);
+    char t[16];
+    if (pct > 0)      snprintf(t, sizeof(t), "HOT %d%%", pct);
+    else if (pct < 0) snprintf(t, sizeof(t), "COLD %d%%", -pct);
+    else              snprintf(t, sizeof(t), "%s", s_climate < CLIMATE_COUNT ? k_climate_name[s_climate] : "Indoors");
+    int tx = bx + (bw - text_width(t, 1)) / 2;
+    draw_text(tx + 1, y + 3, t, 1, INV_COL_EDGE);
+    draw_text(tx, y + 2, t, 1, COLOR_WHITE);
+}
+
+// ENERGY: the bar along the bottom of the panel, "now/max" on it — green, yellow under
+// half, red under a quarter; empty and the numbers red once exhausted.
+static void clock_draw_energy(void)
+{
+    const int y = CLOCK_TIME_H - 3, bx = 20, bw = CLOCK_W - bx - 9, bh = 11;
+    fill_rect(9, y - 3, CLOCK_W - 18, 1, INV_COL_SLOT_DK);   // engraved line under the time
+    fill_rect(9, y - 2, CLOCK_W - 18, 1, INV_COL_SHINE);
+    draw_text(11, y + 2, "E", 1, INV_COL_SHINE);
+    draw_text(10, y + 1, "E", 1, INV_COL_TEXT);
+    fill_rect(bx, y, bw, bh, INV_COL_SLOT_DK);
+    int fill = s_energy <= 0 ? 0 : (bw - 2) * s_energy / ENERGY_MAX;
+    uint16_t col = s_energy * 4 < ENERGY_MAX ? COLOR_RGB565(214, 64, 48) : s_energy * 2 < ENERGY_MAX ? COLOR_RGB565(226, 196, 52) : COLOR_RGB565(84, 186, 72);
+    if (fill > 0) {
+        fill_rect(bx + 1, y + 1, fill, bh - 2, col);
+        fill_rect(bx + 1, y + 1, fill, 2, rgb565_blend(col, COLOR_WHITE, 90));   // a shine along its top
+    }
+    draw_rect(bx, y, bw, bh, INV_COL_EDGE);
+    char t[16];
+    snprintf(t, sizeof(t), "%d/%d", s_energy, ENERGY_MAX);
+    int tx = bx + (bw - text_width(t, 1)) / 2;
+    draw_text(tx + 1, y + 3, t, 1, INV_COL_EDGE);
+    draw_text(tx, y + 2, t, 1, s_energy <= 0 ? COLOR_RGB565(255, 110, 90) : COLOR_WHITE);
 }
 
 // The dial: sky by the hour, a sun (low at dawn/dusk) or a moon and stars,
@@ -26126,32 +27815,33 @@ static void clock_draw_dial(int cx, int cy, int r, int hour)
 // Renders the panel into s_clock_img if what it shows changed. false = no PSRAM.
 static bool clock_render(void)
 {
-    int32_t key = clock_key();
+    int64_t key = clock_key();
     if (key == s_clock_img_key) return true;
-    if (!s_clock_img) s_clock_img = heap_caps_malloc((size_t)CLOCK_W * CLOCK_H * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
+    if (!s_clock_img) s_clock_img = heap_caps_malloc((size_t)CLOCK_W * CLOCK_H_MAX * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
     if (!s_clock_img) return false;
 
+    const int H = s_clock_h;   // with the temperature bar, or not (clock_world_tick())
     uint16_t *prev_fb = s_fb;
     int       prev_w  = s_fb_w, prev_h = s_fb_h;
-    s_fb = s_clock_img; s_fb_w = CLOCK_W; s_fb_h = CLOCK_H;
+    s_fb = s_clock_img; s_fb_w = CLOCK_W; s_fb_h = H;
 
-    for (int y = 0; y < CLOCK_H; y++) {
+    for (int y = 0; y < H; y++) {
         int inset = 0;
-        while (inset < CLOCK_W / 2 && !in_round_rect(inset, y, 0, 0, CLOCK_W, CLOCK_H, CLOCK_RADIUS)) inset++;
+        while (inset < CLOCK_W / 2 && !in_round_rect(inset, y, 0, 0, CLOCK_W, H, CLOCK_RADIUS)) inset++;
         s_clock_row_inset[y] = (uint8_t)inset;
         for (int x = 0; x < CLOCK_W; x++) {
             int sx = CLOCK_X + x, sy = CLOCK_Y + y;
             s_clock_img[y * CLOCK_W + x] = s_map_loaded ? s_map_pixels[sy * s_map_w + sx] : COLOR_BLACK;
         }
     }
-    fill_round_rect(0, 0, CLOCK_W, CLOCK_H, CLOCK_RADIUS, INV_COL_PANEL, 232);
-    draw_round_rect(0, 0, CLOCK_W, CLOCK_H, CLOCK_RADIUS, 2, INV_COL_EDGE);
-    draw_round_rect(3, 3, CLOCK_W - 6, CLOCK_H - 6, CLOCK_RADIUS - 2, 1, INV_COL_SHINE);
+    fill_round_rect(0, 0, CLOCK_W, H, CLOCK_RADIUS, INV_COL_PANEL, 232);
+    draw_round_rect(0, 0, CLOCK_W, H, CLOCK_RADIUS, 2, INV_COL_EDGE);
+    draw_round_rect(3, 3, CLOCK_W - 6, H - 6, CLOCK_RADIUS - 2, 1, INV_COL_SHINE);
 
     int hour = (int)(s_clock_min / 60), minute = (int)(s_clock_min % 60) / CLOCK_STEP_MIN * CLOCK_STEP_MIN;
-    clock_draw_dial(16, CLOCK_H / 2, 11, hour);
-    fill_rect(30, 9, 1, CLOCK_H - 18, INV_COL_SLOT_DK);   // engraved divider
-    fill_rect(31, 9, 1, CLOCK_H - 18, INV_COL_SHINE);
+    clock_draw_dial(16, CLOCK_TIME_H / 2, 11, hour);
+    fill_rect(30, 9, 1, CLOCK_TIME_H - 18, INV_COL_SLOT_DK);   // engraved divider
+    fill_rect(31, 9, 1, CLOCK_TIME_H - 18, INV_COL_SHINE);
 
     char day[4];   // "Mon" — the dot made room for the season (SEASONS)
     snprintf(day, sizeof(day), "%.3s", k_weekday_short[clock_weekday()]);
@@ -26175,6 +27865,8 @@ static bool clock_render(void)
     draw_text(36, 29, t, 2, INV_COL_SHINE);
     draw_text(35, 28, t, 2, INV_COL_TEXT);
     draw_text(35 + tw + 3, 35, ampm, 1, INV_COL_TEXT_DIM);
+    clock_draw_energy();   // (ENERGY)
+    if (H == CLOCK_H_MAX) clock_draw_temp();   // (TEMPERATURE)
 
     s_fb = prev_fb; s_fb_w = prev_w; s_fb_h = prev_h;
     s_clock_img_key = key;
@@ -26183,7 +27875,7 @@ static bool clock_render(void)
 
 static void clock_blit(void)
 {
-    for (int y = 0; y < CLOCK_H; y++) {
+    for (int y = 0; y < s_clock_h; y++) {
         int in = s_clock_row_inset[y];
         memcpy(&s_fb[(CLOCK_Y + y) * LCD_H_RES + CLOCK_X + in], &s_clock_img[y * CLOCK_W + in],
                (size_t)(CLOCK_W - 2 * in) * sizeof(uint16_t));
@@ -26198,7 +27890,7 @@ static void clock_draw_overlay_in(rect_t clip)
     bool fresh = clock_key() != s_clock_img_key;
     if (!clock_render()) return;
     if (fresh) clock_blit();
-    else       overlay_blit(s_clock_img, CLOCK_X, CLOCK_Y, CLOCK_W, CLOCK_H, s_clock_row_inset, clip);
+    else       overlay_blit(s_clock_img, CLOCK_X, CLOCK_Y, CLOCK_W, s_clock_h, s_clock_row_inset, clip);
 }
 
 // A full repaint covered it; the next game frame draws it again.
@@ -26212,6 +27904,13 @@ static void clock_invalidate(void)
 static void clock_world_tick(void)
 {
     if (!s_map_loaded) return;   // the boot diagnostics screen is written where the panel would go
+    int h = temp_bar_wanted() ? CLOCK_H_MAX : CLOCK_H;   // (TEMPERATURE: the bar comes and goes)
+    if (h != s_clock_h) {
+        int old = s_clock_h;
+        s_clock_h       = h;
+        s_clock_img_key = -1;
+        if (s_clock_on_screen && h < old) map_repaint_rect(CLOCK_X, CLOCK_Y, CLOCK_W, old, NULL);   // the map back where it was (the panel redraws itself on it)
+    }
     if (s_clock_on_screen && clock_key() == s_clock_img_key) return;
     if (!clock_render()) return;
     if (!s_clock_on_screen) player_reset_selected_tile();   // which pixels the outline may XOR changes (as hotbar_move_to)
@@ -26328,7 +28027,7 @@ static bool map_gets_rain(void)
 static bool rain_fell(int32_t day, int upto_min)
 {
     if (s_rain_force >= 0) return s_rain_force;
-    if (!map_gets_rain() || upto_min <= 0) return false;
+    if (!map_gets_rain() || !climate_rains() || upto_min <= 0) return false;   // (CLIMATE: Dry, Volcanic, Glacial)
     int start, len;
     if (rain_spell(day, &start, &len) && start < upto_min) return true;
     return rain_spell(day - 1, &start, &len) && start + len > MIN_PER_DAY;   // yesterday's, from midnight on
@@ -26358,7 +28057,7 @@ static bool rain_outside_now(void)
 static bool rain_now(void)
 {
     if (s_rain_force >= 0) return s_rain_force;
-    if (!map_gets_rain()) return false;
+    if (!map_gets_rain() || !climate_rains()) return false;   // (CLIMATE: Dry, Volcanic, Glacial)
     int32_t day = (int32_t)s_clock_day;
     int     min = (int)s_clock_min, start, len;
     if (rain_spell(day, &start, &len) && min >= start && min < start + len) return true;
@@ -26388,7 +28087,7 @@ static void rain_draw_cell(int cell, int ox, int oy, rect_t clip)
     // the HUD test per pixel only if the bit drawn touches one of its pieces at all
     bool hud = (x0 < HOTBAR_X + HOTBAR_W && HOTBAR_X < x1 && y0 < s_hotbar_y + HOTBAR_H && s_hotbar_y < y1) ||
                (x0 < TOUCH_BTN_X + TOUCH_BTN_SIZE && TOUCH_BTN_X < x1 && y0 < TOUCH_BTN_Y + TOUCH_BTN_SIZE && TOUCH_BTN_Y < y1) ||
-               (s_clock_on_screen && x0 < CLOCK_X + CLOCK_W && CLOCK_X < x1 && y0 < CLOCK_Y + CLOCK_H && CLOCK_Y < y1) ||
+               (s_clock_on_screen && x0 < CLOCK_X + CLOCK_W && CLOCK_X < x1 && y0 < CLOCK_Y + s_clock_h && CLOCK_Y < y1) ||
                (s_msg_on_screen && x0 < s_msg_rect.x + s_msg_rect.w && s_msg_rect.x < x1 && y0 < s_msg_rect.y + s_msg_rect.h && s_msg_rect.y < y1);
     for (int y = y0; y < y1; y++) {
         int k0 = (y - oy) * FX_RAIN_W + cell * RAIN_CELL - ox;   // + x: the sheet pixel under (x,y)
@@ -26764,6 +28463,7 @@ static void night_copy_arena(int stage)
     soil_bake_all();               // the farmland, under everything on it
     grass_bake_all();              // the grass, the same (ANIMALS eat it)
     ground_rebake_all();           // and dropped items stay where they lie
+    museum_rebake_all();           // and the museum's donations on their shelves
     farm_bake_all();               // and the crops keep growing
     place_bake_unbaked();          // and what the player put up stays up
     s_hotbar_img_valid = false;    // the hotbar, message and clock panels are blended over the map
@@ -26962,6 +28662,8 @@ void update_input(void)
     aqua_tick();              // fish swimming in aquariums on this map (AQUARIUMS)
     machine_tick();           // a machine that just finished shows its output (MACHINES)
     crow_tick();              // crows peck where they ate a crop, and fly off (SPRINKLERS + SCARECROWS)
+    bat_tick();               // now and then at night, a bat flies over (BATS)
+    temp_tick();              // a hot or cold climate heats or cools the player (TEMPERATURE)
     tree_fx_tick();           // leaves drifting down, a felled tree coming down (TREES)
     PROF(PROF_MARKET,
          ranch_tick();        // farm animals wander, graze, lay, sleep (ANIMALS) — repainted with the shoppers below
@@ -26971,7 +28673,7 @@ void update_input(void)
     update_breakables();
     PROF(PROF_ANIM, update_animations());   // paused while a UI screen is open so it can't paint over the panel
     PROF(PROF_OTHER,
-         ground_tick();         // shows stacks dropped from the inventory, picks up the one walked onto
+         ground_tick();         // shows stacks dropped from the inventory, picks up the one walked onto (a backpack: pack_tick())
          farm_tick();           // crops that reached a new stage (once per game minute)
          mapsave_tick();        // writes this map's save a moment after something changed
          mapsave_regen_tick();  // grows this map back once its regrowth days are up
@@ -26981,6 +28683,107 @@ void update_input(void)
          clock_world_tick();    // the time-of-day panel, when its 10-minute step changes
          msg_world_tick());     // message(): show / swap / take down the on-screen message
     PROF(PROF_WEATHER, weather_tick());   // rain: drawn last, over the world and under the HUD
+}
+
+// ============================================================
+//  BATS — at night (BAT_FROM_MIN .. BAT_TO_MIN), outdoors (map_gets_rain():
+//  never inside a building), now and then a bat flaps across the screen:
+//  in from one side and out the other, bobbing up and down as it goes,
+//  with a squeak — sfx "bat" (sounds/sound effects/bat.wav on the card;
+//  until it's there, no sound). Each game minute there's a BAT_PER_MILLE
+//  in 1000 chance one comes; one at a time.
+//  Art: assets/bat_sheet.png — BAT_FRAMES frames of BAT_PX x BAT_PX side by
+//  side, the wings' flap (tools/slice_forage.py made it from Stardew's bat).
+//  It's a dark silhouette, drawn as it is (not night-tinted) so it shows
+//  against the night; over everything, like a flying crow (farmfx_paint_rect()).
+//  Dev link: "bat" sends one over now, whatever the time.
+// ============================================================
+#define BAT_PX         32
+#define BAT_FRAMES     4
+#define BAT_FLAP_MS    90
+#define BAT_PX_S       170          // across the screen in about 3 s
+#define BAT_BOB_PX     14           // up and down this far either side of its line...
+#define BAT_BOB_MS     700          // ...once every this long
+#define BAT_FROM_MIN   (20 * 60)    // bats are out from 8 pm...
+#define BAT_TO_MIN     (5 * 60)     // ...to 5 am
+#define BAT_PER_MILLE  15           // the odds one comes, each game minute
+_Static_assert(BAT_SHEET_W == BAT_FRAMES * BAT_PX && BAT_SHEET_H == BAT_PX,
+               "assets/bat_sheet.png must be 4 frames of 32x32 side by side");
+
+typedef struct {
+    bool     used;
+    float    x, y0;      // its left edge; the line it flies along (its top edge)
+    float    vx, vy;     // px/s: across, and a drift up or down
+    uint32_t t0;         // ms: when it came
+    int8_t   frame;      // the sheet frame drawn (-1 = not on screen yet)
+    rect_t   drawn;      // where it's drawn (w 0 = nowhere)
+} bat_t;
+
+static bat_t    s_bat;
+static uint32_t s_bat_ms;              // bat_tick()'s last step
+static int      s_bat_seen_min = -1;   // the game minute bat_tick() last rolled for one
+
+static void bat_clear(void) { memset(&s_bat, 0, sizeof(s_bat)); }
+
+static void bat_send(uint32_t now)
+{
+    bool from_left = esp_random() & 1;
+    s_bat = (bat_t){ .used = true, .x = from_left ? -BAT_PX : LCD_H_RES, .y0 = (float)(40 + esp_random() % 260),
+                     .vx = from_left ? BAT_PX_S : -BAT_PX_S, .vy = (float)((int)(esp_random() % 61) - 30), .t0 = now, .frame = -1 };
+    sfx_play("bat");
+}
+
+static rect_t bat_rect(uint32_t t)
+{
+    float bob = BAT_BOB_PX * sinf(6.2831853f * (float)(t % BAT_BOB_MS) / BAT_BOB_MS);
+    return (rect_t){ (int)s_bat.x, (int)(s_bat.y0 + s_bat.vy * (float)t / 1000.0f + bob), BAT_PX, BAT_PX };
+}
+
+// Once per game frame (see update_input): maybe a bat comes; one flies on, and is gone off the far side.
+static void bat_tick(void)
+{
+    uint32_t now = (uint32_t)(esp_timer_get_time() / 1000), el = now - s_bat_ms;
+    s_bat_ms = now;
+    if (!s_map_loaded) return;
+    int minute = clock_minute_of_day();
+    if (!s_bat.used && minute != s_bat_seen_min) {
+        s_bat_seen_min = minute;
+        if ((minute >= BAT_FROM_MIN || minute < BAT_TO_MIN) && map_gets_rain() && esp_random() % 1000 < BAT_PER_MILLE) bat_send(now);
+    }
+    if (!s_bat.used) return;
+    s_bat.x += s_bat.vx * (el > 100 ? 0.1f : (float)el / 1000.0f);   // back from a screen: carry on, don't jump
+    rect_t r = bat_rect(now - s_bat.t0);
+    if ((s_bat.vx > 0 && r.x >= LCD_H_RES) || (s_bat.vx < 0 && r.x + r.w <= 0)) {   // out the far side: gone
+        rect_t d = rect_clip_screen(s_bat.drawn);
+        s_bat.used = false;
+        if (d.w > 0 && d.h > 0) npc_dirty_add(d);
+        return;
+    }
+    int frame = (int)((now - s_bat.t0) / BAT_FLAP_MS) % BAT_FRAMES;
+    if (frame == s_bat.frame && s_bat.drawn.w && r.x == s_bat.drawn.x && r.y == s_bat.drawn.y) return;
+    rect_t d = rect_clip_screen(s_bat.drawn.w ? rect_union(s_bat.drawn, r) : r);
+    s_bat.frame = (int8_t)frame;
+    s_bat.drawn = r;
+    if (d.w > 0 && d.h > 0) npc_dirty_add(d);   // put on screen at the end of this frame (and off where it was)
+}
+
+// The bat, if it overlaps (x,y,w,h), over what's there (farmfx_paint_rect()).
+static void bat_paint_rect(int x, int y, int w, int h)
+{
+    if (!s_bat.used || s_bat.frame < 0 || !s_bat.drawn.w) return;
+    rect_t r = s_bat.drawn;
+    int x0 = r.x > x ? r.x : x, y0 = r.y > y ? r.y : y;
+    int x1 = r.x + r.w < x + w ? r.x + r.w : x + w, y1 = r.y + r.h < y + h ? r.y + r.h : y + h;
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > s_fb_w) x1 = s_fb_w;
+    if (y1 > s_fb_h) y1 = s_fb_h;
+    const uint16_t *px = bat_sheet + s_bat.frame * BAT_PX;
+    for (int yy = y0; yy < y1; yy++)
+        for (int xx = x0; xx < x1; xx++) {
+            uint16_t v = px[(yy - r.y) * BAT_SHEET_W + (xx - r.x)];
+            if (v != FB_TRANSPARENT_COLOR) s_fb[yy * s_fb_w + xx] = v;
+        }
 }
 
 // ============================================================
@@ -27009,7 +28812,14 @@ void update_input(void)
 #define SLEEP_BTN3_GAP 10
 #define SLEEP_CLOSE_X  (SLEEP_X + SLEEP_W - 10 - INV_BTN)
 
-static int s_sleep_prop = -1;   // UI_SLEEP: the bed prop tapped (s_place[] index), -1 = a bed in the map
+static int      s_sleep_prop = -1;      // UI_SLEEP: the bed prop tapped (s_place[] index), -1 = a bed in the map
+static bool     s_sleep_note = false;   // UI_SLEEP is the pass-out note instead (ENERGY): just an OK button
+static uint32_t s_sleep_lost = 0;       // ...the money they lost
+static void passout_note_open(uint32_t lost);
+enum { PASSOUT_TIRED, PASSOUT_HEAT, PASSOUT_COLD };   // ENERGY: why they passed out
+static uint8_t  s_passout_why    = PASSOUT_TIRED;     // ...(the note says; HEAT / COLD: a BACKPACK, not money)
+static int      s_passout_packed = 0;                 // ...the stacks left in the backpack (-1: nowhere to leave it)
+static bool     s_passout_hospital = false;           // ...they woke in the hospital (else at home)
 
 static bool sleep_open(int prop)
 {
@@ -27022,7 +28832,19 @@ static bool sleep_open(int prop)
     s_ui_screen   = UI_SLEEP;
     s_active_menu = NULL;
     s_sleep_prop  = prop;
+    s_sleep_note  = false;
     return true;
+}
+
+// Woken at home after passing out (ENERGY): the dialog says what happened.
+static void passout_note_open(uint32_t lost)
+{
+    if (!sleep_open(-1)) {   // (no room for a UI: a message will do)
+        message(5000, "You passed out! A local brought you home. $%lu went missing", (unsigned long)lost);
+        return;
+    }
+    s_sleep_note = true;
+    s_sleep_lost = lost;
 }
 
 // The "bed" asset action (main/actions.c).
@@ -27030,11 +28852,12 @@ bool bed_open(void) { return sleep_open(-1); }
 
 static rect_t sleep_rect(void) { return (rect_t){ SLEEP_X, SLEEP_Y, SLEEP_W, SLEEP_H }; }
 
-// The dialog's buttons: SLEEP, NOT YET (and PICK UP for a bed prop), left to right.
-static int sleep_btn_count(void) { return s_sleep_prop >= 0 ? 3 : 2; }
+// The dialog's buttons: SLEEP, NOT YET (and PICK UP for a bed prop), left to right; the pass-out note's OK.
+static int sleep_btn_count(void) { return s_sleep_note ? 1 : s_sleep_prop >= 0 ? 3 : 2; }
 static int sleep_btn_w(void)     { return sleep_btn_count() == 3 ? SLEEP_BTN3_W : SLEEP_BTN_W; }
 static int sleep_btn_x(int k)
 {
+    if (sleep_btn_count() == 1) return SLEEP_X + (SLEEP_W - SLEEP_BTN_W) / 2;
     if (sleep_btn_count() == 3) return SLEEP_X + (SLEEP_W - 3 * SLEEP_BTN3_W - 2 * SLEEP_BTN3_GAP) / 2 + k * (SLEEP_BTN3_W + SLEEP_BTN3_GAP);
     return k == 0 ? SLEEP_X + 20 : SLEEP_X + SLEEP_W - 20 - SLEEP_BTN_W;
 }
@@ -27052,8 +28875,46 @@ static bool sleep_btn_hit(int k, int tx, int ty)
     return pt_in(tx, ty, sleep_btn_x(k) - 4, SLEEP_BTN_Y - 4, sleep_btn_w() + 8, SLEEP_BTN_H + 8);
 }
 
+// The pass-out note (ENERGY).
+static void passout_note_draw(void)
+{
+    draw_leather_panel(SLEEP_X, SLEEP_Y, SLEEP_W, SLEEP_H);
+    draw_text_centered(SLEEP_X + INV_BTN + 16, SLEEP_Y + 17, SLEEP_W - 2 * (INV_BTN + 16), "YOU PASSED OUT", INV_COL_TEXT, INV_COL_SHINE);
+    char t[64];
+    const int x = SLEEP_X + 16, w = SLEEP_W - 32;
+    if (s_passout_why != PASSOUT_TIRED) {   // the heat or the cold (TEMPERATURE): a backpack
+        draw_text_clip(x, SLEEP_Y + 50, s_passout_why == PASSOUT_HEAT ? "The heat was too much and you collapsed." : "The cold was too much and you collapsed.", 1, INV_COL_TEXT, w);
+        draw_text_clip(x, SLEEP_Y + 64, s_passout_hospital ? "A local got you to the hospital," : "A local found you and carried you home,", 1, INV_COL_TEXT, w);
+        if (s_passout_packed > 0) {
+            draw_text_clip(x, SLEEP_Y + 78, "but not your things: they're in a backpack", 1, INV_COL_DOWN, w);
+            draw_text_clip(x, SLEEP_Y + 92, "where you fell. Your tools are with you.", 1, INV_COL_DOWN, w);
+        } else if (s_passout_packed == 0) {
+            draw_text_clip(x, SLEEP_Y + 78, "with everything you had on you.", 1, INV_COL_TEXT, w);
+        } else {
+            draw_text_clip(x, SLEEP_Y + 78, "and your things too (no room to leave", 1, INV_COL_TEXT, w);
+            draw_text_clip(x, SLEEP_Y + 92, "a backpack where you fell).", 1, INV_COL_TEXT, w);
+        }
+        draw_text_clip(x, SLEEP_Y + 110, "Stay out of the extremes for so long!", 1, INV_COL_TEXT_DIM, w);
+        sleep_button(0, "OK", COLOR_RGB565(70, 160, 80));
+        return;
+    }
+    draw_text_clip(x, SLEEP_Y + 50, "You worked until you collapsed.", 1, INV_COL_TEXT, w);
+    draw_text_clip(x, SLEEP_Y + 64, "A local found you lying there and", 1, INV_COL_TEXT, w);
+    draw_text_clip(x, SLEEP_Y + 78, s_passout_hospital ? "brought you to the hospital." : "carried you home to bed.", 1, INV_COL_TEXT, w);
+    if (s_sleep_lost) {
+        draw_text_clip(x, SLEEP_Y + 96, "Someone went through your pockets", 1, INV_COL_DOWN, w);
+        snprintf(t, sizeof(t), "while you were out: $%lu is gone.", (unsigned long)s_sleep_lost);
+        draw_text_clip(x, SLEEP_Y + 110, t, 1, INV_COL_DOWN, w);
+    } else {
+        draw_text_clip(x, SLEEP_Y + 96, "Someone went through your pockets,", 1, INV_COL_TEXT_DIM, w);
+        draw_text_clip(x, SLEEP_Y + 110, "but there was nothing to take.", 1, INV_COL_TEXT_DIM, w);
+    }
+    sleep_button(0, "OK", COLOR_RGB565(70, 160, 80));
+}
+
 static void sleep_draw(void)
 {
+    if (s_sleep_note) { passout_note_draw(); return; }
     draw_leather_panel(SLEEP_X, SLEEP_Y, SLEEP_W, SLEEP_H);
     draw_text_centered(SLEEP_X + INV_BTN + 16, SLEEP_Y + 17, SLEEP_W - 2 * (INV_BTN + 16), "GO TO BED?", INV_COL_TEXT, INV_COL_SHINE);
     draw_close_button(SLEEP_CLOSE_X, SLEEP_Y + 10, INV_BTN, false, COLOR_WHITE);
@@ -27076,13 +28937,26 @@ static void sleep_draw(void)
     if (s_sleep_prop >= 0) sleep_button(2, "PICK UP", COLOR_RGB565(150, 110, 60));
 }
 
+static void energy_wake(bool tired, uint32_t lost);   // ENERGY section (below): what the night gives back
+static void energy_home_here(void);                   // ...this bed is home now
+static bool passout_wake_spot(int *x, int *y);        // ...where on this map they wake after passing out (false: not this map)
+
 // Fades out, moves the clock to the wake-up time, plays the night (crops,
-// farmland, rain, the night stage), saves, and fades back in.
-static void sleep_now(void)
+// farmland, rain, the night stage), saves, and fades back in. passed_out
+// (ENERGY): they collapsed — woken at home on this map (passout_travel()
+// made sure it's this one), `lost` money gone.
+static void sleep_through(bool passed_out, uint32_t lost)
 {
+    bool tired = passed_out || energy_exhausted();   // gone to bed exhausted: half the energy back (ENERGY)
     nav_reset();
     player_reset_selected_tile();
     screen_fade_to_black();
+    if (passed_out) {
+        int x, y;
+        fish_reset();
+        tool_swing_reset();
+        if (passout_wake_spot(&x, &y)) { s_player_x = x; s_player_y = y; s_player_facing = DIR_DOWN; }
+    }
 
     if (s_clock_min >= CLOCK_START_MIN) s_clock_day++;   // else: it's already the day being woken up on
     s_clock_min = CLOCK_START_MIN;
@@ -27095,6 +28969,10 @@ static void sleep_now(void)
     night_release_hold();                                                // the loader's stage is for the old time
     int want = night_stage_wanted();
     if (want != s_night_shown && night_arena() && night_read_stage(want, s_hold_buf)) night_copy_arena(want);
+    forage_catch_up(false);                                              // 6:00: new forage comes up (FORAGE)...
+    for (int i = 0; i < GROUND_MAX; i++)                                 // ...baked now, so it fades in with the rest
+        if (s_ground[i].count > 0 && !s_ground[i].baked) ground_bake(i);
+    energy_wake(tired, lost);                                            // (ENERGY)
     mapsave_flush();
     world_save();
 
@@ -27106,14 +28984,27 @@ static void sleep_now(void)
     anim_reset_timers();
     world_repaint_all();       // the player, shoppers, hotbar and clock on top
     s_clock_last_us = 0;       // the fades don't count as game time
-    message(3000, "Good morning! It's %s", k_weekday_short[clock_weekday()]);
-    ESP_LOGI(TAG, "sleep: woke on day %lu", (unsigned long)s_clock_day);
+    if (passed_out) passout_note_open(lost);   // what happened (ENERGY)
+    else if (tired) message(3500, "Good morning! You went to bed exhausted: half energy");
+    else            message(3000, "Good morning! It's %s", k_weekday_short[clock_weekday()]);
+    ESP_LOGI(TAG, "sleep: woke on day %lu%s", (unsigned long)s_clock_day, passed_out ? " (passed out)" : "");
+}
+
+// A bed's SLEEP button: this is home now (ENERGY), then the night.
+static void sleep_now(void)
+{
+    energy_home_here();
+    sleep_through(false, 0);
 }
 
 static void update_sleep_touch(const input_frame_t *in)
 {
     if (!in->touch_pressed_edge || in->touch_menu_btn) return;
     int tx = in->touch_x, ty = in->touch_y, prop = s_sleep_prop;
+    if (s_sleep_note) {   // the pass-out note: OK
+        if (sleep_btn_hit(0, tx, ty)) { s_sleep_note = false; ui_close(); }
+        return;
+    }
     if (pt_in(tx, ty, SLEEP_CLOSE_X - 6, SLEEP_Y + 4, INV_BTN + 12, INV_BTN + 12)) { ui_close(); return; }
     if (sleep_btn_hit(0, tx, ty)) { ui_close(); sleep_now(); return; }
     if (sleep_btn_hit(1, tx, ty)) { ui_close(); return; }
@@ -27122,6 +29013,337 @@ static void update_sleep_touch(const input_frame_t *in)
         place_pick_up(prop);
     }
 }
+
+// ============================================================
+//  ENERGY — Stardew Valley style. The player has up to ENERGY_MAX (270);
+//  each use of a tool or a rod costs what its "energy" attribute says
+//  (items.h — the axe and the pickaxe 2 a swing, a rod 5 a cast:
+//  ENERGY_ROD_DEFAULT for a rod without one; other things nothing). Shown
+//  along the bottom of the clock panel (CLOCK: clock_draw_energy()), a bar
+//  with "now/max" on it.
+//  At 0 or below the player is exhausted ("You're exhausted..." once) and
+//  walks at ENERGY_SLOW_PCT % of the speed (PLAYER). Tools still work, down
+//  to ENERGY_PASSOUT (-10): then they pass out. passout_travel() takes them
+//  home — where they last went to bed (world.txt "home <map> <inst> <x>
+//  <y>"; before that, the middle of FIRST_MAP_NAME) — to wake at 6:00 the
+//  next morning (this morning before 6) with PASSOUT_LOSS_PCT % of their
+//  money gone, at most PASSOUT_LOSS_MAX, and a note saying a local found
+//  them and someone went through their pockets.
+//  Sleeping fills it up: all of it — half if they went to bed exhausted
+//  (or passed out). Saved in world.txt ("energy N").
+//  Dev link: "energy" (show), "energy N" (set), "passout".
+// ============================================================
+#define ENERGY_ROD_DEFAULT 5        // a cast, for a rod without an "energy" attribute
+#define PASSOUT_LOSS_PCT   10       // passing out loses this % of the money...
+#define PASSOUT_LOSS_MAX   10000    // ...but never more than this
+
+static bool     s_passout_pending = false;   // hit ENERGY_PASSOUT (or TEMP_MAX): passout_travel() takes them home after this frame
+static char     s_home_map[32]    = "";      // where they last went to bed ("" = never: the middle of FIRST_MAP_NAME)
+static uint16_t s_home_inst       = 0;       // ...inside that building (PLACEMENT), 0 = none
+static int      s_home_x, s_home_y;          // ...standing there, px (as "player" in world.txt)
+
+static void energy_reset(void)
+{
+    s_energy          = ENERGY_MAX;
+    s_temp            = 0;
+    s_passout_pending = false;
+    s_home_map[0]     = '\0';
+    s_home_inst       = 0;
+}
+
+static void energy_write(FILE *f, char *line, size_t n)
+{
+    snprintf(line, n, "energy %d\ntemp %d\n", s_energy, s_temp);
+    fputs(line, f);
+    if (!s_home_map[0]) return;
+    snprintf(line, n, "home %s %u %d %d\n", s_home_map, s_home_inst, s_home_x, s_home_y);
+    fputs(line, f);
+}
+
+static void energy_home_load(const char *map, int inst, int x, int y)
+{
+    if (strlen(map) >= sizeof(s_home_map) || inst < 0 || inst >= 65535 ||
+        x < 0 || x > LCD_H_RES - PLAYER_W || y < PLAYER_MIN_Y || y > LCD_V_RES - PLAYER_H) return;
+    snprintf(s_home_map, sizeof(s_home_map), "%s", map);
+    s_home_inst = (uint16_t)inst;
+    s_home_x    = x;
+    s_home_y    = y;
+}
+
+// Going to bed: here is home now.
+static void energy_home_here(void)
+{
+    snprintf(s_home_map, sizeof(s_home_map), "%s", current_map_name());
+    s_home_inst = s_map_inst;
+    s_home_x    = s_player_x;
+    s_home_y    = s_player_y;
+}
+
+// Where the player wakes after passing out: home's map file (and building).
+static void energy_home_path(char *out, size_t n, uint16_t *inst)
+{
+    *inst = s_home_map[0] ? s_home_inst : 0;
+    if (s_home_map[0]) map_path_for(s_home_map, out, n);
+    else               first_map_path(out, n);
+}
+
+// THE HOSPITAL: a player who passes out (tired, too hot, too cold) wakes in
+// the map HOSPITAL_MAP, beside one of its beds — a map object with the "bed"
+// action, picked at random. No such map on the card: home, as before.
+#define HOSPITAL_MAP "hospital"
+
+static bool hospital_exists(void)
+{
+    static char path[MAP_PATH_MAX];
+    struct stat st;
+    return map_path_for(HOSPITAL_MAP, path, sizeof(path)) && stat(path, &st) == 0;
+}
+
+// A random bed on the loaded map and a tile beside it the player can stand on
+// (below it first, then the sides, then above). false = no bed with room.
+static bool hospital_bed_spot(int *px, int *py)
+{
+    int a = asset_action_find("bed"), beds[TRIG_MAX], n = 0;
+    for (int i = 0; i < s_trig.count; i++) if (trig_has_action(&s_trig.items[i], a)) beds[n++] = i;
+    int start = n ? (int)(esp_random() % (uint32_t)n) : 0;
+    for (int b = 0; b < n; b++) {
+        const trig_t *t = &s_trig.items[beds[(start + b) % n]];
+        int tx0 = t->x / TILE_SIZE, ty0 = t->y / TILE_SIZE, tx1 = (t->x + t->w - 1) / TILE_SIZE, ty1 = (t->y + t->h - 1) / TILE_SIZE;
+        int cand[4 * (TILE_COLS + TILE_ROWS)][2], c = 0;
+        for (int tx = tx0; tx <= tx1; tx++) { cand[c][0] = tx; cand[c++][1] = ty1 + 1; }
+        for (int ty = ty0; ty <= ty1; ty++) { cand[c][0] = tx0 - 1; cand[c++][1] = ty; cand[c][0] = tx1 + 1; cand[c++][1] = ty; }
+        for (int tx = tx0; tx <= tx1; tx++) { cand[c][0] = tx; cand[c++][1] = ty0 - 1; }
+        for (int k = 0; k < c; k++) {
+            int x = cand[k][0] * TILE_SIZE, y = cand[k][1] * TILE_SIZE + TILE_SIZE - PLAYER_H;
+            if (!tile_on_map(cand[k][0], cand[k][1]) || y < PLAYER_MIN_Y || player_feet_blocked(x, y)) continue;
+            *px = x; *py = y;
+            return true;
+        }
+    }
+    return false;
+}
+
+// Where on the loaded map they wake. false = home isn't this map.
+static bool energy_home_spot(int *x, int *y)
+{
+    static char path[MAP_PATH_MAX];
+    uint16_t inst;
+    energy_home_path(path, sizeof(path), &inst);
+    const char *base = strrchr(path, '/');
+    base = base ? base + 1 : path;
+    size_t len = strcspn(base, ".");
+    if (inst != s_map_inst || strlen(current_map_name()) != len || strncmp(base, current_map_name(), len) != 0) return false;
+    *x = s_home_map[0] ? s_home_x : LCD_H_RES / 2;   // (a new game starts in the middle — world_new())
+    *y = s_home_map[0] ? s_home_y : LCD_V_RES / 2;
+    return true;
+}
+
+// ---- TEMPERATURE ------------------------------------------------------------
+//  A hot or cold climate (CLIMATE) heats or cools the player, a game minute
+//  at a time while the clock runs: s_temp goes up to +TEMP_MAX (too hot) or
+//  down to -TEMP_MAX (too cold). Hot / Cold take TEMP_MILD_MIN game minutes
+//  (5 hours) from comfortable to out cold, Volcanic / Glacial TEMP_EXTREME_MIN
+//  (a quarter of an hour). Anywhere else (and indoors) it eases back to
+//  comfortable in TEMP_EASE_MIN; the other extreme pulls it back at least as
+//  fast. GEAR cuts it: against Hot / Cold by the worn pieces' share
+//  (all four: never), against Volcanic / Glacial it stretches the time up to
+//  GEAR_EXTREME_MIN (7 hours) with all four (gear_protect_pct()).
+//  Shown as a bar under the energy (CLOCK: clock_draw_temp()) whenever the
+//  climate heats or cools, or the player isn't comfortable yet. From
+//  TEMP_SWEAT_PCT the player sweats (beads running down the face), from
+//  TEMP_SHIVER_PCT cold they shiver (PLAYER: player_look_now()); a warning at
+//  50 % and 80 %. At 100 % they pass out (passout_travel()): home the next
+//  morning, everything but their tools left in a BACKPACK where they fell.
+//  A night's sleep sets it back to comfortable. Saved in world.txt ("temp N").
+//  Dev link: "temp" (show), "temp PCT" (set: -100..100).
+#define TEMP_MILD_MIN    (5 * 60)   // Hot / Cold: game minutes to pass out
+#define TEMP_EXTREME_MIN 15         // Volcanic / Glacial
+#define TEMP_EASE_MIN    60         // back to comfortable from the edge, elsewhere
+
+#define GEAR_EXTREME_MIN (7 * 60)   // Volcanic / Glacial in a full set of the right gear
+
+static int32_t s_temp_at    = -1;   // the game minute (day * MIN_PER_DAY + minute) temp_tick() last counted
+static uint8_t s_temp_warned = 0;   // 0, 1 (50 %), 2 (80 %): the warnings given since it was last under 40 %
+
+// The loaded map's push a game minute: + hotter, - colder, 0 = it eases back (GEAR protects).
+static int temp_push(void)
+{
+    bool heat = s_climate == CLIMATE_HOT || s_climate == CLIMATE_VOLCANIC;
+    int  p    = gear_protect_pct(heat);
+    switch (s_climate) {
+    case CLIMATE_HOT:
+    case CLIMATE_COLD: {
+        int v = TEMP_MAX * (100 - p) / (100 * TEMP_MILD_MIN);
+        return heat ? v : -v;
+    }
+    case CLIMATE_VOLCANIC:
+    case CLIMATE_GLACIAL: {
+        int v = TEMP_MAX / (TEMP_EXTREME_MIN + (GEAR_EXTREME_MIN - TEMP_EXTREME_MIN) * p / 100);
+        return heat ? v : -v;
+    }
+    default:
+        return 0;
+    }
+}
+
+static bool temp_bar_wanted(void)
+{
+    bool climate = s_climate == CLIMATE_HOT || s_climate == CLIMATE_COLD || s_climate == CLIMATE_VOLCANIC || s_climate == CLIMATE_GLACIAL;
+    return s_map_loaded && (s_temp != 0 || climate);   // (in full gear against Hot / Cold too: it shows that it holds)
+}
+
+static void temp_tick(void)
+{
+    if (!s_map_loaded || s_passout_pending) return;
+    int32_t at = (int32_t)(s_clock_day * MIN_PER_DAY + s_clock_min);
+    if (s_temp_at < 0 || at < s_temp_at) { s_temp_at = at; return; }   // (a game loaded, the clock set back)
+    int mins = at - s_temp_at;
+    if (mins <= 0) return;
+    if (mins > 60) mins = 60;
+    s_temp_at = at;
+    int push = temp_push(), ease = TEMP_MAX / TEMP_EASE_MIN;
+    for (int m = 0; m < mins; m++) {
+        if (push == 0) {                          // easing back to comfortable
+            if (s_temp > 0) s_temp = s_temp > ease ? s_temp - ease : 0;
+            else            s_temp = s_temp < -ease ? s_temp + ease : 0;
+        } else if ((s_temp > 0) != (push > 0) && s_temp != 0) {   // the other way: at least as fast as easing
+            s_temp += push > 0 ? (push > ease ? push : ease) : (-push > ease ? push : -ease);
+        } else {
+            s_temp += push;
+        }
+    }
+    if (s_temp > TEMP_MAX)  s_temp = TEMP_MAX;
+    if (s_temp < -TEMP_MAX) s_temp = -TEMP_MAX;
+    int pct = temp_pct(), a = pct < 0 ? -pct : pct;
+    bool hot = pct > 0;
+    if (a < 40) s_temp_warned = 0;
+    if (a >= 100) {
+        s_passout_pending = true;
+        s_passout_why     = hot ? PASSOUT_HEAT : PASSOUT_COLD;
+        ESP_LOGI(TAG, "temperature: passed out from the %s on %s", hot ? "heat" : "cold", current_map_name());
+    } else if (a >= 80 && s_temp_warned < 2) {
+        s_temp_warned = 2;
+        message(4000, hot ? "You're overheating! Get out of the heat!" : "You're freezing! Get somewhere warm!");
+    } else if (a >= 50 && s_temp_warned < 1) {
+        s_temp_warned = 1;
+        message(3500, hot ? "You're getting very hot..." : "You're getting very cold...");
+    }
+}
+
+// What one use of `item` costs.
+static int energy_cost(item_id_t item)
+{
+    int32_t n = item_attr(item, ITEM_ATTR_ENERGY, -1);
+    if (n >= 0) return (int)n;
+    return item_attr(item, ITEM_ATTR_ROD, 0) > 0 ? ENERGY_ROD_DEFAULT : 0;
+}
+
+// A tool swung, a rod cast (TOOL SWING, FISHING).
+static void energy_use(item_id_t item)
+{
+    int n = energy_cost(item);
+    if (n <= 0 || s_passout_pending) return;
+    bool was_ok = s_energy > 0;
+    s_energy -= n;
+    if (s_energy <= ENERGY_PASSOUT) {
+        s_energy = ENERGY_PASSOUT;
+        s_passout_pending = true;
+        s_passout_why     = PASSOUT_TIRED;
+        ESP_LOGI(TAG, "energy: passed out on %s", current_map_name());
+    } else if (was_ok && s_energy <= 0) {
+        message(3500, "You're exhausted... go home and sleep!");
+    }
+}
+
+// The night (sleep_through()): full again, or half for a tired one.
+static void energy_wake(bool tired, uint32_t lost)
+{
+    s_energy = tired ? ENERGY_MAX / 2 : ENERGY_MAX;
+    s_temp   = 0;   // (TEMPERATURE: a night at home)
+    s_temp_at = -1;
+    if (lost) ESP_LOGI(TAG, "energy: passed out — lost $%lu", (unsigned long)lost);
+}
+
+// Where a player who passed out wakes, if it's the loaded map: beside a hospital bed
+// (or home, with no hospital on the card). false = it's somewhere else.
+static bool passout_wake_spot(int *x, int *y)
+{
+    if (!hospital_exists()) return energy_home_spot(x, y);
+    if (s_map_inst || strcmp(current_map_name(), HOSPITAL_MAP) != 0) return false;
+    if (!hospital_bed_spot(x, y)) { *x = LCD_H_RES / 2; *y = LCD_V_RES / 2; }   // (no bed with room: the middle)
+    return true;
+}
+
+// The map file they wake on after passing out, and its building (0).
+static void passout_dest(char *out, size_t n, uint16_t *inst)
+{
+    if (hospital_exists() && map_path_for(HOSPITAL_MAP, out, n)) { *inst = 0; return; }
+    energy_home_path(out, n, inst);
+}
+
+// From app_main's loop, after tp_travel() (load_map() goes deep: the same
+// depth as there): the player passed out — home, the next morning.
+static void passout_travel(void)
+{
+    if (!s_passout_pending || ui_screen_open() || tool_swinging()) return;   // (the swing that did it lands first)
+    s_passout_pending = false;
+    uint32_t lost = 0;
+    if (s_passout_why == PASSOUT_TIRED) {      // worn out: someone went through their pockets
+        lost = money_get() * PASSOUT_LOSS_PCT / 100;   // (MONEY_MAX * 10 fits)
+        if (lost > PASSOUT_LOSS_MAX) lost = PASSOUT_LOSS_MAX;
+        money_add(-(int32_t)lost);
+    } else {                                   // the heat or the cold: their things are left in a backpack where they fell
+        s_passout_packed = pack_drop_all();
+    }
+    int x, y;
+    s_passout_hospital = hospital_exists();
+    if (passout_wake_spot(&x, &y)) { sleep_through(true, lost); return; }   // where they wake is right here
+
+    static char path[MAP_PATH_MAX];
+    uint16_t inst;
+    passout_dest(path, sizeof(path), &inst);
+    uint32_t day = s_clock_day, min = s_clock_min;
+    if (s_clock_min >= CLOCK_START_MIN) s_clock_day++;   // the next morning (this one, after midnight)
+    s_clock_min = CLOCK_START_MIN;
+    s_clock_us  = 0;
+    nav_cancel();
+    s_load_inst_next = inst;
+    if (!load_map(path)) {                                // home's gone: wake where they fell
+        ESP_LOGW(TAG, "energy: can't load home (%s) — waking where they passed out", path);
+        s_clock_day = day; s_clock_min = min;
+        sleep_through(true, lost);
+        return;
+    }
+    if (passout_wake_spot(&x, &y)) { s_player_x = x; s_player_y = y; }
+    s_player_facing = DIR_DOWN;
+    s_tp_armed = false;                                   // (home on a teleporter: it doesn't fire until they step off)
+    energy_wake(true, lost);
+    player_draw_fresh();
+    draw_touch_menu_button();
+    hud_draw_overlay();
+    world_save();
+    s_clock_last_us = 0;                                  // the load doesn't count as game time
+    passout_note_open(lost);
+    ESP_LOGI(TAG, "sleep: passed out, woke at home (%s) on day %lu", current_map_name(), (unsigned long)s_clock_day);
+}
+
+#if DEV_LINK_ENABLED
+// DEV LINK "energy" / "energy N" / "passout".
+static void energy_dev_cmd(int nw, char **w)
+{
+    if (strcmp(w[0], "passout") == 0) {
+        s_energy = ENERGY_PASSOUT;
+        s_passout_pending = true;
+        dev_out("@@OK passing out");
+        return;
+    }
+    if (nw >= 2) {
+        int v = atoi(w[1]);
+        s_energy = v <= ENERGY_PASSOUT ? ENERGY_PASSOUT + 1 : v > ENERGY_MAX ? ENERGY_MAX : v;
+    }
+    dev_out("@@OK energy %d/%d home %s %u %d %d", s_energy, ENERGY_MAX, s_home_map[0] ? s_home_map : "-", s_home_inst, s_home_x, s_home_y);
+}
+#endif
 
 // ============================================================
 //  TITLE ART — shared by the LOADING SCREEN and the TITLE SCREEN below.
@@ -28476,6 +30698,7 @@ static bool game_start(int slot, bool is_new, bool sd_ok)
     }
     s_tp_armed     = false;               // arriving on a teleporter doesn't fire it
     s_held_seen_ok = false;               // no "now holding" message for what's in hand at the start
+    build_player_frames();                // in the gear this save wears (GEAR)
     bool map_ok = load_map(path);
     if (!map_ok && strcmp(path, first) != 0) {
         ESP_LOGW(TAG, "%s won't load — going to %s instead", path, first);
@@ -28526,6 +30749,16 @@ static bool game_start(int slot, bool is_new, bool sd_ok)
 //    tree [list|plant ID TX TY [STAGE]|grow [N]|fruit|moss|unshake]   this map's trees (TREES)
 //    ui close / dev            closes the open screen / the dev switches as they are
 //    goto MAP [TX TY [INST]]   loads MAP (INST = a building's inside), stands on tile (TX,TY)
+//    forage [list|clear]       a morning's forage comes up now / what's lying here / all of it gone (FORAGE)
+//    energy [N] / passout      shows (sets) the energy / passes out now (ENERGY)
+//    bat                       a bat flies over now (BATS)
+//    climate [NAME]            this map's climate / pretend it's NAME until the next map loads (CLIMATE)
+//    temp [PCT]                the player's temperature, -100 (out cold) .. 100 (out from the heat) (TEMPERATURE)
+//    gear [ID | off SLOT | open]   what's worn / put on ID from the bag / take slot 0-3 off / the gear tab (GEAR)
+//    skill [NAME XP]           every skill's level and xp / set one (farming, foraging, mining, fishing) (SKILLS)
+//    museum                    what's been donated, and where (MUSEUM)
+//    blacksmith                as if the held geode was taken to a blacksmith (GEODES)
+//    kitchen [ID]              opens the kitchen / cooks one ID (KITCHEN)
 //    load N | load new         on the title screen: loads save N (1-based) / starts a new game, no taps needed
 //    held N                    holds hotbar slot N
 //    swing / sparkle           the held tool swings at what's in front (TOOL SWING) / the new-item sparkle
@@ -28783,7 +31016,7 @@ static void dev_cmd_shot(void)
 static const char *dev_ui_name(void)
 {
     static const char *const k[] = { "none", "inventory", "menu", "keyboard", "shop", "shelf", "offer", "auction",
-                                     "ledger", "fishing", "sleep", "fishbook", "craft" };
+                                     "ledger", "fishing", "sleep", "fishbook", "craft", "board", "gear", "skills", "museum", "kitchen" };
     return (unsigned)s_ui_screen < sizeof(k) / sizeof(k[0]) ? k[s_ui_screen] : "?";
 }
 
@@ -28988,6 +31221,8 @@ static void dev_main_poll(void)
                     (s_player_x + PLAYER_W / 2) / TILE_SIZE, (s_player_y + PLAYER_H - 1) / TILE_SIZE, (int)s_player_facing,
                     (unsigned long)money_get(), s_inv_held, item_get(inv_held_item()) ? item_get(inv_held_item())->id : "?", dev_ui_name(),
                     (unsigned long)s_clock_day, (unsigned long)(s_clock_min / 60), (unsigned long)(s_clock_min % 60));
+            dev_out("@@ENERGY %d %d", s_energy, ENERGY_MAX);
+            dev_out("@@CLIMATE %s temp %d", s_climate == CLIMATE_INDOORS ? "indoors" : k_climate_word[s_climate], temp_pct());
             for (int i = 0; i < INV_SLOTS; i++)
                 if (s_inv[i].count) dev_out("@@INV %d %s %d %d", i, item_get(s_inv[i].item)->id, s_inv[i].count, s_inv[i].quality);
             dev_out("@@END");
@@ -29180,6 +31415,32 @@ static void dev_main_poll(void)
             char note[96];
             if (it == ITEM_NONE) dev_out("@@ERR hold something");
             else { market_photo_taken(it, w[1], note, sizeof(note)); dev_out("@@OK %s", note[0] ? note : "(nothing new)"); }
+        } else if (strcmp(w[0], "forage") == 0) {   // (FORAGE)
+            forage_dev_cmd(line + 6);
+        } else if (strcmp(w[0], "energy") == 0 || strcmp(w[0], "passout") == 0) {   // (ENERGY)
+            energy_dev_cmd(nw, w);
+        } else if (strcmp(w[0], "skill") == 0) {   // (SKILLS)
+            skills_dev_cmd(nw, w);
+        } else if (strcmp(w[0], "museum") == 0) {   // (MUSEUM)
+            museum_dev_cmd();
+        } else if (strcmp(w[0], "kitchen") == 0) {   // (KITCHEN)
+            kitchen_dev_cmd(nw, w);
+        } else if (strcmp(w[0], "blacksmith") == 0) {   // (GEODES)
+            blacksmith_tapped();
+            dev_out("@@OK");
+        } else if (strcmp(w[0], "gear") == 0) {   // (GEAR)
+            gear_dev_cmd(nw, w);
+        } else if (strcmp(w[0], "temp") == 0) {   // (TEMPERATURE)
+            if (nw >= 2) { int p = atoi(w[1]); s_temp = (p < -100 ? -100 : p > 100 ? 100 : p) * TEMP_MAX / 100; s_temp_at = -1; }
+            dev_out("@@OK temp %d%% (climate push %d a minute, of %d)", temp_pct(), temp_push(), TEMP_MAX);
+        } else if (strcmp(w[0], "climate") == 0) {   // (CLIMATE)
+            for (int k = 0; nw >= 2 && k < CLIMATE_COUNT; k++) if (strcasecmp(w[1], k_climate_word[k]) == 0) s_climate = (uint8_t)k;
+            if (nw >= 2 && strcasecmp(w[1], "indoors") == 0) s_climate = CLIMATE_INDOORS;
+            s_clock_img_key = -1;   // (the temperature bar shows it)
+            dev_out("@@OK climate %s", s_climate == CLIMATE_INDOORS ? "indoors" : k_climate_word[s_climate]);
+        } else if (strcmp(w[0], "bat") == 0) {   // (BATS)
+            bat_send((uint32_t)(esp_timer_get_time() / 1000));
+            dev_out("@@OK a bat%s", map_gets_rain() ? "" : " (indoors, but here it comes)");
         } else if (strcmp(w[0], "goto") == 0 && nw >= 2) {
             snprintf(s_dev_goto, sizeof(s_dev_goto), "%s", w[1]);
             s_dev_goto_tx   = nw >= 4 ? atoi(w[2]) : -1;
@@ -29287,6 +31548,7 @@ static void game_task(void *arg)
         for (;;) {
             update_input();
             tp_travel();              // a teleporter was stepped on: load its map here, at the boot load's stack depth
+            passout_travel();         // out of energy: home, the next morning (ENERGY) — the same
             season_tick();            // a new season: its map art loads here too (SEASONS)
 #if DEV_LINK_ENABLED
             dev_travel();             // ...or a goto sent over USB (DEV LINK)

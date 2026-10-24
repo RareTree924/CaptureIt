@@ -3,7 +3,7 @@
 // One tree = the tree below + its seed item "apple_tree_seed" ("Apple Sapling", what's planted).
 // Grown after 28 game days. Felled: 25-35 hardwood, 0-0 seeds (10 axe hits). Fruit: apple every 3 days.
 // Everything here is const: it stays in flash (no RAM). RGB565, 0x0000 = see-through.
-// TREES-EDITOR {"name":"Apple Tree","seedName":"Apple Sapling","fruit":true,"wood":"hardwood","chopTool":"axe","fruitItem":"apple","fruitSeasons":4,"fruitDays":3,"fruitMax":3,"sfxHit":"","sfxFall":"","seedPrice":0,"buyPrice":4000,"growDays":28,"hits":10,"bushHits":2,"stumpHits":5,"woodMin":25,"woodMax":35,"seedMax":0,"bushWood":5,"stumpWoodMin":3,"stumpWoodMax":5,"shakeSeedMax":0,"mossPct":0,"art":{"grown_0":[48,80],"grown_1":[48,80],"grown_2":[48,80],"grown_3":[48,78],"leaf_0":[16,16],"leaf_1":[16,16],"leaf_2":[16,16],"stage_0_0":[16,16],"stage_0_1":[32,26],"stage_0_2":[32,36],"stage_0_3":[48,51],"stump_0":[16,22]},"seedIcon":[16,16]}
+// TREES-EDITOR {"name":"Apple Tree","seedName":"Apple Sapling","fruit":true,"wood":"hardwood","chopTool":"axe","fruitItem":"apple","fruitSeasons":4,"fruitDays":3,"fruitMax":3,"sfxHit":"","sfxFall":"","seedPrice":0,"buyPrice":4000,"growDays":28,"hits":10,"bushHits":2,"stumpHits":5,"woodMin":25,"woodMax":35,"seedMax":0,"bushWood":5,"stumpWoodMin":3,"stumpWoodMax":5,"shakeSeedMax":0,"mossPct":0,"climates":5,"art":{"grown_0":[48,80],"grown_1":[48,80],"grown_2":[48,80],"grown_3":[48,78],"leaf_0":[16,16],"leaf_1":[16,16],"leaf_2":[16,16],"stage_0_0":[16,16],"stage_0_1":[32,26],"stage_0_2":[32,36],"stage_0_3":[48,51],"stump_0":[16,22]},"seedIcon":[16,16]}
 #include "items.h"
 #include "trees.h"
 
@@ -1839,6 +1839,7 @@ static const uint16_t k_apple_tree_seed_icon_pixels[256] = {
 static const item_attr_t k_apple_tree_seed_attrs[] = {
     { "buyable", 4000 },
     { "shop", 1 },
+    { "climate", 5 },
 };
 const item_asset_t k_item_apple_tree_seed = {
     .id = "apple_tree_seed",
@@ -1847,5 +1848,5 @@ const item_asset_t k_item_apple_tree_seed = {
     .passive = { .w=16, .h=16, .frame_count=1, .interval_ms=150, .loop_count=-1, .pixels=k_apple_tree_seed_icon_pixels },
     .use = { .frame_count = 0 },
     .attrs = k_apple_tree_seed_attrs,
-    .attr_count = 2,
+    .attr_count = 3,
 };

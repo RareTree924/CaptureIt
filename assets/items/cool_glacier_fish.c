@@ -44,6 +44,7 @@ static const item_attr_t k_cool_glacier_fish_attrs[] = {
     { "fish_level", 8 },
     { "fish_trait", 323 },
     { "mut", 400 },
+    { "climate", 64 },
 };
 
 const item_asset_t k_item_cool_glacier_fish = {
@@ -53,5 +54,5 @@ const item_asset_t k_item_cool_glacier_fish = {
     .passive = { .w=16, .h=16, .frame_count=1, .interval_ms=150, .loop_count=-1, .pixels=k_cool_glacier_fish_passive_pixels },
     .use = { .frame_count = 0 },
     .attrs = k_cool_glacier_fish_attrs,
-    .attr_count = 13,
+    .attr_count = 14,
 };

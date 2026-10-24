@@ -42,6 +42,7 @@ static const item_attr_t k_mahi_mahi_attrs[] = {
     { "fish_tier", 3 },
     { "mut", 150 },
     { "fish_seasons", 2 },
+    { "climate", 18 },
 };
 
 const item_asset_t k_item_mahi_mahi = {
@@ -51,5 +52,5 @@ const item_asset_t k_item_mahi_mahi = {
     .passive = { .w=16, .h=16, .frame_count=1, .interval_ms=150, .loop_count=-1, .pixels=k_mahi_mahi_passive_pixels },
     .use = { .frame_count = 0 },
     .attrs = k_mahi_mahi_attrs,
-    .attr_count = 13,
+    .attr_count = 14,
 };

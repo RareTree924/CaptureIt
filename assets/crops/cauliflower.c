@@ -3,7 +3,7 @@
 // One crop = the plant below + two items: "cauliflower" (the harvest) and "cauliflower_seeds" (what's planted).
 // 7 stages, ripe after 12 game days, harvested once.
 // Everything here is const: it stays in flash (no RAM). RGB565, 0x0000 = see-through.
-// CROPS-EDITOR {"name":"Cauliflower","stageCount":7,"growDays":12,"regrows":false,"regrowDays":3,"sellPrice":175,"seedPrice":40,"buyPrice":80,"quality":true,"solid":false,"iconW":16,"iconH":16,"seedIconW":16,"seedIconH":16,"seasons":1}
+// CROPS-EDITOR {"name":"Cauliflower","stageCount":7,"growDays":12,"regrows":false,"regrowDays":3,"sellPrice":175,"seedPrice":40,"buyPrice":80,"quality":true,"solid":false,"iconW":16,"iconH":16,"seedIconW":16,"seedIconH":16,"seasons":1,"climates":5}
 #include "items.h"
 #include "crops.h"
 
@@ -357,7 +357,7 @@ const item_asset_t k_item_cauliflower = {
     .attr_count = 2,
 };
 
-// The seed packet: hold it and tap a free tile to plant (Spring). Shops sell it for 80.
+// The seed packet: hold it and tap a free tile to plant (Spring; Normal / Cold). Shops sell it for 80.
 static const uint16_t k_cauliflower_seeds_icon_pixels[256] = {
     0x0000, 0x0000, 0x0000, 0x5247, 0x5247, 0x5247, 0x5247, 0x5247, 0x5247, 0x5247, 0x5247, 0x5247,
     0x5247, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x5247, 0xf736, 0xcdf2, 0xcdf2, 0xcdf2, 0xcdf2,
@@ -386,6 +386,7 @@ static const item_attr_t k_cauliflower_seeds_attrs[] = {
     { "sellable", 40 },
     { "buyable", 80 },
     { "season", 1 },
+    { "climate", 5 },
 };
 const item_asset_t k_item_cauliflower_seeds = {
     .id = "cauliflower_seeds",
@@ -394,5 +395,5 @@ const item_asset_t k_item_cauliflower_seeds = {
     .passive = { .w=16, .h=16, .frame_count=1, .interval_ms=150, .loop_count=-1, .pixels=k_cauliflower_seeds_icon_pixels },
     .use = { .frame_count = 0 },
     .attrs = k_cauliflower_seeds_attrs,
-    .attr_count = 3,
+    .attr_count = 4,
 };

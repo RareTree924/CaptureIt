@@ -45,7 +45,8 @@ KINDS = {
     'hair':        ('hair', 16, 32, 1, (3, 4)),        # down, right, up, [left] (none: right mirrored)
     'hats':        ('hats', 20, 20, 1, (4,)),          # down, right, left, up
     'accessories': ('accessories', 16, 16, 1, (1, 2)), # down, right (left: mirrored); none from behind
-}
+    'gear':        ('gear', 20, 36, 4, (4,)),          # worn gear (main.c GEAR; tools/make_gear.py): a whole frame a cell,
+}                                                      # walking frames x (down, right, left, up), drawn at the canvas' (0, 0)
 P_KEEP, P_TINT, P_SKIN, P_SLEEVE = range(4)
 # Who wears an item (assets/wardrobe/genders.json, set in Game Tools' Wardrobe tab):
 # every list goes male, neutral, female (Customize's pages); a shopper is male or
@@ -412,11 +413,21 @@ def _ref_colour(ref):
     return ref[:3]
 
 
-def compose(o, wd, held=False):
-    """The 16 frames [dir * 4 + frame] (player_dir_t order) as CANVAS_H rows of (r,g,b) / None: ward_compose()."""
+GEAR_SLOTS = ('hat', 'jacket', 'pants', 'boots')   # main.c GEAR_*: a gear item's "gear" 1..4; its art is gear/<item id>.png
+
+
+def compose(o, wd, held=False, gear=None):
+    """The 16 frames [dir * 4 + frame] (player_dir_t order) as CANVAS_H rows of (r,g,b) / None: ward_compose().
+    gear: worn gear's item ids (the player's — "<set>_<slot>"): each drawn over (and instead of) that slot's layer."""
     body = wd['bodies'][o.body]
+    worn = {}
+    for name in gear or ():
+        it = next((g for g in wd.get('gear', []) if g.name == name), None)
+        if it: worn[name.rsplit('_', 1)[-1]] = (it, _lut(it, {}))
     shirt = wd['shirts'][o.shirt] if wd['shirts'] else None
     shirt_c = o.shirt_c if o.shirt_c is not None else (_ref_colour(shirt.refs[P_TINT]) if shirt else None)
+    if 'jacket' in worn:   # the sleeves take the jacket's colour
+        shirt_c = _ref_colour(worn['jacket'][0].refs[P_TINT])
     layers = {   # item, its look-up table
         'body': (body, _lut(body, {P_SKIN: o.skin, P_SLEEVE: shirt_c})),
         'pants': (wd['pants'][o.pants], _lut(wd['pants'][o.pants], {P_TINT: o.pants_c})) if wd['pants'] else None,
@@ -443,10 +454,14 @@ def compose(o, wd, held=False):
                         if v and 0 <= X < CANVAS_W and 0 <= Y < CANVAS_H:
                             cv[Y][X] = lut[v]
             blit(layers['body'], f, r, BOX_X, BOX_Y)
-            if layers['pants']:
+            if layers['pants'] and 'pants' not in worn:
                 fit = 4 if body.fit2 and layers['pants'][0].h // 32 == 8 else 0
                 blit(layers['pants'], f, fit + r, BOX_X, BOX_Y)
-            blit(layers['shirt'], 0, r, BOX_X + SHIRT_X, BOX_Y + SHIRT_Y + dy)
+            blit(worn.get('pants'), f, r, 0, 0)
+            blit(worn.get('boots'), f, r, 0, 0)
+            if 'jacket' not in worn:
+                blit(layers['shirt'], 0, r, BOX_X + SHIRT_X, BOX_Y + SHIRT_Y + dy)
+            blit(worn.get('jacket'), f, r, 0, 0)
             if layers['acc'] and d != 'up':
                 acc = layers['acc'][0]
                 side = acc.h // acc.ch > 1
@@ -457,7 +472,9 @@ def compose(o, wd, held=False):
                 own_left = d == 'left' and hair.h // hair.ch > 3
                 blit(layers['hair'], 0, 3 if own_left else {'down': 0, 'right': 1, 'left': 1, 'up': 2}[d],
                      BOX_X, BOX_Y + dy, d == 'left' and not own_left)
-            blit(layers['hat'], 0, r, BOX_X + HAT_X, BOX_Y + HAT_Y + dy)
+            if 'hat' not in worn:
+                blit(layers['hat'], 0, r, BOX_X + HAT_X, BOX_Y + HAT_Y + dy)
+            blit(worn.get('hat'), f, r, 0, 0)
             blit(layers['body'], f, (8 if held else 4) + r, BOX_X, BOX_Y)   # the arms, over the shirt and the hat
             out.append(cv)
     return out

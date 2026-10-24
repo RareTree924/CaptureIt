@@ -39,6 +39,7 @@ static const item_attr_t k_tiger_barb_attrs[] = {
     { "fish_max", 3 },
     { "fish_tier", 2 },
     { "fish_seasons", 5 },
+    { "climate", 18 },
 };
 
 const item_asset_t k_item_tiger_barb = {
@@ -48,5 +49,5 @@ const item_asset_t k_item_tiger_barb = {
     .passive = { .w=16, .h=16, .frame_count=1, .interval_ms=150, .loop_count=-1, .pixels=k_tiger_barb_passive_pixels },
     .use = { .frame_count = 0 },
     .attrs = k_tiger_barb_attrs,
-    .attr_count = 10,
+    .attr_count = 11,
 };

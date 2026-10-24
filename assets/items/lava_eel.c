@@ -40,6 +40,7 @@ static const item_attr_t k_lava_eel_attrs[] = {
     { "fish_water", 8 },
     { "fish_trait", 1024 },
     { "mut", 200 },
+    { "climate", 32 },
 };
 
 const item_asset_t k_item_lava_eel = {
@@ -49,5 +50,5 @@ const item_asset_t k_item_lava_eel = {
     .passive = { .w=16, .h=16, .frame_count=1, .interval_ms=150, .loop_count=-1, .pixels=k_lava_eel_passive_pixels },
     .use = { .frame_count = 0 },
     .attrs = k_lava_eel_attrs,
-    .attr_count = 10,
+    .attr_count = 11,
 };

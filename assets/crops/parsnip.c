@@ -3,7 +3,7 @@
 // One crop = the plant below + two items: "parsnip" (the harvest) and "parsnip_seeds" (what's planted).
 // 6 stages, ripe after 4 game days, harvested once.
 // Everything here is const: it stays in flash (no RAM). RGB565, 0x0000 = see-through.
-// CROPS-EDITOR {"name":"Parsnip","stageCount":6,"growDays":4,"regrows":false,"regrowDays":3,"sellPrice":35,"seedPrice":10,"buyPrice":20,"quality":true,"iconW":16,"iconH":16,"seedIconW":16,"seedIconH":16,"seasons":1}
+// CROPS-EDITOR {"name":"Parsnip","stageCount":6,"growDays":4,"regrows":false,"regrowDays":3,"sellPrice":35,"seedPrice":10,"buyPrice":20,"quality":true,"iconW":16,"iconH":16,"seedIconW":16,"seedIconH":16,"seasons":1,"climates":5}
 #include "items.h"
 #include "crops.h"
 
@@ -313,7 +313,7 @@ const item_asset_t k_item_parsnip = {
     .attr_count = 2,
 };
 
-// The seed packet: hold it and tap a free tile to plant (Spring). Shops sell it for 20.
+// The seed packet: hold it and tap a free tile to plant (Spring; Normal / Cold). Shops sell it for 20.
 static const uint16_t k_parsnip_seeds_icon_pixels[256] = {
     0x0000, 0x0000, 0x0000, 0x0000, 0x5963, 0x5963, 0x5963, 0x5963, 0x5963, 0x5963, 0x5963, 0x5963,
     0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x5963, 0xf5ec, 0xf5ec, 0xf5ec, 0xf5ec,
@@ -342,6 +342,7 @@ static const item_attr_t k_parsnip_seeds_attrs[] = {
     { "sellable", 10 },
     { "buyable", 20 },
     { "season", 1 },
+    { "climate", 5 },
 };
 const item_asset_t k_item_parsnip_seeds = {
     .id = "parsnip_seeds",
@@ -350,5 +351,5 @@ const item_asset_t k_item_parsnip_seeds = {
     .passive = { .w=16, .h=16, .frame_count=1, .interval_ms=150, .loop_count=-1, .pixels=k_parsnip_seeds_icon_pixels },
     .use = { .frame_count = 0 },
     .attrs = k_parsnip_seeds_attrs,
-    .attr_count = 3,
+    .attr_count = 4,
 };

@@ -40,6 +40,7 @@ static const item_attr_t k_sockeye_salmon_attrs[] = {
     { "fish_tier", 3 },
     { "mut", 150 },
     { "fish_seasons", 4 },
+    { "climate", 5 },
 };
 
 const item_asset_t k_item_sockeye_salmon = {
@@ -49,5 +50,5 @@ const item_asset_t k_item_sockeye_salmon = {
     .passive = { .w=16, .h=16, .frame_count=1, .interval_ms=150, .loop_count=-1, .pixels=k_sockeye_salmon_passive_pixels },
     .use = { .frame_count = 0 },
     .attrs = k_sockeye_salmon_attrs,
-    .attr_count = 11,
+    .attr_count = 12,
 };

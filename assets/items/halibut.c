@@ -45,6 +45,7 @@ static const item_attr_t k_halibut_attrs[] = {
     { "fish_max", 34 },
     { "fish_tier", 2 },
     { "fish_trait", 128 },
+    { "climate", 5 },
 };
 
 const item_asset_t k_item_halibut = {
@@ -54,5 +55,5 @@ const item_asset_t k_item_halibut = {
     .passive = { .w=16, .h=16, .frame_count=1, .interval_ms=150, .loop_count=-1, .pixels=k_halibut_passive_pixels },
     .use = { .frame_count = 0 },
     .attrs = k_halibut_attrs,
-    .attr_count = 14,
+    .attr_count = 15,
 };

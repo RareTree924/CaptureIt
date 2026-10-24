@@ -3,7 +3,7 @@
 // One crop = the plant below + two items: "tomato" (the harvest) and "tomato_seeds" (what's planted).
 // 8 stages, ripe after 11 game days, regrows every 4.
 // Everything here is const: it stays in flash (no RAM). RGB565, 0x0000 = see-through.
-// CROPS-EDITOR {"name":"Tomato","stageCount":8,"growDays":11,"regrows":true,"regrowDays":4,"sellPrice":60,"seedPrice":25,"buyPrice":50,"quality":true,"solid":false,"extraChance":10,"extraMin":2,"extraMax":5,"iconW":16,"iconH":16,"seedIconW":16,"seedIconH":16,"seasons":2}
+// CROPS-EDITOR {"name":"Tomato","stageCount":8,"growDays":11,"regrows":true,"regrowDays":4,"sellPrice":60,"seedPrice":25,"buyPrice":50,"quality":true,"solid":false,"extraChance":10,"extraMin":2,"extraMax":5,"iconW":16,"iconH":16,"seedIconW":16,"seedIconH":16,"seasons":2,"climates":19}
 #include "items.h"
 #include "crops.h"
 
@@ -403,7 +403,7 @@ const item_asset_t k_item_tomato = {
     .attr_count = 2,
 };
 
-// The seed packet: hold it and tap a free tile to plant (Summer). Shops sell it for 50.
+// The seed packet: hold it and tap a free tile to plant (Summer; Normal / Hot / Lush). Shops sell it for 50.
 static const uint16_t k_tomato_seeds_icon_pixels[256] = {
     0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
     0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x2243, 0x2243, 0x2243, 0x2243,
@@ -432,6 +432,7 @@ static const item_attr_t k_tomato_seeds_attrs[] = {
     { "sellable", 25 },
     { "buyable", 50 },
     { "season", 2 },
+    { "climate", 19 },
 };
 const item_asset_t k_item_tomato_seeds = {
     .id = "tomato_seeds",
@@ -440,5 +441,5 @@ const item_asset_t k_item_tomato_seeds = {
     .passive = { .w=16, .h=16, .frame_count=1, .interval_ms=150, .loop_count=-1, .pixels=k_tomato_seeds_icon_pixels },
     .use = { .frame_count = 0 },
     .attrs = k_tomato_seeds_attrs,
-    .attr_count = 3,
+    .attr_count = 4,
 };

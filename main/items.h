@@ -354,6 +354,29 @@ bool                item_droppable(item_id_t item);
 // (not inside buildings). The Crops Editor's "Grows in" writes it.
 #define ITEM_ATTR_SEASON       "season"
 #define SEASON_ALL             0x0F
+
+// Forage (FORAGE in main.c; the Item Editor's "Forage" card): "forage" W makes the item a
+// forageable — every morning a few come up on the loaded map's Forage tiles (the Map Editor's
+// "Forage" on a 16x16 ground asset), W = its weight against the other forageables that could.
+// "forage_seasons" = the seasons it comes up in (bits like fish_seasons; none = all year),
+// "forage_map:<map name>" 1 = only on those maps (one attribute per map; none = any map).
+// Picked up by walking onto it, like a dropped stack.
+#define ITEM_ATTR_FORAGE         "forage"
+#define ITEM_ATTR_FORAGE_SEASONS "forage_seasons"
+#define ITEM_ATTR_FORAGE_MAP     "forage_map:"
+
+// Climate (CLIMATE in main.c): every map is Normal, Hot, Cold, Dry, Lush, Volcanic or Glacial (the
+// Map Editor's "Climate"). "climate" = the bit set of climates the item lives in — 1 normal, 2 hot,
+// 4 cold, 8 dry, 16 lush, 32 volcanic, 64 glacial; none = the first five (Volcanic and Glacial only
+// have what names them). On a seed packet or a tree's seed: planted only there; on a
+// forageable: comes up only there; on a fish, junk or a crab pot catch: bites / is caught only
+// there. A building's inside without a climate of its own is indoors: anything goes.
+#define ITEM_ATTR_CLIMATE        "climate"
+
+// Energy (ENERGY in main.c): "energy N" = what one use costs the player — a tool's swing, a
+// rod's cast (the Item Editor's "Energy a use"). None = 0 for tools, ENERGY_ROD_DEFAULT (5)
+// for fishing rods.
+#define ITEM_ATTR_ENERGY         "energy"
 // Minigame tricks ("fish_trait" bits).
 #define FISH_TRAIT_FREEZE   0x001   // plays dead: caught in the bar it freezes a moment, then bolts
 #define FISH_TRAIT_STICKY   0x002   // sticky: while the bar is on it, the bar gets stuck (barely moves)

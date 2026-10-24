@@ -3,7 +3,7 @@
 // One crop = the plant below + two items: "green_bean" (the harvest) and "green_bean_seeds" (what's planted).
 // 8 stages, ripe after 10 game days, regrows every 3.
 // Everything here is const: it stays in flash (no RAM). RGB565, 0x0000 = see-through.
-// CROPS-EDITOR {"name":"Green Bean","stageCount":8,"growDays":10,"regrows":true,"regrowDays":3,"sellPrice":40,"seedPrice":15,"buyPrice":30,"quality":true,"solid":true,"iconW":16,"iconH":16,"seedIconW":16,"seedIconH":16,"seasons":1}
+// CROPS-EDITOR {"name":"Green Bean","stageCount":8,"growDays":10,"regrows":true,"regrowDays":3,"sellPrice":40,"seedPrice":15,"buyPrice":30,"quality":true,"solid":true,"iconW":16,"iconH":16,"seedIconW":16,"seedIconH":16,"seasons":1,"climates":17}
 #include "items.h"
 #include "crops.h"
 
@@ -400,7 +400,7 @@ const item_asset_t k_item_green_bean = {
     .attr_count = 2,
 };
 
-// The seed packet: hold it and tap a free tile to plant (Spring). Shops sell it for 30.
+// The seed packet: hold it and tap a free tile to plant (Spring; Normal / Lush). Shops sell it for 30.
 static const uint16_t k_green_bean_seeds_icon_pixels[256] = {
     0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
     0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x5180, 0x5180, 0x5180, 0x0000, 0x0000, 0x0000,
@@ -429,6 +429,7 @@ static const item_attr_t k_green_bean_seeds_attrs[] = {
     { "sellable", 15 },
     { "buyable", 30 },
     { "season", 1 },
+    { "climate", 17 },
 };
 const item_asset_t k_item_green_bean_seeds = {
     .id = "green_bean_seeds",
@@ -437,5 +438,5 @@ const item_asset_t k_item_green_bean_seeds = {
     .passive = { .w=16, .h=16, .frame_count=1, .interval_ms=150, .loop_count=-1, .pixels=k_green_bean_seeds_icon_pixels },
     .use = { .frame_count = 0 },
     .attrs = k_green_bean_seeds_attrs,
-    .attr_count = 3,
+    .attr_count = 4,
 };

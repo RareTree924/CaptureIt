@@ -979,7 +979,7 @@
       "id": "art_tool_swings",
       "kind": "art",
       "title": "Tool swing art: Claude's picks from the Stardew tools sheet",
-      "what": "The axe and pickaxe are new items, and the hoe and watering can now use the Stardew icons too. Each one got Swing art cut from the Stardew tools sheet in your Downloads: 3 frames of 16x32 (facing down, facing up, sideways; facing left is the sideways frame mirrored). Claude guessed which sheet frames to use. They sit right on the player, and facing up they go behind them. To use your own, open the item in the Item Editor, go to the Swing tab and load your 16x32 PNG. 1 frame is used for every direction; 4 frames are down, up, left, right. Then Export. The Tool use box shows a preview of all 4 directions.",
+      "what": "The axe and pickaxe are new items, and the hoe and watering can now use the Stardew icons too. Each one got Swing art cut from the Stardew tools sheet in your Downloads: 3 frames of 16x32 (facing down, facing up, sideways; facing left is the sideways frame mirrored). Claude guessed which sheet frames to use. They sit right on the player, and facing up they go behind them. To use your own, open the item in the Item Editor, go to the Swing tab and load your 16x32 PNG. 1 frame is used for every direction; 4 frames are down, up, left, right. Then Export. The Tool use box shows a preview of all 4 directions. (2026-10-23: the Copper, Steel, Gold and Iridium versions got the same kind of frames from the sheet.)",
       "added": "2026-10-23",
       "files": [
         {
@@ -996,6 +996,70 @@
         },
         {
           "path": "items/watering_can.c",
+          "marker": "Swap in your own swing frames"
+        },
+        {
+          "path": "items/copper_hoe.c",
+          "marker": "Swap in your own swing frames"
+        },
+        {
+          "path": "items/steel_hoe.c",
+          "marker": "Swap in your own swing frames"
+        },
+        {
+          "path": "items/gold_hoe.c",
+          "marker": "Swap in your own swing frames"
+        },
+        {
+          "path": "items/iridium_hoe.c",
+          "marker": "Swap in your own swing frames"
+        },
+        {
+          "path": "items/copper_pickaxe.c",
+          "marker": "Swap in your own swing frames"
+        },
+        {
+          "path": "items/steel_pickaxe.c",
+          "marker": "Swap in your own swing frames"
+        },
+        {
+          "path": "items/gold_pickaxe.c",
+          "marker": "Swap in your own swing frames"
+        },
+        {
+          "path": "items/iridium_pickaxe.c",
+          "marker": "Swap in your own swing frames"
+        },
+        {
+          "path": "items/copper_axe.c",
+          "marker": "Swap in your own swing frames"
+        },
+        {
+          "path": "items/steel_axe.c",
+          "marker": "Swap in your own swing frames"
+        },
+        {
+          "path": "items/gold_axe.c",
+          "marker": "Swap in your own swing frames"
+        },
+        {
+          "path": "items/iridium_axe.c",
+          "marker": "Swap in your own swing frames"
+        },
+        {
+          "path": "items/copper_watering_can.c",
+          "marker": "Swap in your own swing frames"
+        },
+        {
+          "path": "items/steel_watering_can.c",
+          "marker": "Swap in your own swing frames"
+        },
+        {
+          "path": "items/gold_watering_can.c",
+          "marker": "Swap in your own swing frames"
+        },
+        {
+          "path": "items/iridium_watering_can.c",
           "marker": "Swap in your own swing frames"
         }
       ],
@@ -1183,6 +1247,429 @@
           "marker": "Placeholder art"
         }
       ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "sound_bat",
+      "kind": "sound",
+      "title": "The bat's squeak",
+      "what": "At night a bat now flies across the screen now and then (outdoors, 8 pm - 5 am) and plays the sound effect \"bat\". Put a bat.wav (16-bit mono 44.1 kHz) in the SD card's sounds/sound effects folder; until then it flies by silently.",
+      "added": "2026-10-23",
+      "files": [
+        {
+          "path": "sd:sounds/sound effects/bat.wav"
+        }
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "test_forage",
+      "kind": "test",
+      "title": "Try foraging on the board",
+      "what": "1) In the Map Editor tick \"Forage\" (key O) on the ground assets where forage should come up, Export the map to the card. 2) On the board, after 6:00 a few forageables lie on those tiles (dev link: forage, forage list); walk onto one to pick it up. 3) Sleep: more come up the next morning, up to 8 on a map; out-of-season ones go. Built and compiled, not tried on the device yet.",
+      "added": "2026-10-23",
+      "files": [
+        {
+          "path": "../gameTools.html"
+        }
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "test_energy",
+      "kind": "test",
+      "title": "Try the energy bar and passing out",
+      "what": "The energy bar is under the clock (270 to start). Each axe / pickaxe swing costs 2, each rod cast 5. At 0 you walk slowly; at -10 you pass out and wake at home (where you last slept) the next morning with 10% of your money gone (max $10,000) and a note. Dev link: energy 5 then swing a few times, or passout. Built and compiled, not tried on the device yet.",
+      "added": "2026-10-23",
+      "files": [],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "decision_energy",
+      "kind": "decision",
+      "title": "Energy numbers I picked",
+      "what": "Picked Stardew-like: 270 energy; the hoe, watering can and scythe cost nothing (only the axe, pickaxe and rods, as you asked; Item Editor's Tool use box has \"Energy a use\" for any tool); exhausted = 40% walking speed; sleeping refills it all, but going to bed exhausted (or passing out) only refills half. There's no way to eat food for energy yet. Reply to change any of these.",
+      "added": "2026-10-23",
+      "files": [],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "data_forage_names",
+      "kind": "data",
+      "title": "Check the forage names, seasons and prices",
+      "what": "29 forageables were cut from Stardew's forage sheet (tools/slice_forage.py) with Stardew's names and prices. Two were guesses: \"Cave Carrot\" (the orange one with a curl) and \"Frost Berry\" (the blue berries). Open any in the Item Editor to rename it or change its Forage card (weight, seasons). Left out: the tree seeds, coconut and truffle (already items), sap, fiber, wood, stone, mixed seeds and the orange ball.",
+      "added": "2026-10-23",
+      "files": [
+        {
+          "path": "items/cave_carrot.c"
+        },
+        {
+          "path": "items/frost_berry.c"
+        },
+        {
+          "path": "../tools/slice_forage.py"
+        }
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "data_climates",
+      "kind": "data",
+      "title": "Check which climates things live in",
+      "what": "Every map now has a climate (Map Editor: the \"Climate:\" picker next to Export; Normal until you pick one, then export the map again). I gave the existing crops, trees, forage and some fish climates: e.g. melon/tomato Normal+Hot+Lush, kale/parsnip Normal+Cold, palm Hot+Dry, banana/mango Hot+Lush, cactus fruit Hot+Dry, snow yam / crystal fruit / frost berry Cold only, magma cap Hot only, tropical fish (clownfish, tangs, angelfish, lionfish...) Hot+Lush, glacierfish / ice pip Cold, salmon/cod/herring Normal+Cold, sandfish / scorpion carp Hot+Dry, lava eel Hot. All other fish: any climate. Change any of them in the Crops Editor, Trees tab, Item Editor (Forage card) or Fishing tab.",
+      "added": "2026-10-23",
+      "files": [
+        {
+          "path": "crops/melon.c"
+        },
+        {
+          "path": "trees/palm_tree.c"
+        },
+        {
+          "path": "items/clownfish.c"
+        }
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "decision_climate_effects",
+      "kind": "decision",
+      "title": "What climates do besides deciding what lives there",
+      "what": "Picked: Dry = it never rains there (water crops yourself). Lush = 2 more forageables each morning and wild grass grows back twice as fast. Hot and Cold only decide what grows / bites there. Ideas if you want more: Hot dries watered farmland by evening, Cold slows crops, Hot/Cold drain energy faster. Building insides with no climate set count as indoors: anything grows there.",
+      "added": "2026-10-23",
+      "files": [],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "test_climate",
+      "kind": "test",
+      "title": "Try climates on the board",
+      "what": "Set a map to Hot in the Map Editor and export it. On the board: kale seeds say they won't grow in a hot climate, melon does; hot forage (magma cap, cactus fruit) comes up; tropical fish bite. Dev link: climate (shows it), climate cold (pretend, until the next map loads), forage, fish here. Built and compiled, not tried on the device yet.",
+      "added": "2026-10-23",
+      "files": [
+        {
+          "path": "../gameTools.html"
+        }
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "art_backpack",
+      "kind": "art",
+      "title": "The backpack needs its art",
+      "what": "When the player passes out from the heat or cold, their things are left on the ground as a backpack. Its 16x16 icon is a simple drawing I made. Open backpack.c in the Item Editor, load your own art and Export.",
+      "added": "2026-10-23",
+      "files": [
+        {
+          "path": "items/backpack.c",
+          "marker": "Placeholder art"
+        }
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "decision_temperature",
+      "kind": "decision",
+      "title": "Temperature numbers I picked",
+      "what": "Your numbers: 5 game hours in Hot/Cold, 15 game minutes in Volcanic/Glacial. Mine: away from the heat/cold you cool down / warm up again in 1 game hour from the edge (faster if you go straight to the opposite extreme); sweat and shivering start at 40% and get stronger at 75%; warnings at 50% and 80%; a night's sleep resets it. Passing out from heat/cold doesn't cost money (the energy pass-out still does). Kept with you: tools (anything that swings, rods, hoe, watering can, scythe, shears, milk pail) and photo items (they're one of a kind). It never rains on Volcanic or Glacial maps. Reply to change any of these.",
+      "added": "2026-10-23",
+      "files": [],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "data_extreme_fish",
+      "kind": "data",
+      "title": "Fish that only live in Volcanic / Glacial",
+      "what": "Volcanic only: Lava Eel, Crimsonfish, Son of Crimsonfish (angry_crimson_fish). Glacial only: Glacierfish, Glacierfish Jr. (cool_glacier_fish), Ice Pip. Their other conditions (water, season) still apply — e.g. Crimsonfish still wants the ocean in summer, so a volcanic map needs ocean water for it. Swap them in the Fishing tab (Climate row) if you'd rather other fish.",
+      "added": "2026-10-23",
+      "files": [
+        {
+          "path": "items/lava_eel.c"
+        },
+        {
+          "path": "items/crimsonfish.c"
+        },
+        {
+          "path": "items/glacierfish.c"
+        },
+        {
+          "path": "items/ice_pip.c"
+        }
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "test_temperature",
+      "kind": "test",
+      "title": "Try heat, cold and the backpack on the board",
+      "what": "Make a map Volcanic (Map Editor › Climate) and export it. On the board the temperature bar shows under the energy and fills red; at 40% the player sweats, at 100% (15 game minutes) they pass out, wake at home, and their non-tool items are in a backpack where they fell — walk onto it to get them back. Same with Glacial (blue, shivering). Dev link: temp 90, climate glacial, clock 10. Built and compiled, not tried on the device yet.",
+      "added": "2026-10-23",
+      "files": [],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "map_hospital",
+      "kind": "data",
+      "title": "Make the hospital map",
+      "what": "When the player passes out (tired, too hot or too cold) they now wake in a map called \"hospital\", beside a random bed. Make it in the Map Editor and export it as hospital (maps/hospital/hospital.map on the card). Give each bed the \"bed\" action (the asset's Actions…) — the player wakes on a free tile next to one, below it first. Until the map is on the card they wake at home, as before.",
+      "added": "2026-10-23",
+      "files": [
+        {
+          "path": "sd:maps/hospital/hospital.map"
+        }
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "art_gear",
+      "kind": "art",
+      "title": "Climate gear art (placeholders)",
+      "what": "tools/make_gear.py drew the Thermal and Arctic sets: each piece's 16x16 bag icon (in its .c — open it in the Item Editor to load your own) and how it looks worn, assets/wardrobe/gear/<id>.png: 80x144, 4 walking frames across x 4 directions down (down, right, left, up), each cell a whole 20x36 character frame, drawn over the player. Draw over those PNGs (keep the layout) to make them yours.",
+      "added": "2026-10-23",
+      "files": [
+        {
+          "path": "items/thermal_hat.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/thermal_jacket.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/thermal_pants.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/thermal_boots.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/arctic_hat.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/arctic_jacket.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/arctic_pants.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/arctic_boots.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "wardrobe/gear/thermal_hat.png"
+        },
+        {
+          "path": "wardrobe/gear/thermal_jacket.png"
+        },
+        {
+          "path": "wardrobe/gear/thermal_pants.png"
+        },
+        {
+          "path": "wardrobe/gear/thermal_boots.png"
+        },
+        {
+          "path": "wardrobe/gear/arctic_hat.png"
+        },
+        {
+          "path": "wardrobe/gear/arctic_jacket.png"
+        },
+        {
+          "path": "wardrobe/gear/arctic_pants.png"
+        },
+        {
+          "path": "wardrobe/gear/arctic_boots.png"
+        }
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "decision_gear",
+      "kind": "decision",
+      "title": "Gear: names and numbers I picked",
+      "what": "You wrote \"thermal gear and atlantic gear\": I made Thermal the heat set and read \"atlantic\" as Arctic, the cold set — say if you meant something else. Prices as you said (hat 20,000, jacket 40,000, pants 35,000, boots 25,000); each piece's share of the protection follows its price: hat 17%, jacket 33%, pants 29%, boots 21%. A part set protects that much: in Hot/Cold it slows heating up by that share (all four = stay forever), in Volcanic/Glacial the time goes from 15 min toward 7 h. They sell back for half, from the General store. You wear them from the inventory's new third tab (the jacket icon).",
+      "added": "2026-10-23",
+      "files": [],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "test_gear",
+      "kind": "test",
+      "title": "Try the gear on the board",
+      "what": "Dev link: give thermal_jacket (and the others), then open the inventory's gear tab (or gear open) and tap them to put them on — the player should show them walking every way (tap the player on that screen to turn them round). On a Volcanic map the bar should now fill over hours, not minutes. Also: pass out with a hospital map on the card. Built and compiled, not tried on the device yet.",
+      "added": "2026-10-23",
+      "files": [],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "map_museum",
+      "kind": "data",
+      "title": "Make the museum map (and a blacksmith)",
+      "what": "Museum: in the Map Editor give each shelf / pedestal asset the new \"Museum shelf\" action (Actions…) and export the map. On the board, tapping an empty one lets you donate a mineral onto it (one of each); it's drawn on the shelf from then on, its icon centred across the object with its bottom 4 px below the object's middle row. Blacksmith: give an anvil (or a person) the \"Blacksmith\" action, on any map: holding a geode, tap it to crack the geode open ($25).",
+      "added": "2026-10-23",
+      "files": [
+        {
+          "path": "../main/actions.c"
+        }
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "map_mining_rocks",
+      "kind": "data",
+      "title": "Set the mining rocks' drops",
+      "what": "assets/map/mining/ has the rocks and gem nodes from the mines sheet, already set up in the Map Editor as breakables: the pickaxe, 2 hits (gem nodes 4), solid where drawn, a little shake on each hit, and when they break the dust from the sheet shows for about half a second (3 frames of 200 ms, thinning out) and is gone. Only the drops are left for you: open each one's Breakable… and add them (stone; a gem node its gem — node_ruby: ruby…; now and then a geode). Hit / break sounds are empty too. Breaking anything that needs the pickaxe gives mining xp.",
+      "added": "2026-10-23",
+      "files": [
+        {
+          "path": "map/mining/rock_grey.png"
+        },
+        {
+          "path": "map/mining/node_ruby.png"
+        }
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "sound_skills_museum",
+      "kind": "sound",
+      "title": "Sounds: level up, geode, donate",
+      "what": "New sound effects (16-bit mono 44.1 kHz WAVs in the card's sounds/sound effects): levelup.wav (a skill went up a level), geode.wav (the blacksmith cracks a geode), donate.wav (something went on a museum shelf). Silent until they're there.",
+      "added": "2026-10-23",
+      "files": [
+        {
+          "path": "sd:sounds/sound effects/levelup.wav"
+        },
+        {
+          "path": "sd:sounds/sound effects/geode.wav"
+        },
+        {
+          "path": "sd:sounds/sound effects/donate.wav"
+        }
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "data_minerals",
+      "kind": "data",
+      "title": "Check the mineral names, prices and geodes",
+      "what": "55 minerals and gems cut from the mines sheet (tools/slice_mines.py), named after Stardew's where the art matched one; made-up names: Void Stone, Fluorite, Void Gem. Prices are Stardew's. Which geode each comes out of (and how often) is its \"geode:<geode id>\" attributes — Geode: earthy ones (limestone, mudstone, granite...), Frozen: blue/white ones, Magma: red/black ones, Omni: everything (gems rarely). Rename or re-tune any in the Item Editor (they're plain attribute rows).",
+      "added": "2026-10-23",
+      "files": [
+        {
+          "path": "items/void_stone.c"
+        },
+        {
+          "path": "items/fluorite.c"
+        },
+        {
+          "path": "items/void_gem.c"
+        },
+        {
+          "path": "../tools/slice_mines.py"
+        }
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "decision_skills",
+      "kind": "decision",
+      "title": "Skills: xp and perks I picked",
+      "what": "Levels 0-10 on fishing's xp steps (100 ... 15000). XP: a harvest = Stardew's formula (a parsnip ~8, a melon ~27), a fruit off a fruit tree 3, felling a tree 12 (fruit tree: farming, wild: foraging), picking up forage 7, an axe breakable 3, a pickaxe breakable (rock) 4; fishing as before. Perks: farming / foraging re-roll quality (once at level 4, twice at 8), foraging +1 wood a tree per 3 levels, mining +4% a level for an extra drop from rocks. Geode cracking costs $25 (Stardew's). The skills are the inventory's 4th tab (the star). Reply to change any of these.",
+      "added": "2026-10-23",
+      "files": [],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "test_museum_skills",
+      "kind": "test",
+      "title": "Try the museum, geodes and skills on the board",
+      "what": "Dev link: give geode 3, hold it, blacksmith (or tap the blacksmith object) — a mineral comes out. Donate it on a museum shelf. Harvest / forage / break rocks and watch the skills tab (skill shows the numbers). Built and compiled, not tried on the device yet.",
+      "added": "2026-10-23",
+      "files": [],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "food_kitchen",
+      "kind": "data",
+      "title": "Foods: a kitchen and their recipes",
+      "what": "73 foods are in the game (tools/slice_food.py) and a map object with the new \"Kitchen\" action cooks any of them, free for now. Downloads/stardew_food_recipes.txt has Stardew's recipe for each (ingredients already in the game are marked). When you've made the ingredients, give a food \"cook:<ingredient id>\" N attribute rows in the Item Editor and the kitchen will take them from the bag. My guesses for names: Kebab and Meatloaf aren't Stardew dishes; Jelly, Pickles, Green Tea, Pina Colada and Magic Rock Candy aren't cooked in Stardew. A cook.wav sound plays when you cook.",
+      "added": "2026-10-23",
+      "files": [
+        {
+          "path": "items/pizza.c"
+        },
+        {
+          "path": "../tools/slice_food.py"
+        }
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "decision_tool_tiers",
+      "kind": "decision",
+      "title": "Upgraded tools, scythes and rods: Claude's numbers",
+      "what": "Added from the Stardew sheets in Downloads: Copper, Steel, Gold and Iridium versions of the Hoe, Pickaxe, Axe and Watering Can, plus a Golden Scythe, Iridium Scythe, Training Rod and Fiberglass Rod. For now they're bought in the shops (Seed shop for hoes and cans, General store for axes and pickaxes, Ranch for scythes, Fish shop for rods). Prices are Stardew's upgrade costs: Copper $2000, Steel $5000, Gold $10000, Iridium $25000. Golden Scythe $10000, Iridium Scythe $25000, Training Rod $25, Fiberglass Rod $1800. Power (hits a swing on a tree or rock): Copper 2, Steel 3, Gold 4, Iridium 5; golden scythe 2, iridium scythe 3. Water: 55, 70, 85, 100. Each better tool counts as the ones below it, so a map thing that needs the axe takes a gold axe too. The Training Rod has a bigger catch bar (96 px, normal 64) and takes no bait. If you want Stardew's way (take the tool to a blacksmith with bars and wait 2 days), say so and Claude can add it.",
+      "added": "2026-10-23",
+      "files": [
+        "items/copper_hoe.c",
+        "items/steel_hoe.c",
+        "items/gold_hoe.c",
+        "items/iridium_hoe.c",
+        "items/copper_pickaxe.c",
+        "items/steel_pickaxe.c",
+        "items/gold_pickaxe.c",
+        "items/iridium_pickaxe.c",
+        "items/copper_axe.c",
+        "items/steel_axe.c",
+        "items/gold_axe.c",
+        "items/iridium_axe.c",
+        "items/copper_watering_can.c",
+        "items/steel_watering_can.c",
+        "items/gold_watering_can.c",
+        "items/iridium_watering_can.c",
+        "items/golden_scythe.c",
+        "items/iridium_scythe.c",
+        "items/training_rod.c",
+        "items/fiberglass_rod.c"
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "test_tool_tiers",
+      "kind": "test",
+      "title": "Try the upgraded tools on the board",
+      "what": "Built but not flashed yet: the board was unplugged when the build finished. Flash it (python tools/devlink.py flash --build), then try: give gold_axe (dev link) and chop a tree. It should take fewer swings than the basic axe (power 4). Check that the new icons look right in the bag: Copper/Steel/Gold/Iridium tools, the scythes, Shears, Milk Pail, and the rods (Fishing Rod is now the Bamboo Pole picture).",
+      "added": "2026-10-23",
+      "files": [],
       "done": false,
       "reply": ""
     }

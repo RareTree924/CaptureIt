@@ -3,7 +3,7 @@
 // One crop = the plant below + two items: "wheat" (the harvest) and "wheat_seeds" (what's planted).
 // 6 stages, ripe after 4 game days, harvested once.
 // Everything here is const: it stays in flash (no RAM). RGB565, 0x0000 = see-through.
-// CROPS-EDITOR {"name":"Wheat","stageCount":6,"growDays":4,"regrows":false,"regrowDays":3,"sellPrice":25,"seedPrice":5,"buyPrice":10,"quality":true,"solid":false,"extraChance":0,"extraMin":2,"extraMax":3,"iconW":16,"iconH":16,"seedIconW":16,"seedIconH":16,"seasons":6}
+// CROPS-EDITOR {"name":"Wheat","stageCount":6,"growDays":4,"regrows":false,"regrowDays":3,"sellPrice":25,"seedPrice":5,"buyPrice":10,"quality":true,"solid":false,"extraChance":0,"extraMin":2,"extraMax":3,"iconW":16,"iconH":16,"seedIconW":16,"seedIconH":16,"seasons":6,"climates":11}
 #include "items.h"
 #include "crops.h"
 
@@ -317,7 +317,7 @@ const item_asset_t k_item_wheat = {
     .attr_count = 2,
 };
 
-// The seed packet: hold it and tap a free tile to plant (Summer, Fall). Shops sell it for 10.
+// The seed packet: hold it and tap a free tile to plant (Summer, Fall; Normal / Hot / Dry). Shops sell it for 10.
 static const uint16_t k_wheat_seeds_icon_pixels[256] = {
     0x0000, 0x0000, 0x0000, 0x0000, 0x51c1, 0x51c1, 0x51c1, 0x51c1, 0x51c1, 0x51c1, 0x51c1, 0x51c1,
     0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x51c1, 0xff69, 0xf687, 0xf687, 0xf687,
@@ -346,6 +346,7 @@ static const item_attr_t k_wheat_seeds_attrs[] = {
     { "sellable", 5 },
     { "buyable", 10 },
     { "season", 6 },
+    { "climate", 11 },
 };
 const item_asset_t k_item_wheat_seeds = {
     .id = "wheat_seeds",
@@ -354,5 +355,5 @@ const item_asset_t k_item_wheat_seeds = {
     .passive = { .w=16, .h=16, .frame_count=1, .interval_ms=150, .loop_count=-1, .pixels=k_wheat_seeds_icon_pixels },
     .use = { .frame_count = 0 },
     .attrs = k_wheat_seeds_attrs,
-    .attr_count = 3,
+    .attr_count = 4,
 };

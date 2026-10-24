@@ -45,6 +45,7 @@ static const item_attr_t k_angry_crimson_fish_attrs[] = {
     { "fish_depth", 3 },
     { "fish_trait", 1036 },
     { "mut", 400 },
+    { "climate", 32 },
 };
 
 const item_asset_t k_item_angry_crimson_fish = {
@@ -54,5 +55,5 @@ const item_asset_t k_item_angry_crimson_fish = {
     .passive = { .w=16, .h=16, .frame_count=1, .interval_ms=150, .loop_count=-1, .pixels=k_angry_crimson_fish_passive_pixels },
     .use = { .frame_count = 0 },
     .attrs = k_angry_crimson_fish_attrs,
-    .attr_count = 14,
+    .attr_count = 15,
 };

@@ -15,8 +15,10 @@ In game: hold the hoe and tap a tile to turn it into farmland (only ground
 whose 16x16 asset is ticked **Tillable** in the Map Editor, with nothing on
 top of it — re-export the map after ticking it). Then hold a seed packet and
 tap the farmland to plant it; tap a ripe crop to harvest it. The farmland art
-is `assets/farmland_dry.png` and `farmland_watered.png` (16x16 — replace
-them to change the look). Growth counts game days (the clock in the corner). Seeds come from the seed
+is `assets/farmland_dry.png`, `farmland_watered.png` and the winter
+`farmland_winter_dry.png` / `farmland_winter_watered.png`: each Stardew's 4x4
+hoed-dirt sheet (64x64, 16 cells of 16x16), one cell per way a tile joins its
+neighbours (main.c `k_soil_cell`) — replace them to change the look. Growth counts game days (the clock in the corner). Seeds come from the seed
 shop — every crop here whose seed packet has a price ("Seed packet costs") is
 for sale in it automatically; open it by tapping any map object that has the
 "Seed shop" action (Map Editor → the asset's Actions…) — or from anywhere

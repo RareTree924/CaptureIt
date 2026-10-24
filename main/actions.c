@@ -93,6 +93,29 @@ static void action_market_board(const action_ctx_t *ctx)
     market_board_open();
 }
 
+// A blacksmith's anvil: holding a geode, cracks it open (for $25) — out comes a
+// random mineral (GEODES in main.c).
+static void action_blacksmith(const action_ctx_t *ctx)
+{
+    (void)ctx;
+    blacksmith_tapped();
+}
+
+// A museum shelf: an empty one opens the donation picker — a mineral not donated
+// yet goes on it; one holding a donation says what it is (MUSEUM in main.c).
+static void action_museum_shelf(const action_ctx_t *ctx)
+{
+    museum_shelf_tapped(ctx->x, ctx->y, ctx->w, ctx->h);
+}
+
+// A kitchen (a stove, a counter): the cooking screen — every food, free until a
+// dish has ingredients ("cook:<item id>" attributes; KITCHEN in main.c).
+static void action_kitchen(const action_ctx_t *ctx)
+{
+    (void)ctx;
+    kitchen_tapped();
+}
+
 const asset_action_t k_asset_actions[] = {
     ASSET_ACTION(seed_shop, "Seed shop", "Opens a shop that sells the seeds of every crop in the game"),
     ASSET_ACTION(build_shop, "Build shop", "Opens a shop that sells every prop and building that has a price"),
@@ -104,6 +127,9 @@ const asset_action_t k_asset_actions[] = {
     ASSET_ACTION(ledger, "Ledger", "Opens the ledger: everything bought and sold in the last 20 days (also ledger.csv in the save)"),
     ASSET_ACTION(bed, "Bed", "Asks to go to bed: sleeps until 6:00 am the next morning, and crops in watered soil grow overnight"),
     ASSET_ACTION(market_board, "Market board", "Opens the market board: today's demand for every type of thing (x0.1 to x10), the day's photo requests and the capture book"),
+    ASSET_ACTION(blacksmith, "Blacksmith", "Holding a geode, tap it to crack the geode open ($25): out comes a random mineral"),
+    ASSET_ACTION(kitchen, "Kitchen", "Opens the kitchen: cook any food (free for now; a dish with cook:<item> attributes takes those from the bag)"),
+    ASSET_ACTION(museum_shelf, "Museum shelf", "Tap an empty one to donate a mineral (one of each) onto it; it shows there from then on. A full one says what it holds"),
     ASSET_ACTION(trough, "Trough", "Inside a barn or coop: every tile of it is one trough. Hold hay and tap it to fill them; the animals eat from them at night"),
 };
 const int asset_action_count = sizeof(k_asset_actions) / sizeof(k_asset_actions[0]);

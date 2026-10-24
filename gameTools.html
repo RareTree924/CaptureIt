@@ -243,6 +243,7 @@ button.tool-anim.active { background: linear-gradient(#a672dc, #663a9e); border-
 .swBuildable { background: rgba(80,150,255,.75); }
 .swFishable { background: rgba(40,220,230,.75); }
 .swGrassy { background: rgba(170,230,60,.75); }
+.swForage { background: rgba(255,110,200,.85); }
 /* Item Editor: a fishing rod's stat sliders */
 .rodStats { border: 1px solid #3a3a3a; border-radius: 4px; padding: 6px 8px; margin: 4px 0; background: rgba(255,255,255,.03); }
 .rodStatHead { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; font-weight: 600; }
@@ -359,7 +360,48 @@ button.tool-tp.active { background: linear-gradient(#e05cc0, #a02c86); border-co
 .brkLevelRow .animFields { margin-bottom: 6px; }
 .brkDrops { border-left: 2px solid #555; padding: 2px 0 4px 10px; margin: 2px 0 8px; }
 .brkDrops .brkDropRow { margin: 4px 0; }
-#itemListBox { max-height: 180px; overflow-y: auto; border: 1px solid #555; border-radius: 4px; padding: 4px; background: #1a1a1a; font-size: 13px; }
+#itemListBox { max-height: 340px; overflow-y: auto; border: 1px solid #555; border-radius: 4px; padding: 4px; background: #1a1a1a; font-size: 13px; }
+/* GRIDS, NOT LISTS: a tile per item / crop — its picture, its name under it */
+.igBar { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.igBar input[type=search] { flex: 1 1 140px; min-width: 100px; }
+.igChips { display: flex; gap: 4px; flex-wrap: wrap; }
+.igChips button { border-radius: 12px; min-height: 22px !important; padding: 1px 9px !important; font-size: 11px; }
+.igChips button.on { outline: 2px solid #40c8ff; outline-offset: -1px; }
+.igGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--igTile, 64px), 1fr)); gap: 4px; align-content: start; }
+.igTile { position: relative; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 4px 2px; border-radius: 5px; background: #222; border: 1px solid #333; cursor: pointer; min-width: 0; }
+.igTile:hover { border-color: #40c8ff; background: #26323a; }
+.igTile.editing { border-color: #6fd36f; background: #1f3a24; }
+.igTile canvas { width: 40px; height: 40px; image-rendering: pixelated; }
+.igTile .igName { font-size: 10px; line-height: 1.15; color: #ddd; text-align: center; max-width: 100%; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; word-break: break-word; }
+.igTile .igPrice { font-size: 9px; color: #e8c86a; }
+.igTile .igX { position: absolute; top: 1px; right: 1px; min-height: 0 !important; padding: 0 4px !important; font-size: 10px; line-height: 14px; display: none; }
+.igTile:hover .igX { display: block; }
+/* the Fishing tab's list: tiles too */
+#fshList { display: grid !important; grid-template-columns: repeat(auto-fill, minmax(70px, 1fr)); gap: 4px !important; }
+#fshList .fshRow { flex-direction: column; text-align: center; padding: 5px 2px; gap: 2px; background: #202020; border: 1px solid #2c2c2c; }
+#fshList .fshRow canvas { width: 36px; height: 36px; }
+#fshList .fshRow .fshRowName { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; font-size: 10px; line-height: 1.15; }
+#fshList .fshRow .fshRowSub { font-size: 9px; white-space: normal; }
+/* ADD FROM A SHEET */
+.qaStrip .qaRow { display: flex; gap: 12px; align-items: flex-start; flex-wrap: wrap; }
+.qaStrip #qaSheetWrap { flex: 1 1 320px; min-width: 200px; max-height: 360px; overflow: auto; background: #151515; border: 1px solid #333; border-radius: 4px; }
+.qaStrip #qaSheet { image-rendering: pixelated; cursor: pointer; display: block; }
+.qaStrip .qaSide { display: flex; flex-direction: column; gap: 6px; min-width: 210px; }
+.qaStrip #qaCell { width: 96px; height: 96px; image-rendering: pixelated; background: #1d1d1d; border: 1px solid #444; border-radius: 4px; }
+.qaStrip .qaSave { background: #1f6b34 !important; border-color: #2f9a4c !important; color: #fff !important; font-weight: bold; }
+/* SAME NAME: both items side by side */
+#dupOverlay { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: none; align-items: center; justify-content: center; z-index: 1000; }
+#dupOverlay.show { display: flex; }
+#dupPanel { background: #222; border: 1px solid #666; border-radius: 8px; padding: 16px 18px; display: flex; flex-direction: column; gap: 12px; max-width: 92vw; }
+#dupPanel .dupCols { display: flex; gap: 14px; flex-wrap: wrap; }
+#dupPanel .dupItem { flex: 1 1 220px; border: 1px solid #444; border-radius: 6px; padding: 10px; background: #1a1a1a; display: flex; flex-direction: column; gap: 6px; align-items: center; }
+#dupPanel .dupItem canvas { width: 80px; height: 80px; image-rendering: pixelated; background: #262626; border-radius: 4px; }
+#dupPanel .dupAttrs { font-size: 11px; color: #aaa; max-height: 140px; overflow: auto; align-self: stretch; }
+#dupPanel .dupWarn { color: #ffb070; font-size: 12px; }
+/* every editor tab: a grip to make the whole panel wider or narrower */
+.panelGrip { position: absolute; top: 40px; bottom: 40px; right: -7px; width: 10px; cursor: ew-resize; touch-action: none; z-index: 6; }
+.panelGrip::after { content: ''; position: absolute; top: 50%; right: 4px; height: 40px; width: 3px; margin-top: -20px; border-radius: 2px; background: #3a3a3a; }
+.panelGrip:hover::after, .panelGrip.drag::after { background: #40c8ff; }
 .itemListRow { display: flex; align-items: center; gap: 8px; padding: 2px 4px; }
 .itemListRow span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .itemListRow button { font-size: 11px; padding: 3px 8px; min-height: auto; }
@@ -1093,6 +1135,8 @@ body.farmOn #aniEdOverlay, body.farmOn #fbdEdOverlay, body.farmOn #fncEdOverlay 
           <div class="animCap">What a shop charges for one packet. 0 = no shop sells it.</div>
           <div class="animFields"><span>Grows in</span><span class="animFields" id="cropSeasons"></span></div>
           <div class="animCap">Seasons are 28 game days each. In game it can only be planted in these, the seed shop only sells the packet then, and it withers on the first day of a season it doesn't grow in. Inside buildings (a greenhouse) it grows any time. None ticked = all year.</div>
+          <div class="animFields"><span>Climate</span><span class="animFields" id="cropClimates"></span></div>
+          <div class="animCap">The maps it can be planted on — each map has a climate (the Map Editor's Climate). Inside buildings it grows anywhere. None ticked = any but Volcanic and Glacial (those only grow what's ticked for them).</div>
           <div class="animFields">
             <label><input type="checkbox" id="cropQuality" checked> Harvests roll a quality (rarity)</label>
           </div>
@@ -1459,6 +1503,8 @@ body.farmOn #aniEdOverlay, body.farmOn #fbdEdOverlay, body.farmOn #fncEdOverlay 
               <label>Seed shop price <input type="number" id="treBuyPrice" min="0" max="999999" style="width:70px;"> <span class="animCap">(0 = not sold)</span></label>
             </div>
           </div>
+          <div class="animFields"><span>Climate</span><span class="animFields" id="treClimates"></span></div>
+          <div class="animCap">The maps it can be planted on (each map's Climate, in the Map Editor). Inside buildings: anywhere. None ticked = any but Volcanic and Glacial. Trees put on a map with the Tree tool grow wherever they're put.</div>
         </div>
       </div>
     </div>
@@ -2022,6 +2068,22 @@ body.farmOn #aniEdOverlay, body.farmOn #fbdEdOverlay, body.farmOn #fncEdOverlay 
   </div>
 </div>
 
+<div id="dupOverlay">
+  <div id="dupPanel">
+    <div style="font-size:15px;font-weight:bold;" id="dupTitle"></div>
+    <div class="dupCols">
+      <div class="dupItem"><b>Already there</b><canvas id="dupOldArt" width="16" height="16"></canvas><div id="dupOldName"></div><div class="dupAttrs" id="dupOldAttrs"></div></div>
+      <div class="dupItem"><b>The one you're saving</b><canvas id="dupNewArt" width="16" height="16"></canvas><div id="dupNewName"></div><div class="dupAttrs" id="dupNewAttrs"></div></div>
+    </div>
+    <div class="dupWarn" id="dupWarn"></div>
+    <div class="row">
+      <button type="button" id="dupOverwrite" style="background:#7a2a2a;border-color:#a33;color:#fff;">Yes, overwrite it</button>
+      <button type="button" id="dupRename">Rename mine…</button>
+      <button type="button" id="dupCancel">Cancel</button>
+    </div>
+  </div>
+</div>
+
 <div id="itemOverlay">
   <div id="itemPanel">
     <div class="itemHead">
@@ -2031,8 +2093,34 @@ body.farmOn #aniEdOverlay, body.farmOn #fbdEdOverlay, body.farmOn #fncEdOverlay 
       <button type="button" onclick="layoutReset('itemPanel')" title="Put every box and column back to its normal size">Reset layout</button>
       <label title="The long explanations under each setting" style="font-size:12px;color:#aaa;display:flex;align-items:center;gap:4px;"><input type="checkbox" id="itemShowHelp"> Show help</label>
       <button type="button" onclick="cfOpen('item')" title="Every item in your items folder as a big grid of pictures — search, filter, click one to edit it (Ctrl+O)" style="background:#1f5f82;border-color:#2b7aa6;color:#fff;">&#9638; Find an item…</button>
+      <button type="button" onclick="document.getElementById('qaFile').click()" title="Load a sprite sheet, then make an item of each picture on it in turn: Next picks the next one, you type its name and settings, Save &amp; next saves it and moves on" style="background:#1f6b34;border-color:#2f9a4c;color:#fff;">&#10010; Add from a sheet…</button>
     </div>
     <input type="file" id="itemOpenFile" accept=".c" style="display:none">
+    <input type="file" id="qaFile" accept="image/png" style="display:none">
+
+    <div class="itemCard qaStrip" id="qaStrip" style="display:none">
+      <div class="itemCardTitle">Adding items from a sheet</div>
+      <div class="qaRow">
+        <div id="qaSheetWrap"><canvas id="qaSheet" width="16" height="16" title="Click a picture to make that one next"></canvas></div>
+        <div class="qaSide">
+          <div class="row" style="gap:10px;align-items:center;">
+            <canvas id="qaCell" width="16" height="16"></canvas>
+            <div id="qaInfo" class="animCap" style="margin:0;"></div>
+          </div>
+          <div class="animFields">
+            <label>Each picture <select id="qaSize"><option value="16">16×16</option><option value="24">24×24</option><option value="32">32×32</option><option value="48">48×48</option></select></label>
+            <label title="Keep the settings (price, stack, attributes…) of the last one for the next — only the name and picture change"><input type="checkbox" id="qaKeep" checked> Keep settings</label>
+          </div>
+          <div class="row">
+            <button type="button" id="qaPrev" title="The picture before">&#9664; Back</button>
+            <button type="button" id="qaNext" title="Skip this one">Skip &#9654;</button>
+            <button type="button" id="qaSave" class="qaSave" title="Save it (the Export below) and go to the next picture — Enter in the name box does the same">Save &amp; next &#9654;</button>
+          </div>
+          <div class="animCap" style="margin:0;">Type the name above (it becomes the file name), set the price and anything else in the boxes below, then Save &amp; next. Saved pictures turn green on the sheet.</div>
+          <button type="button" id="qaClose">Done with this sheet</button>
+        </div>
+      </div>
+    </div>
 
     <div class="itemGrid">
       <div class="itemCol">
@@ -2100,6 +2188,9 @@ body.farmOn #aniEdOverlay, body.farmOn #fbdEdOverlay, body.farmOn #fncEdOverlay 
             <label title="tool_power N: hits one swing lands on a breakable (none = 1). Stardew's copper / steel / gold / iridium tools hit harder.">Power <input type="number" id="itemToolPower" min="1" max="16" value="1" style="width:48px;" disabled> hit(s) a swing</label>
             <label title="counts_as:&lt;id&gt; — a breakable that needs that item takes this one too (comma-separated ids)">Counts as <input type="text" id="itemToolAs" placeholder="axe" style="width:110px;" disabled></label>
           </div>
+          <div class="animFields">
+            <label title="energy N: what one swing — or a fishing rod's cast — costs the player (main.c ENERGY; they have 270). Empty = 0 for a tool, 5 for a fishing rod.">Energy a use <input type="number" id="itemEnergy" min="0" max="270" placeholder="0" style="width:52px;"></label>
+          </div>
           <canvas id="itemToolPreview" class="itemPreviewCanvas" width="384" height="140"></canvas>
           <div class="animCap" id="itemToolInfo"></div>
           <div class="animCap">In game, using it on what the player walked up to (a tree, a rock, farmland, grass…) plays a swing: the <b>Swing</b> art (the tab beside Held — 16×32, drawn right on top of the player; facing up it goes behind them), a swipe through the tile in front, and the sound. The hit lands mid-swing. Swing art frames: 1 = every way (mirrored facing left), 3 = facing down, up, right (mirrored for left), 4 = down, up, left, right. Its Time/frame is how long the swing shows. No Swing art: the item stays over their head and only the swipe plays. "Counts as axe" lets a copper axe chop what needs the axe; Power lands that many hits a swing.</div>
@@ -2109,6 +2200,26 @@ body.farmOn #aniEdOverlay, body.farmOn #fbdEdOverlay, body.farmOn #fncEdOverlay 
           <div class="itemCardTitle">Market types</div>
           <div class="mutChips" id="itemTypeChips"></div>
           <div class="animCap">What kind of thing it is: its colour, shape, material and what it's for. Every type's demand changes each morning (x0.1 to x10, the Market board shows it), and the item sells for the average of its types'. Photo items get theirs from the AI; tick them here for anything else. None = always x1.</div>
+        </div>
+
+        <div class="itemCard">
+          <div class="itemCardTitle">Forage</div>
+          <div class="animFields">
+            <label title="forage W: it comes up by itself on the Map Editor's Forage tiles (main.c FORAGE)"><input type="checkbox" id="itemForage"> Comes up as forage</label>
+            <label title="forage W: its weight against the other forageables that could come up (10 = common, 1 = rare)">Weight <input type="number" id="itemForageWeight" min="1" max="100" value="10" style="width:52px;" disabled></label>
+          </div>
+          <div class="animFields">
+            <label title="forage_seasons bit 1"><input type="checkbox" id="itemForageSp" disabled> Spring</label>
+            <label title="forage_seasons bit 2"><input type="checkbox" id="itemForageSu" disabled> Summer</label>
+            <label title="forage_seasons bit 4"><input type="checkbox" id="itemForageFa" disabled> Fall</label>
+            <label title="forage_seasons bit 8"><input type="checkbox" id="itemForageWi" disabled> Winter</label>
+          </div>
+          <div class="animFields">
+            <label title="forage_map:&lt;name&gt; — only on these maps (comma-separated map names). Empty = any map with Forage tiles.">Only on maps <input type="text" id="itemForageMaps" placeholder="any" style="width:150px;" disabled></label>
+          </div>
+          <div class="animFields"><span>Climate</span><span class="animFields" id="itemClimates"></span></div>
+          <div class="animCap">The climates it lives in (each map has one — the Map Editor's Climate). A forageable only comes up there; a fish only bites there (the Fishing tab sets it too). None ticked = any but Volcanic and Glacial.</div>
+          <div class="animCap">Every morning in game a few forageables come up on the ground tiles ticked "Forage" in the Map Editor — up to 8 on a map — and the player picks them up by walking onto them. Weight = how often this one is picked against the others that could come up. No season ticked = all year; out of season they go. It rolls a quality if "Rolls a quality" is ticked.</div>
         </div>
 
         <div class="itemCard">
@@ -2248,7 +2359,9 @@ body.farmOn #aniEdOverlay, body.farmOn #fbdEdOverlay, body.farmOn #fncEdOverlay 
 
         <div class="itemCard" data-grow="itemListBox">
           <div class="itemCardTitle">Item list</div>
-          <div class="animCap">What breakables can drop — one assets/items/&lt;id&gt;.c each. Scan reads that folder so this matches the build; Edit opens one here.</div>
+          <div class="animCap">Every item — one assets/items/&lt;id&gt;.c each. Click one to edit it; search or pick a kind to narrow it down. (What breakables can drop, too.)</div>
+          <div class="igBar"><input type="search" id="igSearch" placeholder="Search items…"></div>
+          <div class="igChips" id="igChips"></div>
           <div id="itemListBox"></div>
           <div class="row">
             <button type="button" onclick="scanItemsFolder(false)">Scan folder</button>
@@ -2795,12 +2908,18 @@ let teleporters = [];
 let showTeleporters = true;
 // The map's own trees (the Tree tool — TREES ON THE MAP): {id, tx, ty, stage, moss}, the base tile in 16px tiles.
 let mapTrees = [];
+// The map's climate (main.c CLIMATE): an index into CLIMATES — 0 Normal (no <map>.climate file).
+let mapClimate = 0;
+let selClimateEl = null;   // its picker in the file row
 // Tile types (see TILE TYPES): mirror main.c's Tile types notes.
 const TILE_TYPE_MAX = 127, TILE_NAME_MAX = 31;
 const TILE_FLAG_TILLABLE = 0x01, TILE_FLAG_BUILDABLE = 0x02, TILE_FLAG_FISHABLE = 0x04, TILE_FLAG_GRASSY = 0x08, TILE_CELL_COVERED = 0x80;   // main.c TILE_FLAG_*
 // A Fishable asset's water kind (asset.water: undefined = a pond / lake, 'river', 'ocean', 'lava'): main.c TILE_FLAG_RIVER / _OCEAN / _LAVA —
 // which fish bite there (the Fishing tab's "Water" condition, "fish_water"). Lava: only "rod_lava" rods cast into it, only fish_water 8 bites.
 const TILE_FLAG_RIVER = 0x10, TILE_FLAG_OCEAN = 0x20, TILE_FLAG_LAVA = 0x40;
+// asset.forage: main.c TILE_FLAG_FORAGE — forageables come up on it every morning (FORAGE). (A type's flag;
+// TILE_CELL_COVERED, the same bit, is a cell's.)
+const TILE_FLAG_FORAGE = 0x80;
 const WATER_KINDS = [undefined, 'river', 'ocean', 'lava'];
 function waterKindName(w) { return w === 'river' ? 'River' : w === 'ocean' ? 'Ocean' : w === 'lava' ? 'Lava' : 'Pond / lake'; }
 function waterKindOk(w) { return w === 'river' || w === 'ocean' || w === 'lava' ? w : undefined; }
@@ -2821,6 +2940,29 @@ function seasonBoxes(wrap, prefix, changed) {
 }
 function seasonBoxesRead(prefix) { return SEASONS.reduce((m, _, k) => m | (document.getElementById(prefix + k).checked ? 1 << k : 0), 0); }
 function seasonBoxesSet(prefix, mask) { SEASONS.forEach((_, k) => { document.getElementById(prefix + k).checked = !!(mask >> k & 1); }); }
+// main.c CLIMATE: every map is one of CLIMATES (the Map Editor's Climate, exported as <map>.climate);
+// what lives somewhere has a "climate" bit set (bit k = CLIMATES[k]): seed packets, tree seeds, forage,
+// fish. 0 = the mild five (CLIMATE_MILD, Normal..Lush): Volcanic and Glacial only have what names them.
+// A building's inside without its own climate: anything goes. Hot / Cold / Volcanic / Glacial also
+// heat or cool the player (main.c TEMPERATURE).
+const CLIMATES = ['Normal', 'Hot', 'Cold', 'Dry', 'Lush', 'Volcanic', 'Glacial'], CLIMATE_FILES = ['normal', 'hot', 'cold', 'dry', 'lush', 'volcanic', 'glacial'];
+const CLIMATE_ALL = 127, CLIMATE_MILD = 31;
+const ITEM_CLIMATE_ATTR = 'climate';   // items.h ITEM_ATTR_CLIMATE
+function climateMaskText(m) { m &= CLIMATE_ALL; return m === CLIMATE_ALL ? 'any climate' : !m || m === CLIMATE_MILD ? 'any mild climate' : CLIMATES.filter((_, k) => m >> k & 1).join(' / '); }
+// A row of climate checkboxes in `wrap` (ids prefix0..6); changed(mask) on every tick. None ticked = the mild five.
+function climateBoxes(wrap, prefix, changed) {
+  wrap.innerHTML = '';
+  CLIMATES.forEach((n, k) => {
+    const l = document.createElement('label'), b = document.createElement('input');
+    b.type = 'checkbox'; b.id = prefix + k;
+    b.addEventListener('change', () => changed && changed(climateBoxesRead(prefix)));
+    l.append(b, ' ' + n);
+    wrap.appendChild(l);
+  });
+}
+function climateBoxesRead(prefix) { return CLIMATES.reduce((m, _, k) => m | (document.getElementById(prefix + k).checked ? 1 << k : 0), 0); }
+function climateBoxesSet(prefix, mask) { CLIMATES.forEach((_, k) => { document.getElementById(prefix + k).checked = !!(mask >> k & 1); }); }
+function climateAttrValue(mask) { mask &= CLIMATE_ALL; return mask && mask !== CLIMATE_MILD ? mask : 0; }   // none / the mild five: no attribute
 function nextWaterKind(w) { return WATER_KINDS[(WATER_KINDS.indexOf(w) + 1) % WATER_KINDS.length]; }
 let showTiles = false;        // the "Show tiles" overlay
 const COORDS_KEY = 'captureit.showCoords';
@@ -2874,7 +3016,7 @@ function toggleAssetEditSameColour() {
 }
 
 function pushUndo() {
-  undoStack.push({ at: Date.now(), color: colorData.slice(), hitbox: hitboxData.slice(), layer: layerData.slice(), placed: placedAssets.slice(), imported: importedAnims, importedBrk: importedBreakables, tp: teleporters.map(t => ({ ...t })), trees: mapTrees.map(t => ({ ...t })), tiles: importedTiles, trigs: importedTriggers });
+  undoStack.push({ at: Date.now(), color: colorData.slice(), hitbox: hitboxData.slice(), layer: layerData.slice(), placed: placedAssets.slice(), imported: importedAnims, importedBrk: importedBreakables, tp: teleporters.map(t => ({ ...t })), trees: mapTrees.map(t => ({ ...t })), climate: mapClimate, tiles: importedTiles, trigs: importedTriggers });
   if (undoStack.length > MAX_HISTORY) undoStack.shift();
   redoStack = [];
 }
@@ -2882,13 +3024,14 @@ function doUndo() {
   if (!undoStack.length) return;
   stopAnimPreview(); // the preview is built from the map data that is about to change
   stopBrkPreview();
-  redoStack.push({ color: colorData.slice(), hitbox: hitboxData.slice(), layer: layerData.slice(), placed: placedAssets.slice(), imported: importedAnims, importedBrk: importedBreakables, tp: teleporters.map(t => ({ ...t })), trees: mapTrees.map(t => ({ ...t })), tiles: importedTiles, trigs: importedTriggers });
+  redoStack.push({ color: colorData.slice(), hitbox: hitboxData.slice(), layer: layerData.slice(), placed: placedAssets.slice(), imported: importedAnims, importedBrk: importedBreakables, tp: teleporters.map(t => ({ ...t })), trees: mapTrees.map(t => ({ ...t })), climate: mapClimate, tiles: importedTiles, trigs: importedTriggers });
   const s = undoStack.pop();
   colorData = s.color; hitboxData = s.hitbox; layerData = s.layer; placedAssets = s.placed;
   if (s.imported) importedAnims = s.imported;
   if (s.importedBrk) importedBreakables = s.importedBrk;
   if (s.tp) teleporters = s.tp;
   if (s.trees) mapTrees = s.trees;
+  if (s.climate !== undefined) { mapClimate = s.climate; syncClimateUi(); }
   if (s.tiles !== undefined) importedTiles = s.tiles;
   if (s.trigs !== undefined) importedTriggers = s.trigs;
   redrawAll();
@@ -2897,13 +3040,14 @@ function doRedo() {
   if (!redoStack.length) return;
   stopAnimPreview();
   stopBrkPreview();
-  undoStack.push({ color: colorData.slice(), hitbox: hitboxData.slice(), layer: layerData.slice(), placed: placedAssets.slice(), imported: importedAnims, importedBrk: importedBreakables, tp: teleporters.map(t => ({ ...t })), trees: mapTrees.map(t => ({ ...t })), tiles: importedTiles, trigs: importedTriggers });
+  undoStack.push({ color: colorData.slice(), hitbox: hitboxData.slice(), layer: layerData.slice(), placed: placedAssets.slice(), imported: importedAnims, importedBrk: importedBreakables, tp: teleporters.map(t => ({ ...t })), trees: mapTrees.map(t => ({ ...t })), climate: mapClimate, tiles: importedTiles, trigs: importedTriggers });
   const s = redoStack.pop();
   colorData = s.color; hitboxData = s.hitbox; layerData = s.layer; placedAssets = s.placed;
   if (s.imported) importedAnims = s.imported;
   if (s.importedBrk) importedBreakables = s.importedBrk;
   if (s.tp) teleporters = s.tp;
   if (s.trees) mapTrees = s.trees;
+  if (s.climate !== undefined) { mapClimate = s.climate; syncClimateUi(); }
   if (s.tiles !== undefined) importedTiles = s.tiles;
   if (s.trigs !== undefined) importedTriggers = s.trigs;
   redrawAll();
@@ -4736,7 +4880,7 @@ function updateCursorInfo(p) {
 function updateHud() {
   const chips = [];
   if (collisionView) chips.push(['swCollision', 'Blocked']);
-  if (showTiles) chips.push(['swTillable', 'Tillable'], ['swBuildable', 'Buildable'], ['swFishable', 'Fishable'], ['swGrassy', 'Grassy (wild grass)'], ['swTillCovered', 'Tillable / buildable, but something is on it'], ['swTileTyped', 'Has a tile type']);
+  if (showTiles) chips.push(['swTillable', 'Tillable'], ['swBuildable', 'Buildable'], ['swFishable', 'Fishable'], ['swGrassy', 'Grassy (wild grass)'], ['swForage', 'Forage (forageables come up)'], ['swTillCovered', 'Tillable / buildable, but something is on it'], ['swTileTyped', 'Has a tile type']);
   if (layerViewMode === 'tint') chips.push(['swForeground', 'Foreground (the player walks under it)']);
   else if (layerViewMode === 'fg') chips.push(['swForeground', 'Foreground only, ground dimmed']);
   else if (layerViewMode === 'ground') chips.push(['swGround', 'Ground only, foreground dimmed']);
@@ -5684,6 +5828,13 @@ const btnExportMap = makeButton(rowFile, 'Export', exportMap);
 const btnExportFolder = makeButton(rowFile, 'Export Folder…', chooseMapExportFolder);
 const btnSeasons = makeButton(rowFile, 'Seasons…', () => openSeasonPreview());
 btnSeasons.title = 'See this map in spring, summer, fall and winter (assets\' Seasons… art)';
+// The map's climate (main.c CLIMATE): which crops, trees, forage and fish live here; Dry = no rain, Lush = more forage and grass.
+const selClimate = selClimateEl = document.createElement('select');
+CLIMATES.forEach((n, k) => selClimate.add(new Option(`Climate: ${n}`, k)));
+selClimate.title = 'This map\'s climate. Crops, trees, forage and fish say which climates they live in (none = any but Volcanic and Glacial): only those are planted, come up or bite here. Dry: it never rains. Lush: more forage each morning, wild grass grows back faster. Hot / Cold: the player heats up / cools down and passes out after 5 game hours; Volcanic / Glacial: after 15 game minutes (and no rain). Exported as <map>.climate — export the map again after changing it.';
+selClimate.addEventListener('change', () => { pushUndo(); mapClimate = +selClimate.value; });
+rowFile.appendChild(selClimate);
+function syncClimateUi() { if (selClimateEl) selClimateEl.value = String(mapClimate); }
 const btnBackup = makeButton(rowFile, 'Backup', saveBackup);
 const btnConvertCloud = makeButton(rowFile, 'Convert to Cloud File', () => convertToCloud());
 const btnSaveActive = makeButton(rowFile, 'Save', () => saveActiveFile());
@@ -6594,7 +6745,7 @@ function duplicateAsset(i, folder) {
   const existingNames = assets.map(x => x.name);
   while (existingNames.includes(name)) name = `${a.name} (${copyNum++})`;
   const copy = {
-    name, folder: folder != null ? folder : (a.folder || ''), walkable: a.walkable, tillable: !!a.tillable, buildable: !!a.buildable, fishable: !!a.fishable, water: a.water, grassy: !!a.grassy, actions: a.actions ? a.actions.slice() : undefined, w: a.w, h: a.h,
+    name, folder: folder != null ? folder : (a.folder || ''), walkable: a.walkable, tillable: !!a.tillable, buildable: !!a.buildable, fishable: !!a.fishable, water: a.water, grassy: !!a.grassy, forage: !!a.forage, actions: a.actions ? a.actions.slice() : undefined, w: a.w, h: a.h,
     seasons: seasonsClone(a.seasons),
     rgba_color: a.rgba_color.slice(), rgba_alpha: a.rgba_alpha.slice(),
     rgba_hitbox: (a.rgba_hitbox || new Uint8Array(a.w * a.h)).slice(),
@@ -6934,10 +7085,10 @@ function axSetCollision(indices, mode) {
   axNote(`${indices.length === 1 ? '1 asset' : indices.length + ' assets'}: ${mode === 'walk' ? 'all walkable' : mode === 'solid' ? 'all solid' : 'solid where drawn'}. Copies already on the map keep their old collision.`);
   renderAssetList();
 }
-// A tile flag (tillable / buildable / fishable / grassy) on the selected
+// A tile flag (tillable / buildable / fishable / grassy / forage) on the selected
 // assets that can have it (16x16 tiles): all on, or — when they all have it
 // already — all off. The asset list's buttons do one asset; this does any.
-const AX_TILE_FLAGS = { tillable: 'Tillable', buildable: 'Buildable', fishable: 'Fishable', grassy: 'Grassy' };
+const AX_TILE_FLAGS = { tillable: 'Tillable', buildable: 'Buildable', fishable: 'Fishable', grassy: 'Grassy', forage: 'Forage' };
 function axToggleTileFlag(indices, flag) {
   const name = AX_TILE_FLAGS[flag];
   const ok = indices.filter(i => tileAssetCanTill(assets[i]) && !(assetEditState && assetEditState.assetIndex === i));
@@ -6964,16 +7115,16 @@ function axToast(text, bad) {
   axToastTimer = setTimeout(() => t.classList.remove('show'), bad ? 3500 : 2500);
 }
 // Map Editor keys for the asset(s) clicked in the asset list (no Ctrl/Alt):
-//   T tillable · B buildable · F fishable · G grassy (16x16 tiles — toggles)
+//   T tillable · B buildable · F fishable · G grassy · O forage (16x16 tiles — toggles)
 //   W walkable · S solid (collision) · C opens Crop on it (one asset)
 // true = the key was one of these and an asset was selected.
 function axAssetKey(e) {
   if (e.ctrlKey || e.metaKey || e.altKey || e.repeat) return false;
   const k = e.key.toLowerCase();
-  if (!'tbfgwsc'.includes(k) || k.length !== 1) return false;
+  if (!'tbfgowsc'.includes(k) || k.length !== 1) return false;
   const idx = axSelectedAssets();
   if (!idx.length) return false;
-  const flags = { t: 'tillable', b: 'buildable', f: 'fishable', g: 'grassy' };
+  const flags = { t: 'tillable', b: 'buildable', f: 'fishable', g: 'grassy', o: 'forage' };
   if (flags[k]) { const ok = axToggleTileFlag(idx, flags[k]); axToast(axNoteText, !ok); }
   else if (k === 'w' || k === 's') { axSetCollision(idx, k === 'w' ? 'walk' : 'solid'); axToast(axNoteText.replace(/ Copies already on the map.*$/, ' (copies already on the map keep their old collision)')); }
   else if (k === 'c') {
@@ -7079,6 +7230,9 @@ function axRenderDetails() {
       const gs = axButton(a.grassy ? 'Grassy ✓' : 'Not grassy', 'On the device, wild grass grows on this tile by itself and grows back after animals eat it or a scythe cuts it (the first visit starts it full). Export the map again after changing it. (key: G)', () => { axRecordAssets([i], `grassy ${axAssetLabel(i)}`); a.grassy = !a.grassy; if (showTiles) redrawAll(); renderAssetList(); }, editing);
       gs.classList.toggle('on', !!a.grassy);
       c2.appendChild(gs);
+      const fo = axButton(a.forage ? 'Forage ✓' : 'No forage', 'On the device, forageables (items with a Forage card in the Item Editor — wild horseradish, mushrooms, berries…) come up on this tile every morning, a few at a time, to be picked up. Export the map again after changing it. (key: O)', () => { axRecordAssets([i], `forage ${axAssetLabel(i)}`); a.forage = !a.forage; if (showTiles) redrawAll(); renderAssetList(); }, editing);
+      fo.classList.toggle('on', !!a.forage);
+      c2.appendChild(fo);
     }
     const r = row();
     r.append(axButton(stampAssetIndex === i ? '\ud83d\udd8c Stamping' : '\ud83d\udd8c Stamp', 'Place it on the map', () => axArm(i), editing),
@@ -7406,6 +7560,7 @@ function axMenuForSelection() {
     if (tileAssetCanTill(a)) list.push({ label: a.fishable ? 'Fishable \u2713' : 'Fishable', key: 'F', fn: () => { axRecordAssets([i], `fishable ${axAssetLabel(i)}`); a.fishable = !a.fishable; if (showTiles) redrawAll(); renderAssetList(); }, off: editing });
     if (tileAssetCanTill(a) && a.fishable) list.push({ label: `Water: ${waterKindName(a.water)} \u2192 ${waterKindName(nextWaterKind(a.water))}`, fn: () => { axRecordAssets([i], `water kind ${axAssetLabel(i)}`); a.water = nextWaterKind(a.water); if (showTiles) redrawAll(); renderAssetList(); }, off: editing });
     if (tileAssetCanTill(a)) list.push({ label: a.grassy ? 'Grassy \u2713' : 'Grassy', key: 'G', fn: () => { axRecordAssets([i], `grassy ${axAssetLabel(i)}`); a.grassy = !a.grassy; if (showTiles) redrawAll(); renderAssetList(); }, off: editing });
+    if (tileAssetCanTill(a)) list.push({ label: a.forage ? 'Forage \u2713' : 'Forage', key: 'O', fn: () => { axRecordAssets([i], `forage ${axAssetLabel(i)}`); a.forage = !a.forage; if (showTiles) redrawAll(); renderAssetList(); }, off: editing });
     if (!a.diskPath && axRoot) list.push('-', { label: `Save into ${AX_MAPDIR}\\`, fn: () => axSaveUnsaved([a]) });
     if (axQuery && one.dir !== axCwd) list.push({ label: 'Open file location', fn: () => { const key = one.key; axGo(one.dir); axSelectOnly(key); renderAssetList(); } });
     list.push('-');
@@ -7843,7 +7998,7 @@ function axSnapAsset(a) {
   return { uid: assetUid(a), w: a.w, h: a.h, img: a.img,
            rgba_color: a.rgba_color.slice(), rgba_alpha: a.rgba_alpha.slice(),
            rgba_hitbox: a.rgba_hitbox ? a.rgba_hitbox.slice() : undefined, rgba_layer: a.rgba_layer ? a.rgba_layer.slice() : undefined,
-           walkable: a.walkable, tillable: !!a.tillable, buildable: !!a.buildable, fishable: !!a.fishable, water: a.water, grassy: !!a.grassy, actions: a.actions ? a.actions.slice() : undefined,
+           walkable: a.walkable, tillable: !!a.tillable, buildable: !!a.buildable, fishable: !!a.fishable, water: a.water, grassy: !!a.grassy, forage: !!a.forage, actions: a.actions ? a.actions.slice() : undefined,
            animation: a.animation ? { ...a.animation } : undefined, breakable, seasons: seasonsClone(a.seasons) };
 }
 function axRestoreSnaps(snaps) {
@@ -7856,7 +8011,7 @@ function axRestoreSnaps(snaps) {
     try { breakable = sn.breakable ? structuredClone(sn.breakable) : undefined; } catch (e) { breakable = sn.breakable; }
     Object.assign(a, { w: sn.w, h: sn.h, img: sn.img, rgba_color: sn.rgba_color.slice(), rgba_alpha: sn.rgba_alpha.slice(),
                        rgba_hitbox: sn.rgba_hitbox && sn.rgba_hitbox.slice(), rgba_layer: sn.rgba_layer && sn.rgba_layer.slice(),
-                       walkable: sn.walkable, tillable: sn.tillable, buildable: sn.buildable, fishable: sn.fishable, water: sn.water, grassy: sn.grassy });
+                       walkable: sn.walkable, tillable: sn.tillable, buildable: sn.buildable, fishable: sn.fishable, water: sn.water, grassy: sn.grassy, forage: sn.forage });
     if (sn.actions) a.actions = sn.actions.slice(); else delete a.actions;
     if (sn.animation) a.animation = { ...sn.animation }; else delete a.animation;
     if (breakable) a.breakable = breakable; else delete a.breakable;
@@ -8193,6 +8348,7 @@ function axApplyMeta(a, m, bundleRef) {
   a.fishable = !!m.fishable;
   a.water = waterKindOk(m.water);
   a.grassy = !!m.grassy;
+  a.forage = !!m.forage;
   a.seasons = m.seasons ? seasonsFromJson(m.seasons) : undefined;   // SEASONS: its art for each season (if any)
   a.actions = Array.isArray(m.actions) && m.actions.length ? m.actions.map(String) : undefined;
   if (m.hitbox) { const hb = base64ToU8(m.hitbox, Uint8Array); if (hb.length === n) a.rgba_hitbox = hb; }
@@ -8291,6 +8447,7 @@ function axMetaFor(a, bref) {
   if (a.fishable) m.fishable = true;
   if (a.water) m.water = a.water;
   if (a.grassy) m.grassy = true;
+  if (a.forage) m.forage = true;
   if (seasonsAny(a.seasons)) m.seasons = seasonsToJson(a.seasons);
   if (a.actions && a.actions.length) m.actions = a.actions.slice();
   if (a.rgba_hitbox && a.rgba_hitbox.some(v => v)) m.hitbox = u8ToBase64(a.rgba_hitbox);
@@ -9110,7 +9267,7 @@ function buildBackupData() {
     bundleLibrary: bundleLibrary.map(bundleToJson),
     soundBundles: soundBundles.map(b => ({ name: b.name, sounds: b.sounds.slice() })),   // game-wide, kept here as a copy
     assets: assets.map(a => ({
-      name: a.name, folder: a.folder || '', walkable: a.walkable, tillable: !!a.tillable, buildable: !!a.buildable, fishable: !!a.fishable, water: a.water, grassy: !!a.grassy, actions: a.actions || [], w: a.w, h: a.h, uid: assetUid(a),
+      name: a.name, folder: a.folder || '', walkable: a.walkable, tillable: !!a.tillable, buildable: !!a.buildable, fishable: !!a.fishable, water: a.water, grassy: !!a.grassy, forage: !!a.forage, actions: a.actions || [], w: a.w, h: a.h, uid: assetUid(a),
       seasons: seasonsAny(a.seasons) ? seasonsToJson(a.seasons) : undefined,
       color: u8ToBase64(a.rgba_color), alpha: u8ToBase64(a.rgba_alpha),
       hitbox: u8ToBase64(a.rgba_hitbox || new Uint8Array(a.w * a.h)),
@@ -9139,6 +9296,7 @@ function buildBackupData() {
     importedBundleTable, importedInstances, importedBrk: importedBrkOut,
     teleporters: teleporters.map(t => ({ ...t })),
     trees: mapTrees.map(t => ({ ...t })),
+    climate: CLIMATE_FILES[mapClimate] || 'normal',
     importedTiles: importedTiles ? { types: importedTiles.types.map(t => ({ ...t })), cells: u8ToBase64(importedTiles.cells), hashes: Array.from(importedTiles.hashes) } : null,
     importedTriggers: importedTriggers ? importedTriggers.map(t => ({ ...t, ids: t.ids.slice() })) : null
   };
@@ -9440,6 +9598,8 @@ function loadBackupData(data) {
   placedAssets = [];
   teleporters = (data.teleporters || []).map(tpNormalize);
   mapTrees = (data.trees || []).map(mtNormalize).filter(Boolean);
+  mapClimate = Math.max(0, CLIMATE_FILES.indexOf(data.climate));   // (a backup from before climates: Normal)
+  syncClimateUi();
   importedTiles = (data.importedTiles && data.importedTiles.cells) ? {
     types: (data.importedTiles.types || []).map(t => ({ name: String(t.name), flags: t.flags | 0 })),
     cells: base64ToU8(data.importedTiles.cells, Uint8Array),
@@ -9491,7 +9651,7 @@ function loadBackupData(data) {
     } : undefined;
     makeImageFromPixels(ad.w, ad.h, color, alpha, img => {
       resolve({ name: ad.name, folder: ad.folder || '', walkable: ad.walkable, tillable: !!ad.tillable, buildable: !!ad.buildable, fishable: !!ad.fishable,
-                water: waterKindOk(ad.water), grassy: !!ad.grassy, seasons: ad.seasons ? seasonsFromJson(ad.seasons) : undefined,
+                water: waterKindOk(ad.water), grassy: !!ad.grassy, forage: !!ad.forage, seasons: ad.seasons ? seasonsFromJson(ad.seasons) : undefined,
                 actions: Array.isArray(ad.actions) && ad.actions.length ? ad.actions.map(String) : undefined, w: ad.w, h: ad.h, uid: ad.uid || undefined, img, rgba_color: color, rgba_alpha: alpha, rgba_hitbox: hitbox, rgba_layer: layer, animation, breakable });
     });
   }));
@@ -9588,6 +9748,7 @@ function mergeAssetsIntoLibrary(loaded) {
       if (a.fishable) assets[same].fishable = true;
       if (a.water && !assets[same].water) assets[same].water = a.water;
       if (a.grassy) assets[same].grassy = true;
+      if (a.forage) assets[same].forage = true;
       if (seasonsAny(a.seasons) && !seasonsAny(assets[same].seasons)) assets[same].seasons = a.seasons;
       if (a.actions) assets[same].actions = [...new Set([...(assets[same].actions || []), ...a.actions])].slice(0, TRIG_ACTIONS_MAX);
       return same;
@@ -10061,13 +10222,13 @@ function collectTileExport() {
     }
     return numberOf.get(key);
   };
-  let tillable = 0, buildable = 0, fishable = 0, grassy = 0;
+  let tillable = 0, buildable = 0, fishable = 0, grassy = 0, forage = 0;
   for (let c = 0; c < n; c++) {
     let t = 0, cov = covered[c];
     if (ground[c]) {
       const a = placementSourceAsset(ground[c]), ok = tileAssetCanTill(a);
       t = typeNumber(tileTypeName(a ? a.name : ground[c].snapshot.name),
-                     (ok && a.tillable ? TILE_FLAG_TILLABLE : 0) | (ok && a.buildable ? TILE_FLAG_BUILDABLE : 0) | (ok && a.fishable ? TILE_FLAG_FISHABLE : 0) | (ok && a.grassy ? TILE_FLAG_GRASSY : 0) |
+                     (ok && a.tillable ? TILE_FLAG_TILLABLE : 0) | (ok && a.buildable ? TILE_FLAG_BUILDABLE : 0) | (ok && a.fishable ? TILE_FLAG_FISHABLE : 0) | (ok && a.grassy ? TILE_FLAG_GRASSY : 0) | (ok && a.forage ? TILE_FLAG_FORAGE : 0) |
                      (ok && a.fishable && a.water === 'river' ? TILE_FLAG_RIVER : 0) | (ok && a.fishable && a.water === 'ocean' ? TILE_FLAG_OCEAN : 0) | (ok && a.fishable && a.water === 'lava' ? TILE_FLAG_LAVA : 0));
     } else if (importedTiles && (importedTiles.cells[c] & ~TILE_CELL_COVERED)) {
       const it = importedTiles.types[(importedTiles.cells[c] & ~TILE_CELL_COVERED) - 1];
@@ -10082,10 +10243,11 @@ function collectTileExport() {
     if (!cov && (types[t - 1].flags & TILE_FLAG_BUILDABLE)) buildable++;
     if (types[t - 1].flags & TILE_FLAG_FISHABLE) fishable++;   // something on the water (a lily pad) doesn't stop the fishing
     if (!cov && (types[t - 1].flags & TILE_FLAG_GRASSY)) grassy++;
+    if (!cov && (types[t - 1].flags & TILE_FLAG_FORAGE)) forage++;
   }
   const problems = [];
   if (dropped.size) problems.push(`more than ${TILE_TYPE_MAX} different tile types — these export as "no tile": ${[...dropped].slice(0, 8).join(', ')}${dropped.size > 8 ? '…' : ''}`);
-  return { types, cells, tillable, buildable, fishable, grassy, problems };
+  return { types, cells, tillable, buildable, fishable, grassy, forage, problems };
 }
 // Reads the MAP11 tile section (after the teleporters) — see buildMapFileBuffer.
 function readTileSection(view, offset, len) {
@@ -10138,6 +10300,10 @@ function drawTileOverlay() {
       ctx.strokeStyle = 'rgba(255,255,255,.35)';
     }
     ctx.strokeRect(x + 0.5, y + 0.5, T - 1, T - 1);
+    if (flags & TILE_FLAG_FORAGE) {   // pink dot = forage comes up here (orange: something's on it, so it won't)
+      ctx.fillStyle = (v & TILE_CELL_COVERED) ? 'rgba(255,170,40,.95)' : 'rgba(255,110,200,.95)';
+      ctx.fillRect(x + T / 2 - 2, y + T / 2 - 2, 4, 4);
+    }
   }
   ctx.restore();
 }
@@ -10152,6 +10318,7 @@ function tileCursorChip(p) {
   if (t.flags & TILE_FLAG_BUILDABLE) bits.push('buildable');
   if (t.flags & TILE_FLAG_FISHABLE) bits.push((t.flags & TILE_FLAG_LAVA) ? 'fishable (lava)' : (t.flags & TILE_FLAG_OCEAN) ? 'fishable (ocean)' : (t.flags & TILE_FLAG_RIVER) ? 'fishable (river)' : 'fishable (pond)');
   if (t.flags & TILE_FLAG_GRASSY) bits.push('grassy');
+  if (t.flags & TILE_FLAG_FORAGE) bits.push('forage');
   if (v & TILE_CELL_COVERED) bits.push('covered');
   const state = bits.join(', ');
   return `<span>"${t.name}"${state ? ' · ' + state : ''}</span>`;
@@ -10223,6 +10390,9 @@ const BUILTIN_ACTIONS = [
   { id: 'bed', label: 'Bed', help: 'Asks to go to bed: sleeps until 6:00 am the next morning, and crops in watered soil grow overnight' },
   { id: 'market_board', label: 'Market board', help: "Opens the market board: today's demand for every type of thing (x0.1 to x10), the day's photo requests and the capture book" },
   { id: 'trough', label: 'Trough', help: 'Inside a barn or coop: every tile of it is one trough. Hold hay and tap it to fill them; the animals eat from them at night' },
+  { id: 'blacksmith', label: 'Blacksmith', help: 'Holding a geode, tap it to crack the geode open ($25): out comes a random mineral' },
+  { id: 'kitchen', label: 'Kitchen', help: 'Opens the kitchen: cook any food (free for now; a dish with cook:<item> attributes takes those from the bag)' },
+  { id: 'museum_shelf', label: 'Museum shelf', help: 'Tap an empty one to donate a mineral (one of each) onto it; it shows there from then on. A full one says what it holds' },
 ];
 // The file's actions as last read, then any built-in one it doesn't have.
 function knownActions() {
@@ -10901,7 +11071,9 @@ async function exportMap() {
     `\n${tiles.buildable} tile${tiles.buildable === 1 ? '' : 's'} buildings can stand on` + (tiles.buildable ? '.' : ' (tick "Buildable" on a 16x16 ground asset for that).') +
     `\n${tiles.fishable} tile${tiles.fishable === 1 ? '' : 's'} to fish in` + (tiles.fishable ? '.' : ' (tick "Fishable" on a 16x16 water asset for that).') +
     `\n${tiles.grassy} tile${tiles.grassy === 1 ? '' : 's'} where wild grass grows back` + (tiles.grassy ? '.' : ' (tick "Grassy" on a 16x16 ground asset for that).') +
-    `\nObjects with actions: ${trigs.list.length}.`;
+    `\n${tiles.forage} tile${tiles.forage === 1 ? '' : 's'} where forage comes up` + (tiles.forage ? '.' : ' (tick "Forage" on a 16x16 ground asset for that).') +
+    `\nObjects with actions: ${trigs.list.length}.` +
+    `\nClimate: ${CLIMATES[mapClimate]}${mapClimate ? ` (${base}.climate)` : ''}.`;
   const suggested = `${tabBaseName()}.map`;
   let fileName = (prompt('File name (its 6 night files are saved next to it):', suggested) || suggested).trim();
   if (!/\.map$/i.test(fileName)) fileName += '.map';
@@ -10914,6 +11086,8 @@ async function exportMap() {
   for (const k of seasons) files.push(...seasonExportFiles(k, `${base}.${SEASON_FILES[k]}`, tiles, trigs));
   const treesText = mtExportText(base);   // TREES ON THE MAP: <base>.trees, the map's own trees
   if (treesText) files.push({ name: `${base}.trees`, buf: new TextEncoder().encode(treesText) });
+  const climateText = mapClimate ? `# ${base}'s climate (main.c CLIMATE): normal, hot, cold, dry, lush, volcanic or glacial\nclimate ${CLIMATE_FILES[mapClimate]}\n` : null;   // Normal: no file
+  if (climateText) files.push({ name: `${base}.climate`, buf: new TextEncoder().encode(climateText) });
   const treeInfo = mapTrees.length ? `
 Trees: ${mapTrees.length} (${base}.trees) — put on the map the first time a save goes there.` : '';
   const seasonInfo = seasons.length ? `\nSeasonal art: ${seasons.map(k => SEASONS[k]).join(', ')} (${seasons.length * (NIGHT_STAGES + 1)} more files: ${base}.${SEASON_FILES[seasons[0]]}.map …).` : '';
@@ -10937,6 +11111,7 @@ Trees: ${mapTrees.length} (${base}.trees) — put on the map the first time a sa
           try { await out.removeEntry(`${base}.${SEASON_FILES[k]}.${ext}`); } catch (e) { /* wasn't there */ }
       }
       if (!treesText) try { await out.removeEntry(`${base}.trees`); } catch (e) { /* wasn't there */ }   // no trees any more
+      if (!climateText) try { await out.removeEntry(`${base}.climate`); } catch (e) { /* wasn't there */ }   // Normal again
     } catch (e) {
       alert(`Couldn't write into "${out.name}": ${e.message}`);
       return;
@@ -12352,6 +12527,8 @@ const ITEM_CRAFT_PREFIX = 'craft:', ITEM_CRAFT_MAKES_ATTR = 'craft_makes', ITEM_
 const ITEM_TILLS_ATTR = 'tills', ITEM_WATERS_ATTR = 'waters', ITEM_WATER_MAX_ATTR = 'water_max';   // items.h ITEM_ATTR_WATER_MAX: what the can holds                                           // items.h ITEM_ATTR_TILLS / _WATERS: a hoe, a watering can
 const ITEM_TOOL_ATTR = 'tool', ITEM_TOOL_SWIPE_ATTR = 'tool_swipe', ITEM_TOOL_POWER_ATTR = 'tool_power',   // main.c TOOL SWING: swings when used, the swipe (0 = off), hits a swing
       ITEM_TOOL_SFX_PREFIX = 'tool_sfx:', ITEM_COUNTS_AS_PREFIX = 'counts_as:';                              // ...its sound(s), what breakables count it as
+const ITEM_FORAGE_ATTR = 'forage', ITEM_FORAGE_SEASONS_ATTR = 'forage_seasons', ITEM_FORAGE_MAP_PREFIX = 'forage_map:';   // items.h ITEM_ATTR_FORAGE*: main.c FORAGE
+const ITEM_ENERGY_ATTR = 'energy';                                                                      // items.h ITEM_ATTR_ENERGY: a use's energy (main.c ENERGY)
 const ITEM_MARKET_BOARD_ATTR = 'market_board';                                                          // items.h ITEM_ATTR_MARKET_BOARD: a prop that opens the market board
 const ITEM_TYPES_ATTR = 'types', ITEM_TYPES2_ATTR = 'types2';                                           // items.h ITEM_ATTR_TYPES / _TYPES2: market types, bits 0-30 / 31-61
 // pipeline_msgs.h CAM_TYPES, in the same order (bit k = type k). APPEND ONLY, like there.
@@ -13102,6 +13279,38 @@ function itemToolAttrs() {
   return out;
 }
 
+// Forage (main.c FORAGE): "forage W", "forage_seasons" (bits: 1 spring, 2 summer, 4 fall, 8 winter; none = all year),
+// "forage_map:<map name>" — one attribute per map, value 1.
+const ITEM_FORAGE_SEASON_IDS = ['itemForageSp', 'itemForageSu', 'itemForageFa', 'itemForageWi'];
+function itemForageEnable(on) { ['itemForageWeight', 'itemForageMaps', ...ITEM_FORAGE_SEASON_IDS].forEach(id => { itemEl(id).disabled = !on; }); }
+function setItemForage(on, weight, seasons, maps) {
+  itemEl('itemForage').checked = on;
+  itemForageEnable(on);
+  itemEl('itemForageWeight').value = weight;
+  ITEM_FORAGE_SEASON_IDS.forEach((id, k) => { itemEl(id).checked = !!((seasons >> k) & 1); });
+  itemEl('itemForageMaps').value = maps;
+}
+itemEl('itemForage').addEventListener('change', e => itemForageEnable(e.target.checked));
+climateBoxes(itemEl('itemClimates'), 'itemClimate');   // (main.c CLIMATE — any item: forage, fish...)
+function itemForageFromAttrs(attrs) {
+  const v = (n, d) => { const a = attrs.find(x => x.name === n); return a ? a.value : d; };
+  return { on: v(ITEM_FORAGE_ATTR, 0) > 0, weight: itemClamp(v(ITEM_FORAGE_ATTR, 10) || 10, 1, 100), seasons: v(ITEM_FORAGE_SEASONS_ATTR, 0),
+           maps: attrs.filter(a => a.name.startsWith(ITEM_FORAGE_MAP_PREFIX) && a.value > 0).map(a => a.name.slice(ITEM_FORAGE_MAP_PREFIX.length)).join(', ') };
+}
+// The attributes the card writes, or a string saying what's wrong.
+function itemForageAttrs() {
+  const out = [{ name: ITEM_FORAGE_ATTR, value: itemClamp(parseInt(itemEl('itemForageWeight').value) || 10, 1, 100) }];
+  let seasons = 0;
+  ITEM_FORAGE_SEASON_IDS.forEach((id, k) => { if (itemEl(id).checked) seasons |= 1 << k; });
+  if (seasons && seasons !== 15) out.push({ name: ITEM_FORAGE_SEASONS_ATTR, value: seasons });   // none or all four = all year
+  for (const m of itemToolList(itemEl('itemForageMaps').value)) {
+    const name = m.replace(/\.map$/i, '');
+    if (!/^[A-Za-z0-9_-]+$/.test(name)) return `"Only on maps": "${m}" isn't a map name (letters, digits, _ and -).`;
+    out.push({ name: ITEM_FORAGE_MAP_PREFIX + name, value: 1 });
+  }
+  return out;
+}
+
 // ---- Tool use preview: the player facing down, up, left and right, swinging it the way main.c's TOOL SWING draws it ----
 const TOOL_SWIPE_PX = 32, TOOL_SWIPE_FRAMES = 4, TOOL_SWIPE_FRAME_MS = 60;        // main.c SWIPE_PX / SWIPE_FRAMES / SWIPE_FRAME_MS
 const TOOL_SWIPE_AT = [[-8, 16], [-8, -4], [-16, 0], [0, 0]];                      // main.c k_swipe_at[]: down, up, left, right
@@ -13648,11 +13857,12 @@ itemEl('fishTagOverlay').addEventListener('mousedown', e => { if (e.target.id ==
 itemMutRefresh();
 const ITEM_OWNED_ATTRS = () => [ITEM_SELL_ATTR, ITEM_DROP_ATTR, ITEM_QUALITY_ATTR, ITEM_BUY_ATTR, ITEM_PROP_ATTR, ITEM_PROP_ROWS_ATTR, ITEM_PROP_SOLID_ATTR, ITEM_SHELF_ATTR, ITEM_SHELF_Y_ATTR,
                                 ITEM_BED_ATTR, ITEM_BED_HEAD_ATTR, ITEM_BED_FOOT_ATTR, ITEM_AQUA_ATTR, ITEM_SPRINKLER_ATTR, ITEM_SCARECROW_ATTR, ITEM_TILLS_ATTR, ITEM_WATERS_ATTR, ITEM_WATER_MAX_ATTR, ...ITEM_RANCH_ATTRS.map(r => r[1]), ITEM_ROD_ATTR, ...ROD_STATS.map(s => s.attr), ...ITEM_FISH_ATTRS, ITEM_MUT_ATTR,
-                                ITEM_TOOL_ATTR, ITEM_TOOL_SWIPE_ATTR, ITEM_TOOL_POWER_ATTR, ITEM_MARKET_BOARD_ATTR, ITEM_TYPES_ATTR, ITEM_TYPES2_ATTR];
+                                ITEM_TOOL_ATTR, ITEM_TOOL_SWIPE_ATTR, ITEM_TOOL_POWER_ATTR, ITEM_MARKET_BOARD_ATTR, ITEM_TYPES_ATTR, ITEM_TYPES2_ATTR,
+                                ITEM_FORAGE_ATTR, ITEM_FORAGE_SEASONS_ATTR, ITEM_ENERGY_ATTR, ITEM_CLIMATE_ATTR];
 // What the cards own (a hand-added row with one of these names is ignored): the list above, a recipe's craft:<id> / craft_makes, a tool's tool_sfx:<name> / counts_as:<id>.
 function itemOwnsAttr(name) {
   return ITEM_OWNED_ATTRS().includes(name) || name === ITEM_SHOP_ATTR || name.startsWith(ITEM_CRAFT_PREFIX) || name === ITEM_CRAFT_MAKES_ATTR ||
-         name.startsWith(ITEM_TOOL_SFX_PREFIX) || name.startsWith(ITEM_COUNTS_AS_PREFIX);
+         name.startsWith(ITEM_TOOL_SFX_PREFIX) || name.startsWith(ITEM_COUNTS_AS_PREFIX) || name.startsWith(ITEM_FORAGE_MAP_PREFIX);
 }
 function readItemSellPrice() {
   if (!itemEl('itemSellable').checked) return 0;
@@ -13695,6 +13905,8 @@ function setItemListPrice(id, price) {
 
 function renderItemListBox() {
   const box = itemEl('itemListBox');
+  if (typeof igRender === 'function' && igRender(box)) return;   // the grid of pictures (GRIDS, NOT LISTS; defined in a later <script>) — else, with no items folder, the plain list
+  box.classList.remove('igGrid');
   box.innerHTML = '';
   if (!itemList.length) {
     box.innerHTML = '<div class="animCap">No items yet. Scan the items folder, add one by id below, or export one.</div>';
@@ -13893,6 +14105,10 @@ function importItemC(text, id) {
   itemEl('itemWaterMax').value = av(ITEM_WATER_MAX_ATTR, 0);   // (an older can: 0, it never runs dry)
   ITEM_RANCH_ATTRS.forEach(([el, at]) => { itemEl(el).checked = av(at, 0) > 0; });
   setItemTool(av(ITEM_TOOL_ATTR, 0) > 0, itemToolFromAttrs(p.attrs));
+  itemEl('itemEnergy').value = p.attrs.some(a => a.name === ITEM_ENERGY_ATTR) ? av(ITEM_ENERGY_ATTR, 0) : '';   // (none: the game's default)
+  const fg = itemForageFromAttrs(p.attrs);
+  setItemForage(fg.on, fg.weight, fg.seasons, fg.maps);
+  climateBoxesSet('itemClimate', av(ITEM_CLIMATE_ATTR, 0));
   const recipe = itemCraftFromAttrs(p.attrs);
   itemCraft = [];
   setItemCraft(recipe.list.length > 0, recipe.makes, recipe.list);
@@ -13953,6 +14169,9 @@ function resetItemEditor(ask) {
   itemEl('itemWaterMax').value = 40;   // (a new can holds Stardew's basic can's 40)
   ITEM_RANCH_ATTRS.forEach(([el]) => { itemEl(el).checked = false; });
   setItemTool(false, { swipe: true, power: 1, sfx: '', as: '' });
+  itemEl('itemEnergy').value = '';
+  setItemForage(false, 10, 0, '');
+  climateBoxesSet('itemClimate', 0);
   setItemProp(false, 0, true);
   setItemBuyable(false, 10, 0);
   setItemRod(false, {});
@@ -14047,6 +14266,8 @@ async function exportItemAsset(asNew) {
   const passiveBlock = buildItemAnimBlock(`${id}_passive`, itemPackOutput(itemOutput(pArt)), pArt.interval, -1);
   const toolAttrs = itemEl('itemTool').checked ? itemToolAttrs() : [];   // Tool use (main.c TOOL SWING)
   if (typeof toolAttrs === 'string') { alert(toolAttrs); return; }
+  const forageAttrs = itemEl('itemForage').checked ? itemForageAttrs() : [];   // Forage (main.c FORAGE)
+  if (typeof forageAttrs === 'string') { alert(forageAttrs); return; }
   if (uArt && !itemEl('itemTool').checked && !confirm('It has Swing art, but "Swings like a tool" (Tool use box) is off — the game won\'t swing it. Export anyway?')) return;
   const useBlock = uArt ? buildItemAnimBlock(`${id}_use`, itemPackOutput(itemOutput(uArt)), uArt.interval, 0)   // a swing plays once
                         : { decl: '', initExpr: '{ .frame_count = 0 }' };
@@ -14093,6 +14314,11 @@ async function exportItemAsset(asNew) {
   if (itemEl('itemWaters').checked && waterMax > 0) validAttrs.push({ name: ITEM_WATER_MAX_ATTR, value: waterMax });   // none = never runs dry
   ITEM_RANCH_ATTRS.forEach(([el, at]) => { if (itemEl(el).checked) validAttrs.push({ name: at, value: 1 }); });
   validAttrs.push(...toolAttrs);
+  const energy = String(itemEl('itemEnergy').value).trim();   // a use's energy (main.c ENERGY; none = the game's default)
+  if (energy !== '') validAttrs.push({ name: ITEM_ENERGY_ATTR, value: itemClamp(parseInt(energy) || 0, 0, 270) });
+  validAttrs.push(...forageAttrs);
+  const climates = climateAttrValue(climateBoxesRead('itemClimate'));   // where it lives (main.c CLIMATE; none = any)
+  if (climates) validAttrs.push({ name: ITEM_CLIMATE_ATTR, value: climates });
   validAttrs.push(...itemTypeAttrs());   // market types (none = x1)
   if (itemEl('itemBuyable').checked) {
     validAttrs.push({ name: ITEM_BUY_ATTR, value: itemClamp(parseInt(itemEl('itemBuyPrice').value) || 1, 1, 999999) });
@@ -14140,7 +14366,19 @@ const item_asset_t k_item_${id} = {
   if (dir) {
     let exists = false;
     try { await dir.getFileHandle(`${id}.c`); exists = true; } catch (e) { /* new file */ }
-    if (exists && itemEditingId !== id && itemLastExportId !== id && !confirm(`${id}.c already exists in "${dir.name}". Replace it?`)) return;
+    const listed = itemList.some(it => it.id === id);
+    if ((exists || listed) && itemEditingId !== id && itemLastExportId !== id) {   // SAME NAME: show both, overwrite or rename
+      const pick = await dupAsk(id, exists ? dir : null, displayName, pArt, validAttrs);
+      if (pick === 'cancel') return;
+      if (pick === 'rename') {
+        const nn = (prompt('A new name for yours:', `${displayName} 2`) || '').trim();
+        if (!nn) return;
+        itemEl('itemDisplayName').value = nn;
+        if (!asNew) itemEditingId = null;
+        updateItemIdPreview();
+        return exportItemAsset(asNew);
+      }
+    }
     try {
       const writable = await (await dir.getFileHandle(`${id}.c`, { create: true })).createWritable();
       await writable.write(c);
@@ -14165,6 +14403,8 @@ const item_asset_t k_item_${id} = {
   // pressing New item gets its own file instead of replacing this one.
   if (asNew) itemEditingId = null;
   itemLastExportId = id;
+  itemExportCount++;   // (ADD FROM A SHEET: it went through)
+  igForget(id);        // (the grid reads it again)
   updateItemIdPreview();
   renderItemListBox();
 }
@@ -14186,19 +14426,19 @@ function blankTabState() {
   return {
     colorData: new Uint8ClampedArray(REAL_MAP_W * REAL_MAP_H * 3).fill(DEFAULT_BG[0]),
     hitboxData: new Uint8Array(REAL_MAP_W * REAL_MAP_H), layerData: new Uint8Array(REAL_MAP_W * REAL_MAP_H),
-    placedAssets: [], importedAnims: [], importedBreakables: [], teleporters: [], mapTrees: [], importedTiles: null, importedTriggers: null,
+    placedAssets: [], importedAnims: [], importedBreakables: [], teleporters: [], mapTrees: [], mapClimate: 0, importedTiles: null, importedTriggers: null,
     undoStack: [], redoStack: [], activeFileHandle: null, activeFileIsCloud: false, selectionRect: null,
     mapZoom, scrollLeft: 0, scrollTop: 0
   };
 }
 function captureTabState() {
   const wrap = document.getElementById('canvasWrap');
-  return { colorData, hitboxData, layerData, placedAssets, importedAnims, importedBreakables, teleporters, mapTrees, importedTiles, importedTriggers,
+  return { colorData, hitboxData, layerData, placedAssets, importedAnims, importedBreakables, teleporters, mapTrees, mapClimate, importedTiles, importedTriggers,
            undoStack, redoStack, activeFileHandle, activeFileIsCloud, selectionRect,
            mapZoom, scrollLeft: wrap.scrollLeft, scrollTop: wrap.scrollTop };
 }
 function applyTabState(st) {
-  ({ colorData, hitboxData, layerData, placedAssets, importedAnims, importedBreakables, teleporters, mapTrees = [], importedTiles, importedTriggers,
+  ({ colorData, hitboxData, layerData, placedAssets, importedAnims, importedBreakables, teleporters, mapTrees = [], mapClimate = 0, importedTiles, importedTriggers,
      undoStack, redoStack, activeFileHandle, activeFileIsCloud, selectionRect } = st);
 }
 function tabState(i) { return i === activeTabIdx ? captureTabState() : mapTabs[i].state; }
@@ -14233,6 +14473,7 @@ function enterTab(i) {
   const st = mapTabs[i].state;
   mapTabs[i].state = null;
   applyTabState(st);
+  syncClimateUi();
   if (st.mapZoom) setMapZoom(st.mapZoom);
   updateActiveFileUi();   // also redraws the tab bar
   redrawAll();
@@ -14749,7 +14990,7 @@ const cropEl = id => document.getElementById(id);
 
 // Images are { w, h, rgba: Uint8ClampedArray(w*h*4) }.
 function cropBlank() {
-  return { name: '', stageCount: 6, growDays: 4, regrows: false, regrowDays: 3, sellPrice: 10, seedPrice: 0, buyPrice: 20, quality: true, solid: false, extraChance: 0, extraMin: 2, extraMax: 3, seasons: 0,
+  return { name: '', stageCount: 6, growDays: 4, regrows: false, regrowDays: 3, sellPrice: 10, seedPrice: 0, buyPrice: 20, quality: true, solid: false, extraChance: 0, extraMin: 2, extraMax: 3, seasons: 0, climates: 0,
            stages: [], icon: null, seedIcon: null,
            sheet: null, sheetRects: {} };   // which sprite sheet its art came from, and where: { stages, icon, seedIcon } rects
 }
@@ -14874,6 +15115,7 @@ function cropRender() {
   cropEl('cropExtraMin').value = c.extraMin || 2;
   cropEl('cropExtraMax').value = c.extraMax || 3;
   seasonBoxesSet('cropSeason', c.seasons || 0);   // crops from before seasons: all year
+  climateBoxesSet('cropClimate', c.climates || 0);   // ...and before climates: any
   cropRenderInfo();
 
   const box = cropEl('cropStages');
@@ -14928,6 +15170,7 @@ function cropReadForm() {
   c.extraMin = cropClampInt(cropEl('cropExtraMin').value, 1, 99, 2);
   c.extraMax = cropClampInt(cropEl('cropExtraMax').value, 1, 99, 3);   // below min counts as min (cropExtraRange)
   c.seasons = seasonBoxesRead('cropSeason');
+  c.climates = climateBoxesRead('cropClimate');
   c.stages.length = Math.min(c.stages.length, c.stageCount);
 }
 
@@ -15311,20 +15554,13 @@ function cropRenderList() {
   const box = cropEl('cropListBox');
   box.innerHTML = '';
   if (!cropLib.length) { box.innerHTML = '<div class="animCap">No crops yet — press "Make new crop".</div>'; return; }
+  box.classList.add('igGrid');   // GRIDS, NOT LISTS: a tile per crop, its harvest's picture
   cropLib.forEach(c => {
-    const id = cropId(c), row = document.createElement('div');
-    row.className = 'itemListRow' + (id === cropEditingId ? ' editing' : '');
-    const label = document.createElement('span');
-    label.textContent = `${c.name} — ${id}.c · ${c.growDays} day${c.growDays === 1 ? '' : 's'}${c.regrows ? `, regrows ${c.regrowDays}` : ''}${c.extraChance ? `, ${c.extraChance}%: ${cropExtraRange(c).join('–')}` : ''}`;
-    label.title = label.textContent;
-    const price = document.createElement('span'); price.className = 'itemPrice'; price.textContent = c.sellPrice ? `$${c.sellPrice}` : '';
-    if (c.buyPrice) { price.textContent += ` · seeds $${c.buyPrice}`; price.title = 'Seed packet price in shops'; }
-    const edit = document.createElement('button'); edit.textContent = 'Edit';
-    edit.onclick = () => { if (cropConfirmDiscard()) { crop = cropCopy(c); cropEditingId = id; cropRender(); cropSetSheetMode(cropSheetMode); } };
-    const rm = document.createElement('button'); rm.textContent = 'Remove'; rm.title = 'Remove from this list (does not delete the .c file)';
-    rm.onclick = () => { cropLib = cropLib.filter(x => x !== c); cropLibSave(); cropRenderList(); };
-    row.append(label, price, edit, rm);
-    box.appendChild(row);
+    const id = cropId(c), tile = igTile(c.icon, c.name || id, c.sellPrice ? `$${c.sellPrice}` : '', id === cropEditingId);
+    tile.title = `${c.name} — ${id}.c · ${c.growDays} day${c.growDays === 1 ? '' : 's'}${c.regrows ? `, regrows ${c.regrowDays}` : ''}\nClick to edit it`;
+    tile.onclick = () => { if (cropConfirmDiscard()) { crop = cropCopy(c); cropEditingId = id; cropRender(); cropSetSheetMode(cropSheetMode); } };
+    igRemoveBtn(tile, 'Remove from this list (does not delete the .c file)', () => { cropLib = cropLib.filter(x => x !== c); cropLibSave(); cropRenderList(); });
+    box.appendChild(tile);
   });
 }
 function cropHasWork() { return crop && (crop.name.trim() || crop.stages.some(Boolean) || crop.icon || crop.seedIcon); }
@@ -15388,7 +15624,7 @@ function cropBuildC(c) {
   for (let s = 0; s < c.stageCount; s++) stagePx.set(cropPack(c.stages[s]), s * CROP_W * CROP_H);
   const meta = { name, stageCount: c.stageCount, growDays: c.growDays, regrows: c.regrows, regrowDays: c.regrowDays,
                  sellPrice: c.sellPrice, seedPrice: c.seedPrice, buyPrice: c.buyPrice, quality: c.quality, solid: c.solid !== false, extraChance: c.extraChance || 0, extraMin: cropExtraRange(c)[0], extraMax: cropExtraRange(c)[1],
-                 iconW: c.icon.w, iconH: c.icon.h, seedIconW: c.seedIcon.w, seedIconH: c.seedIcon.h, seasons: c.seasons || 0 };
+                 iconW: c.icon.w, iconH: c.icon.h, seedIconW: c.seedIcon.w, seedIconH: c.seedIcon.h, seasons: c.seasons || 0, climates: climateAttrValue(c.climates || 0) };
   const cropAttrs = [];
   if (c.sellPrice > 0) cropAttrs.push([ITEM_SELL_ATTR, c.sellPrice]);
   if (c.quality) cropAttrs.push([ITEM_QUALITY_ATTR, 1]);
@@ -15396,6 +15632,7 @@ function cropBuildC(c) {
   if (c.seedPrice > 0) seedAttrs.push([ITEM_SELL_ATTR, c.seedPrice]);
   if (c.buyPrice > 0) seedAttrs.push([ITEM_BUY_ATTR, c.buyPrice]);
   if ((c.seasons & 15) && (c.seasons & 15) !== 15) seedAttrs.push([ITEM_SEASON_ATTR, c.seasons & 15]);   // none / all = all year
+  if (climateAttrValue(c.climates || 0)) seedAttrs.push([ITEM_CLIMATE_ATTR, climateAttrValue(c.climates)]);   // none / all = any climate
   return `// AUTO-GENERATED by gameTools.html (Crops Editor) — "${name.replace(/\r?\n/g, ' ')}"
 // Lives in assets/crops/ as ${id}.c — the file name is the crop id, keep it.
 // One crop = the plant below + two items: "${id}" (the harvest) and "${id}_seeds" (what's planted).
@@ -15422,7 +15659,7 @@ const crop_def_t k_crop_${id} = {
 };
 
 ${cropItemBlock(id, name, c.icon, cropAttrs, `The harvest${c.sellPrice > 0 ? `: sells for ${c.sellPrice} (more at a better quality)` : ''}.`)}
-${cropItemBlock(`${id}_seeds`, seedName, c.seedIcon, seedAttrs, `The seed packet: hold it and tap a free tile to plant (${seasonMaskText(c.seasons)}).${c.buyPrice > 0 ? ` Shops sell it for ${c.buyPrice}.` : ''}`)}`;
+${cropItemBlock(`${id}_seeds`, seedName, c.seedIcon, seedAttrs, `The seed packet: hold it and tap a free tile to plant (${seasonMaskText(c.seasons)}; ${climateMaskText(c.climates || 0)}).${c.buyPrice > 0 ? ` Shops sell it for ${c.buyPrice}.` : ''}`)}`;
 }
 function cropSetStatus(t) { cropEl('cropExportStatus').textContent = t; }
 async function exportCrop() {
@@ -15505,6 +15742,7 @@ function closeCropEditor() {
 // ---- wiring ----
 (() => {
   seasonBoxes(cropEl('cropSeasons'), 'cropSeason', () => cropReadForm());
+  climateBoxes(cropEl('cropClimates'), 'cropClimate', () => cropReadForm());
   ['cropName', 'cropStageCount', 'cropGrowDays', 'cropRegrows', 'cropRegrowDays', 'cropSellPrice', 'cropSeedPrice', 'cropBuyPrice', 'cropQuality', 'cropSolid', 'cropExtraChance', 'cropExtraMin', 'cropExtraMax'].forEach(id => {
     const el = cropEl(id);
     el.addEventListener(el.tagName === 'SELECT' || el.type === 'checkbox' ? 'change' : 'input', () => {
@@ -15645,7 +15883,8 @@ let cfCat = '';         // items: the category chip that's on ('' = all)
 try { if (localStorage.getItem('gameTools.cfView') === 'cards') cfView = 'cards'; } catch (e) {}
 const cfEl = id => document.getElementById(id);
 // The Item Editor's categories (an item can be in more than one), from its attributes.
-const CF_CATS = [['tool', 'Tools'], ['place', 'Furniture & props'], ['fish', 'Fish'], ['craft', 'Crafted'], ['buy', 'In a shop'], ['sell', 'Sellable'], ['other', 'Other']];
+const CF_CATS = [['food', 'Food'], ['mineral', 'Minerals & geodes'], ['forage', 'Forage'], ['fish', 'Fish'], ['tool', 'Tools'], ['gear', 'Gear'], ['place', 'Furniture & props'],
+                 ['craft', 'Crafted'], ['buy', 'In a shop'], ['sell', 'Sellable'], ['other', 'Other']];
 function cfStatus(t) { cfEl('cfStatus').textContent = t; }
 function cfDir(allowPrompt, pickNew) { return cfKind === 'crop' ? getCropsDir(allowPrompt, pickNew) : getItemsDir(allowPrompt, pickNew); }
 
@@ -15749,7 +15988,11 @@ function cfItemEntry(id, file, text) {
   const others = p.attrs.filter(a => !itemOwnsAttr(a.name));
   if (others.length) bits.push(others.map(a => `${a.name} ${a.value}`).join(', '));
   const on = n => attr(n) && attr(n).value > 0, cats = [];
-  if (on(ITEM_TILLS_ATTR) || on(ITEM_WATERS_ATTR) || on(ITEM_ROD_ATTR) || ITEM_RANCH_ATTRS.some(([, at]) => on(at))) cats.push('tool');
+  if (on(ITEM_TILLS_ATTR) || on(ITEM_WATERS_ATTR) || on(ITEM_ROD_ATTR) || on(ITEM_TOOL_ATTR) || ITEM_RANCH_ATTRS.some(([, at]) => on(at))) cats.push('tool');
+  if (on('food')) cats.push('food');
+  if (on('mineral') || on('geode') || id === 'stone') cats.push('mineral');
+  if (on(ITEM_FORAGE_ATTR)) cats.push('forage');
+  if (on('gear')) cats.push('gear');
   if (on(ITEM_PROP_ATTR)) cats.push('place');
   if (on(ITEM_FISH_ATTR)) cats.push('fish');
   if (recipe.list.length) cats.push('craft');
@@ -15850,6 +16093,260 @@ function cfRender() {
 })();
 
 // ================================================================
+//  GRIDS, NOT LISTS — the Item Editor's item list is a grid of every item's
+//  picture (the items folder, read with the finder's own cfItemEntry(), in
+//  the background), with a search box and kind chips (Food, Minerals...);
+//  click one to edit it. The Crops Editor's list and the Fishing tab's are
+//  tiles too. "Find an item…" (Ctrl+O) is the same, full screen.
+// ================================================================
+// (var: renderItemListBox() runs while the page is still loading, before these lines)
+var igEntries = null;       // the items folder's entries (cfItemEntry), null = not read yet
+var igLoading = false, igCat = '';
+var itemExportCount = 0;    // every finished Export (the sheet flow checks it)
+
+function igTile(img, name, price, editing) {
+  const t = document.createElement('div');
+  t.className = 'igTile' + (editing ? ' editing' : '');
+  const cv = document.createElement('canvas');
+  cv.width = 40; cv.height = 40;
+  cropDrawImg(cv, img || null, img ? Math.max(1, Math.floor(Math.min(40 / img.w, 40 / img.h))) : 1, false);
+  const n = document.createElement('div'); n.className = 'igName'; n.textContent = name;
+  t.append(cv, n);
+  if (price) { const p = document.createElement('div'); p.className = 'igPrice'; p.textContent = price; t.appendChild(p); }
+  return t;
+}
+function igRemoveBtn(tile, title, fn) {
+  const x = document.createElement('button');
+  x.type = 'button'; x.className = 'igX'; x.textContent = '\u2715'; x.title = title;
+  x.onclick = e => { e.stopPropagation(); fn(); };
+  tile.appendChild(x);
+}
+function igForget(id) { if (igEntries) igEntries = igEntries.filter(e => e.id !== id); igLoadOne(id); }
+
+async function igLoad() {
+  if (igLoading) return;
+  const dir = await getItemsDir(false);
+  if (!dir) return;
+  igLoading = true;
+  const list = [];
+  try {
+    for await (const [file, handle] of dir.entries()) {
+      if (handle.kind !== 'file' || !/\.c$/i.test(file)) continue;
+      try { const e = cfItemEntry(file.slice(0, -2), file, await (await handle.getFile()).text()); if (!e.problem) list.push(e); } catch (err) { /* skipped */ }
+    }
+  } finally { igLoading = false; }
+  list.sort((a, b) => a.name.localeCompare(b.name));
+  igEntries = list;
+  renderItemListBox();
+}
+async function igLoadOne(id) {   // one item saved: read it back in
+  const dir = await getItemsDir(false);
+  if (!dir || !igEntries) return;
+  try {
+    const e = cfItemEntry(id, `${id}.c`, await (await (await dir.getFileHandle(`${id}.c`)).getFile()).text());
+    if (!e.problem) { igEntries = igEntries.filter(x => x.id !== id).concat([e]).sort((a, b) => a.name.localeCompare(b.name)); renderItemListBox(); }
+  } catch (err) { /* not there */ }
+}
+
+// The Item list card as a grid. false = no items folder to read (the caller shows the plain list).
+function igRender(box) {
+  if (!igEntries) { if (!igLoading) igLoad(); if (!igEntries) return false; }
+  const q = (itemEl('igSearch').value || '').trim().toLowerCase();
+  const chips = itemEl('igChips');
+  chips.innerHTML = '';
+  for (const [cat, label] of [['', 'All'], ...CF_CATS]) {
+    const n = cat ? igEntries.filter(e => (e.cats || []).includes(cat)).length : igEntries.length;
+    if (cat && !n) continue;
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = cat === igCat ? 'on' : ''; b.textContent = `${label} ${n}`;
+    b.onclick = () => { igCat = cat; renderItemListBox(); };
+    chips.appendChild(b);
+  }
+  box.classList.add('igGrid');
+  box.innerHTML = '';
+  const shown = igEntries.filter(e => (!q || e.name.toLowerCase().includes(q) || e.id.includes(q)) && (!igCat || (e.cats || []).includes(igCat)));
+  for (const e of shown) {
+    const t = igTile(e.art && e.art[0] && e.art[0].img, e.name, e.price, e.id === itemEditingId);
+    t.title = `${e.name} (${e.file})${e.info ? '\n' + e.info : ''}\nClick to edit it`;
+    t.onclick = () => e.open();
+    box.appendChild(t);
+  }
+  if (!shown.length) box.innerHTML = '<div class="animCap">Nothing matches.</div>';
+  return true;
+}
+itemEl('igSearch').addEventListener('input', () => renderItemListBox());
+itemEl('igSearch').addEventListener('keydown', e => {   // Enter: the first one shown
+  if (e.key !== 'Enter' || !igEntries) return;
+  const first = itemEl('itemListBox').querySelector('.igTile');
+  if (first) first.click();
+});
+
+// ================================================================
+//  SAME NAME — saving an item whose name (its file name) is taken by
+//  another item shows both side by side: overwrite it, or rename yours.
+// ================================================================
+function dupDraw(cv, img) {
+  cv.width = 80; cv.height = 80;
+  cropDrawImg(cv, img, img ? Math.max(1, Math.floor(Math.min(80 / img.w, 80 / img.h))) : 1, false);
+}
+function dupAttrsText(el, attrs) {
+  el.innerHTML = '';
+  if (!attrs.length) { el.textContent = '(no settings)'; return; }
+  for (const a of attrs) { const d = document.createElement('div'); d.textContent = `${a.name} ${a.value}`; el.appendChild(d); }
+}
+// 'overwrite' | 'rename' | 'cancel'
+async function dupAsk(id, dir, newName, art, newAttrs) {
+  const el = x => document.getElementById(x);
+  let old = null;
+  if (dir) { try { old = parseItemC(await (await (await dir.getFileHandle(`${id}.c`)).getFile()).text()); } catch (e) { old = null; } }
+  const listed = itemList.find(it => it.id === id);
+  el('dupTitle').textContent = `There's already an item called "${old && old.name || (listed && listed.name) || id}" (${id}.c)`;
+  dupDraw(el('dupOldArt'), old && old.passive ? cropUnpack(old.passive.pixels, old.passive.w, old.passive.h) : null);
+  el('dupOldName').textContent = old ? `${old.name || id} — stack ${old.maxStack}` : (listed ? listed.name : id);
+  dupAttrsText(el('dupOldAttrs'), old ? old.attrs : []);
+  const out = art && itemOutput(art), f = out && out.frames[0];
+  let img = null;
+  if (f) {
+    img = { w: out.w, h: out.h, rgba: new Uint8ClampedArray(out.w * out.h * 4) };
+    for (let i = 0; i < out.w * out.h; i++) { img.rgba[i * 4] = f.color[i * 3]; img.rgba[i * 4 + 1] = f.color[i * 3 + 1]; img.rgba[i * 4 + 2] = f.color[i * 3 + 2]; img.rgba[i * 4 + 3] = f.alpha[i]; }
+  }
+  dupDraw(el('dupNewArt'), img);
+  el('dupNewName').textContent = newName;
+  dupAttrsText(el('dupNewAttrs'), newAttrs);
+  el('dupWarn').textContent = dir && old ? '' : 'That one isn\'t in the items folder: another editor makes it (a crop\'s harvest or seeds, a tree\'s seed…). Two files with one id stop the build — rename yours.';
+  el('dupOverlay').classList.add('show');
+  return new Promise(res => {
+    const done = v => { el('dupOverlay').classList.remove('show'); res(v); };
+    el('dupOverwrite').onclick = () => done('overwrite');
+    el('dupRename').onclick = () => done('rename');
+    el('dupCancel').onclick = () => done('cancel');
+  });
+}
+
+// ================================================================
+//  ADD FROM A SHEET — "Add from a sheet…": load a sprite sheet once, then
+//  make an item of each picture on it in turn. The pictures are the sheet's
+//  cells (16, 24, 32 or 48 px); empty ones are skipped. The current one is
+//  put in as the Held art of a fresh item (the last one's settings kept, if
+//  "Keep settings"), the name box is ready to type in, and Save & next (or
+//  Enter in the name box) exports it — the same Export as always, the same
+//  same-name check — and moves on. Saved ones turn green on the sheet.
+// ================================================================
+var qa = null;   // { name, w, h, data (RGBA), size, cells: [{x, y}], at, saved: Set }
+
+function qaCells() {
+  const s = qa.size, out = [];
+  for (let y = 0; y + s <= qa.h; y += s)
+    for (let x = 0; x + s <= qa.w; x += s) {
+      let any = false;
+      for (let yy = 0; yy < s && !any; yy++) for (let xx = 0; xx < s && !any; xx++) any = qa.data[((y + yy) * qa.w + x + xx) * 4 + 3] >= 128;
+      if (any) out.push({ x, y });
+    }
+  return out;
+}
+function qaLoad(file) {
+  const img = new Image();
+  img.onload = () => {
+    const c = document.createElement('canvas');
+    c.width = img.width; c.height = img.height;
+    const g = c.getContext('2d');
+    g.drawImage(img, 0, 0);
+    URL.revokeObjectURL(img.src);
+    qa = { name: file.name.replace(/\.png$/i, ''), w: img.width, h: img.height, data: g.getImageData(0, 0, img.width, img.height).data, img: c,
+           size: +itemEl('qaSize').value, at: 0, saved: new Set() };
+    qa.cells = qaCells();
+    if (!qa.cells.length) { alert('Nothing on that sheet at this picture size.'); qa = null; return; }
+    itemEl('qaStrip').style.display = '';
+    qaGo(0, true);
+  };
+  img.onerror = () => { URL.revokeObjectURL(img.src); alert(`Couldn't read ${file.name} as an image.`); };
+  img.src = URL.createObjectURL(file);
+}
+function qaDraw() {
+  const z = Math.max(1, Math.min(4, Math.floor(480 / Math.max(qa.w, 1)))), cv = itemEl('qaSheet'), g = cv.getContext('2d'), s = qa.size;
+  cv.width = qa.w * z; cv.height = qa.h * z;
+  g.imageSmoothingEnabled = false;
+  g.fillStyle = '#151515'; g.fillRect(0, 0, cv.width, cv.height);
+  g.drawImage(qa.img, 0, 0, cv.width, cv.height);
+  qa.cells.forEach((c, k) => {
+    if (qa.saved.has(k)) { g.fillStyle = 'rgba(60,200,90,.35)'; g.fillRect(c.x * z, c.y * z, s * z, s * z); }
+  });
+  const c = qa.cells[qa.at];
+  g.strokeStyle = '#40c8ff'; g.lineWidth = 2;
+  g.strokeRect(c.x * z + 1, c.y * z + 1, s * z - 2, s * z - 2);
+  qa.zoom = z;
+  const cell = itemEl('qaCell'), cg = cell.getContext('2d');
+  cell.width = s; cell.height = s;
+  cg.clearRect(0, 0, s, s);
+  cg.drawImage(qa.img, c.x, c.y, s, s, 0, 0, s, s);
+  itemEl('qaInfo').innerHTML = `Picture <b>${qa.at + 1}</b> of ${qa.cells.length}<br>${qa.saved.size} saved` + (qa.saved.has(qa.at) ? '<br><span style="color:#6fd36f">this one is saved</span>' : '');
+  const wrap = itemEl('qaSheetWrap');   // keep the picked one in view
+  const top = c.y * z, left = c.x * z;
+  if (top < wrap.scrollTop || top + s * z > wrap.scrollTop + wrap.clientHeight) wrap.scrollTop = top - 20;
+  if (left < wrap.scrollLeft || left + s * z > wrap.scrollLeft + wrap.clientWidth) wrap.scrollLeft = left - 20;
+}
+// Picture k becomes the item being made.
+function qaGo(k, first) {
+  if (!qa) return;
+  qa.at = (k + qa.cells.length) % qa.cells.length;
+  const c = qa.cells[qa.at], s = qa.size;
+  const color = new Uint8ClampedArray(s * s * 3), alpha = new Uint8ClampedArray(s * s);
+  for (let y = 0; y < s; y++)
+    for (let x = 0; x < s; x++) {
+      const i = ((c.y + y) * qa.w + c.x + x) * 4, o = y * s + x;
+      color[o * 3] = qa.data[i]; color[o * 3 + 1] = qa.data[i + 1]; color[o * 3 + 2] = qa.data[i + 2];
+      alpha[o] = qa.data[i + 3] >= 128 ? 255 : 0;
+    }
+  if (first || !itemEl('qaKeep').checked) resetItemEditor(false);
+  itemArt.passive = makeItemArt(`${qa.name} #${qa.at + 1}`, s, s, color, alpha, 'passive');
+  itemArt.use = null;
+  itemTab = 'passive';
+  itemEditingId = null;
+  itemLastExportId = null;
+  itemEl('itemDisplayName').value = '';
+  updateItemIdPreview();
+  itemRefresh();
+  qaDraw();
+  const nm = itemEl('itemDisplayName');
+  nm.focus();
+  nm.scrollIntoView({ block: 'nearest' });
+}
+async function qaSaveNext() {
+  if (!qa) return;
+  if (!itemEl('itemDisplayName').value.trim()) { alert('Give it a name first (the name box at the top of the Item box).'); itemEl('itemDisplayName').focus(); return; }
+  const before = itemExportCount;
+  await exportItemAsset(false);
+  if (itemExportCount === before) return;   // it didn't save (cancelled, a problem)
+  qa.saved.add(qa.at);
+  let k = qa.at + 1;
+  while (k < qa.cells.length && qa.saved.has(k)) k++;
+  if (k >= qa.cells.length) { qaDraw(); setItemExportStatus(`Saved — that was the last picture on the sheet (${qa.saved.size} saved). "Done with this sheet" closes it.`); return; }
+  qaGo(k);
+}
+function qaClose() { qa = null; itemEl('qaStrip').style.display = 'none'; }
+(() => {
+  itemEl('qaFile').addEventListener('change', e => { const f = e.target.files[0]; e.target.value = ''; if (f) qaLoad(f); });
+  itemEl('qaPrev').onclick = () => qaGo(qa ? qa.at - 1 : 0);
+  itemEl('qaNext').onclick = () => qaGo(qa ? qa.at + 1 : 0);
+  itemEl('qaSave').onclick = qaSaveNext;
+  itemEl('qaClose').onclick = qaClose;
+  itemEl('qaSize').onchange = () => {
+    if (!qa) return;
+    qa.size = +itemEl('qaSize').value; qa.cells = qaCells(); qa.saved = new Set();
+    if (!qa.cells.length) { alert('Nothing on that sheet at this picture size.'); return; }
+    qaGo(0);
+  };
+  itemEl('qaSheet').addEventListener('click', e => {
+    if (!qa) return;
+    const r = e.target.getBoundingClientRect(), z = qa.zoom * (r.width / e.target.width);
+    const x = Math.floor((e.clientX - r.left) / z / qa.size) * qa.size, y = Math.floor((e.clientY - r.top) / z / qa.size) * qa.size;
+    const k = qa.cells.findIndex(c => c.x === x && c.y === y);
+    if (k >= 0) qaGo(k);
+  });
+  itemEl('itemDisplayName').addEventListener('keydown', e => { if (e.key === 'Enter' && qa) { e.preventDefault(); qaSaveNext(); } });
+})();
+
+// ================================================================
 //  UI SCALE — on a big screen the Crops / Item Editor (and the folder
 //  browser) grow to fill the width: CSS zoom on their panels. Canvases that
 //  take mouse positions convert by their on-screen size, so they still line up.
@@ -15867,14 +16364,24 @@ window.addEventListener('resize', () => {
 uiScaleApply();
 
 // ================================================================
-//  RESIZABLE BOXES — Crops and Item Editor: drag the bar between the two
-//  columns to change their widths, and the grip along the bottom of a box to
-//  change its height (a box with a data-grow element — the sprite sheet
-//  window, a list, the walkthrough — grows that instead of scrolling).
+//  RESIZABLE BOXES — every editor tab: drag the bar between the two columns
+//  to change their widths, the grip along the bottom of a box to change its
+//  height (a box with a data-grow element — the sprite sheet window, a list,
+//  the walkthrough — grows that instead of scrolling), and the grip on the
+//  panel's right edge to make the whole panel wider or narrower. Boxes a tab
+//  makes later (the Fishing tab's) get a grip as they appear.
 //  Double-click a bar or grip to put it back. Kept in localStorage.
 // ================================================================
 const LAYOUT_KEY = 'gameTools.layout';
-const LAYOUT_PANELS = ['cropEdPanel', 'itemPanel'];
+const LAYOUT_PANELS = ['cropEdPanel', 'itemPanel', 'bldEdPanel', 'aniEdPanel', 'treEdPanel', 'mchEdPanel', 'fbdEdPanel', 'fncEdPanel',
+                       'fshPanel', 'furPanel', 'nyPanel', 'wgPanel', 'shEdPanel'];
+// A panel's two columns: their box, and what its columns are when not dragged (left, right).
+const LAYOUT_COLS = [['.itemGrid', 'var(--leftW, minmax(280px, 330px))', 'minmax(0, 1fr)'], ['.aniMain', 'minmax(0, 1.3fr)', 'minmax(330px, 1fr)'],
+                     ['.fshCols', '300px', 'minmax(0, 1fr)']];
+function layoutCols(panel) {
+  for (const [sel, l, r] of LAYOUT_COLS) { const g = panel.querySelector(sel); if (g && g.children.length >= 2) return { grid: g, l, r }; }
+  return null;
+}
 let layout = {};
 try { layout = JSON.parse(localStorage.getItem(LAYOUT_KEY) || '{}') || {}; } catch (e) { layout = {}; }
 function layoutSave() { try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(layout)); } catch (e) { /* this session only */ } }
@@ -15903,9 +16410,16 @@ function layoutBoxKey(panelId, card, i) {
   return `${panelId}.box.${t ? t.textContent.trim() : i}`;
 }
 function layoutApply(panelId) {
-  const panel = document.getElementById(panelId), grid = panel.querySelector('.itemGrid');
-  const w = layout[`${panelId}.left`];
-  grid.style.setProperty('--leftW', w ? `${w}px` : '');
+  const panel = document.getElementById(panelId);
+  if (!panel) return;
+  const cols = layoutCols(panel);
+  const w = layout[`${panelId}.left`], pw = layout[`${panelId}.width`];
+  panel.style.width = pw ? `${pw}px` : '';
+  panel.style.maxWidth = pw ? 'none' : '';
+  if (cols) {
+    if (cols.grid.classList.contains('itemGrid') && (panelId === 'itemPanel' || panelId === 'cropEdPanel')) cols.grid.style.setProperty('--leftW', w ? `${w}px` : '');
+    else { cols.grid.style.gridTemplateColumns = `${w ? `${w}px` : cols.l} 14px ${cols.r}`; cols.grid.style.columnGap = '0'; }
+  }
   panel.querySelectorAll('.itemCard').forEach((card, i) => {
     const h = layout[layoutBoxKey(panelId, card, i)], el = card.dataset.grow ? document.getElementById(card.dataset.grow) : card;
     el.style.height = h ? `${h}px` : '';
@@ -15915,24 +16429,43 @@ function layoutApply(panelId) {
 }
 
 function layoutSetup(panelId) {
-  const panel = document.getElementById(panelId), grid = panel.querySelector('.itemGrid'), left = grid.children[0];
-  // the column bar
-  const bar = document.createElement('div');
-  bar.className = 'gridSplit';
-  bar.title = 'Drag to change the columns\' widths · double-click to put it back';
-  left.after(bar);
-  let w0 = 0;
-  layoutDrag(bar, panelId,
-    () => { w0 = left.getBoundingClientRect().width / layoutZoom(panelId); },
-    dx => {
-      const total = grid.getBoundingClientRect().width / layoutZoom(panelId);
-      layout[`${panelId}.left`] = Math.round(Math.max(220, Math.min(total - 320, w0 + dx)));
-      layoutApply(panelId);
-    },
+  const panel = document.getElementById(panelId);
+  if (!panel) return;
+  const cols = layoutCols(panel);
+  if (cols) {   // the column bar
+    const grid = cols.grid, left = grid.children[0];
+    const bar = document.createElement('div');
+    bar.className = 'gridSplit';
+    bar.title = 'Drag to change the columns\' widths · double-click to put it back';
+    left.after(bar);
+    let w0 = 0;
+    layoutDrag(bar, panelId,
+      () => { w0 = left.getBoundingClientRect().width / layoutZoom(panelId); },
+      dx => {
+        const total = grid.getBoundingClientRect().width / layoutZoom(panelId);
+        layout[`${panelId}.left`] = Math.round(Math.max(200, Math.min(total - 260, w0 + dx)));
+        layoutApply(panelId);
+      },
+      layoutSave);
+    bar.addEventListener('dblclick', () => { delete layout[`${panelId}.left`]; layoutSave(); layoutApply(panelId); });
+  }
+  // the panel's own width
+  if (getComputedStyle(panel).position === 'static') panel.style.position = 'relative';
+  const pg = document.createElement('div');
+  pg.className = 'panelGrip';
+  pg.title = 'Drag to make this whole panel wider or narrower · double-click to put it back';
+  panel.appendChild(pg);
+  let pw0 = 0;
+  layoutDrag(pg, panelId,
+    () => { pw0 = panel.getBoundingClientRect().width / layoutZoom(panelId); },
+    dx => { layout[`${panelId}.width`] = Math.round(Math.max(480, Math.min(4000, pw0 + 2 * dx))); layoutApply(panelId); },   // (centred: it grows both ways)
     layoutSave);
-  bar.addEventListener('dblclick', () => { delete layout[`${panelId}.left`]; layoutSave(); layoutApply(panelId); });
-  // a grip on every box
-  panel.querySelectorAll('.itemCard').forEach((card, i) => {
+  pg.addEventListener('dblclick', () => { delete layout[`${panelId}.width`]; layoutSave(); layoutApply(panelId); });
+  // a grip on every box — and on the ones the tab adds later
+  const gripped = new WeakSet();
+  const grip1 = (card, i) => {
+    if (gripped.has(card)) return;
+    gripped.add(card);
     const key = layoutBoxKey(panelId, card, i), grip = document.createElement('div');
     grip.className = 'cardGrip';
     grip.title = 'Drag to change this box\'s height · double-click to put it back';
@@ -15944,7 +16477,10 @@ function layoutSetup(panelId) {
       (dx, dy) => { layout[key] = Math.round(Math.max(card.dataset.grow ? 48 : 60, Math.min(4000, h0 + dy))); layoutApply(panelId); },
       layoutSave);
     grip.addEventListener('dblclick', () => { delete layout[key]; layoutSave(); layoutApply(panelId); });
-  });
+  };
+  panel.querySelectorAll('.itemCard').forEach(grip1);
+  new MutationObserver(() => panel.querySelectorAll('.itemCard').forEach((c, i) => { if (!gripped.has(c)) { grip1(c, i); layoutApply(panelId); } }))
+    .observe(panel, { childList: true, subtree: true });
   layoutApply(panelId);
 }
 function layoutReset(panelId) {
@@ -19351,7 +19887,7 @@ let tre = null, treEditingId = null, treesDirHandle = null, treTarget = 'stage_0
 function treBlank() {
   return { name: '', seedName: '', fruit: false, growDays: 10, hits: 10, bushHits: 2, stumpHits: 5, woodMin: 25, woodMax: 35, seedMax: 3, bushWood: 5,
            stumpWoodMin: 3, stumpWoodMax: 5, shakeSeedMax: 2, mossPct: 5, wood: 'wood', chopTool: 'axe', fruitItem: '', fruitSeasons: 1, fruitDays: 3, fruitMax: 3,
-           sfxHit: '', sfxFall: '', seedPrice: 5, buyPrice: 0, art: {}, seedIcon: null };
+           sfxHit: '', sfxFall: '', seedPrice: 5, buyPrice: 0, climates: 0, art: {}, seedIcon: null };
 }
 function treId(t) { return sanitizeItemId(t.name || 'tree').slice(0, BRK_ITEM_ID_MAX - 5); }   // + "_seed" still fits
 function treStatus(t, bad) { const e = treEl('treExportStatus'); e.textContent = t || ''; e.className = 'animCap' + (bad ? ' itemMsg bad' : ''); }
@@ -19481,6 +20017,7 @@ function treRender() {
   TRE_NUMS.forEach(([el, k]) => { treEl(el).value = tre[k]; });
   TRE_TEXTS.forEach(([el, k]) => { treEl(el).value = tre[k]; });
   treEl('treFruitSeason').value = String([1, 2, 4, 8].includes(tre.fruitSeasons) ? tre.fruitSeasons : 1);
+  climateBoxesSet('treClimate', tre.climates || 0);
   treEl('treFruitCard').style.display = tre.fruit ? '' : 'none';
   document.querySelectorAll('.treWildOnly').forEach(e => { e.style.display = tre.fruit ? 'none' : ''; });
   treEl('trePrevMoss').disabled = tre.fruit;
@@ -19497,6 +20034,7 @@ function treReadForm() {
   TRE_NUMS.forEach(([el, k, lo, hi]) => { tre[k] = aniClampInt(treEl(el).value, lo, hi, tre[k]); });
   TRE_TEXTS.forEach(([el, k]) => { tre[k] = treEl(el).value.trim(); });
   tre.fruitSeasons = +treEl('treFruitSeason').value || 1;
+  tre.climates = climateBoxesRead('treClimate');
 }
 
 // ---- putting art in a box ----
@@ -19677,6 +20215,7 @@ function treBuildC(t) {
                  fruitDays: t.fruitDays, fruitMax: t.fruitMax, sfxHit: t.sfxHit, sfxFall: t.sfxFall, seedPrice: t.seedPrice, buyPrice: t.buyPrice,
                  growDays: t.growDays, hits: t.hits, bushHits: t.bushHits, stumpHits: t.stumpHits, woodMin: t.woodMin, woodMax: t.woodMax, seedMax: t.fruit ? 0 : t.seedMax,
                  bushWood: t.bushWood, stumpWoodMin: t.stumpWoodMin, stumpWoodMax: t.stumpWoodMax, shakeSeedMax: t.fruit ? 0 : t.shakeSeedMax, mossPct: t.fruit ? 0 : t.mossPct,
+                 climates: climateAttrValue(t.climates || 0),
                  art: Object.fromEntries(keys.map(k => [k, [art[k].w, art[k].h]])), seedIcon: [seedIcon.w, seedIcon.h] };
   const ref = k => `{ ${art[k].w}, ${art[k].h}, k_tree_${id}_${k} }`, str = v => v ? `"${cString(v)}"` : 'NULL';
   const stageRows = [0, 1, 2, 3].map(s => {
@@ -19690,6 +20229,7 @@ function treBuildC(t) {
   const seedAttrs = [];
   if (t.seedPrice > 0) seedAttrs.push([ITEM_SELL_ATTR, t.seedPrice]);
   if (t.buyPrice > 0) seedAttrs.push([ITEM_BUY_ATTR, t.buyPrice], ['shop', 1]);
+  if (climateAttrValue(t.climates || 0)) seedAttrs.push([ITEM_CLIMATE_ATTR, climateAttrValue(t.climates)]);   // (main.c CLIMATE; none = any)
   const seedPx = cropPack(seedIcon), days = t.growDays;
   let summary = `// Grown after ${days} game day${days === 1 ? '' : 's'}. Felled: ${t.woodMin}-${t.woodMax} ${t.wood}, 0-${meta.seedMax} seeds (${t.hits} ${t.chopTool} hits).`;
   if (t.fruit) summary += ` Fruit: ${t.fruitItem} every ${t.fruitDays} days.`;
@@ -19836,6 +20376,7 @@ function closeTreeEditor() { treEl('treEdOverlay').classList.remove('show'); }
     treRender();
   });
   [...TRE_NUMS.map(n => n[0]), ...TRE_TEXTS.map(n => n[0]), 'treFruitSeason'].forEach(el => treEl(el).addEventListener('change', () => { treReadForm(); treRenderPreview(); }));
+  climateBoxes(treEl('treClimates'), 'treClimate', () => treReadForm());
   ['trePrevSeason', 'trePrevStage', 'trePrevMoss', 'trePrevFruit'].forEach(el => treEl(el).addEventListener('input', treRenderPreview));
   treEl('treNewBtn').onclick = () => {
     if (tre && (tre.name || Object.keys(tre.art).length) && !confirm('Start a new tree? Anything not saved is lost.')) return;
@@ -21908,7 +22449,7 @@ const FSH_LEVEL_XP = [100, 380, 770, 1300, 2150, 3300, 4800, 6900, 10000, 15000]
 
 let fshEntries = [];        // every item in assets/items/: { id, text, p (parseItemC), av {name: value}, canvas }
 let fshFilter = 'fish', fshSelId = null, fshDraft = null, fshCfg = null, fshMapNames = [];
-let fshOdds = { map: '', water: 1, season: 0, day: 0, hour: 12, rain: false, depth: 2, level: 0, dayLuck: 0, rod: '', bait: '', tackle1: '', tackle2: '' };
+let fshOdds = { map: '', water: 1, climate: 0, season: 0, day: 0, hour: 12, rain: false, depth: 2, level: 0, dayLuck: 0, rod: '', bait: '', tackle1: '', tackle2: '' };
 const fshEl = id => document.getElementById(id);
 const fshEsc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
@@ -22085,31 +22626,32 @@ function fshSelectEl(label, attr, def, options, title, after) {
   l.append(label + ' ', s);
   return l;
 }
-function fshBits(attr, names, title) {
+// zero: the bits 0 (no attribute) stands for — all of them, unless said (climates: the mild five).
+function fshBits(attr, names, title, zero) {
   const wrap = document.createElement('div');
   wrap.className = 'fshToggles';
   wrap.title = title || '';
-  const all = (1 << names.length) - 1;
+  const all = (1 << names.length) - 1, none = zero === undefined ? all : zero;
   const draw = () => {
     wrap.innerHTML = '';
     const v = fshGet(attr, 0);
     names.forEach((n, k) => {
       const b = document.createElement('button');
       b.type = 'button'; b.textContent = n;
-      const on = v === 0 || (v >> k) & 1;
+      const on = ((v || none) >> k) & 1;
       b.classList.toggle('on', !!on);
       b.onclick = () => {
-        let cur = fshGet(attr, 0) || all;
+        let cur = fshGet(attr, 0) || none;
         cur ^= 1 << k;
-        if (!cur) cur = 1 << k;   // never none: that's "all"
-        fshSet(attr, cur === all ? 0 : cur, 0);
+        if (!cur) cur = 1 << k;   // never none: that's the default
+        fshSet(attr, cur === none ? 0 : cur, 0);
         draw(); fshRenderOdds();
       };
       wrap.appendChild(b);
     });
     const hint = document.createElement('span');
     hint.className = 'fshNote';
-    hint.textContent = v === 0 ? ' (any)' : '';
+    hint.textContent = v === 0 ? (none === all ? ' (any)' : ' (the usual)') : '';
     wrap.appendChild(hint);
   };
   draw();
@@ -22344,6 +22886,7 @@ function fshRenderForm() {
     c.appendChild(fshLine('Days', fshBits('fish_days', FSH_DAYS)));
     c.appendChild(fshRow(fshSelectEl('Weather', 'fish_weather', 0, [[0, 'any'], [1, 'rain only'], [2, 'dry only']])));
     c.appendChild(fshLine('Water', fshWaterBits('fish_water')));
+    c.appendChild(fshLine('Climate', fshBits('climate', CLIMATES, 'The map climates it bites in (each map has one — the Map Editor\'s Climate). The usual: Normal to Lush — Volcanic and Glacial only have fish lit for them. Shared with its crab pot climates.', CLIMATE_MILD)));
     c.appendChild(fshLine('Only on maps', fshMaps('fish')));
     const once = document.createElement('label'); once.className = 'fshField'; once.title = 'A legend: once caught, it never bites again in that save';
     const oc = document.createElement('input'); oc.type = 'checkbox'; oc.checked = fshGet('fish_once', 0) > 0; oc.onchange = () => { fshSet('fish_once', oc.checked ? 1 : 0, 0); fshRenderOdds(); };
@@ -22364,6 +22907,7 @@ function fshRenderForm() {
     c.appendChild(fshLine('Seasons', fshBits('pot_seasons', FSH_SEASONS)));
     c.appendChild(fshRow(fshSelectEl('Weather', 'pot_weather', 0, [[0, 'any'], [1, 'rain only'], [2, 'dry only']])));
     c.appendChild(fshLine('Water', fshWaterBits('pot_water')));
+    if (!R.has('fish') && !R.has('junk')) c.appendChild(fshLine('Climate', fshBits('climate', CLIMATES, 'The map climates a pot catches it in. The usual: Normal to Lush.', CLIMATE_MILD)));
     c.appendChild(fshLine('Only on maps', fshMaps('pot')));
     form.appendChild(c);
   }
@@ -22521,6 +23065,8 @@ function fshCondOk(av, pre, c) {
   if (c.water === 8 && !(wa & 8)) return false;   // lava: only what says it lives there (main.c fish_cond_ok)
   if (c.depth < g('depth', 0)) return false;
   if (c.level < g('level', 0)) return false;
+  const cl = (av.climate || CLIMATE_MILD) & CLIMATE_ALL;   // main.c CLIMATE: "climate", for fish and pot catches alike (none = the mild five)
+  if (c.climate !== undefined && !((cl >> c.climate) & 1)) return false;
   const maps = Object.keys(av).filter(k => k.startsWith(pre + '_map:') && av[k] > 0).map(k => k.slice(pre.length + 5));
   if (maps.length && !maps.includes(c.map)) return false;
   return true;
@@ -22580,7 +23126,7 @@ function fshRenderOdds() {
       l.append(label + ' ', el);
       return l;
     };
-    form.append(mk('Map', 'map'), mk('Water', 'water', FSH_WATERS.map(w => [w.bit, w.name])), mk('Season', 'season', FSH_SEASONS.map((s, i) => [i, s])),
+    form.append(mk('Map', 'map'), mk('Water', 'water', FSH_WATERS.map(w => [w.bit, w.name])), mk('Climate', 'climate', CLIMATES.map((s, i) => [i, s])), mk('Season', 'season', FSH_SEASONS.map((s, i) => [i, s])),
                 mk('Day', 'day', FSH_DAYS.map((s, i) => [i, s])), mk('Hour', 'hour', Array.from({ length: 24 }, (_, h) => [h, `${h}:00`])),
                 mk('Weather', 'rain', [[0, 'dry'], [1, 'rain']]), mk('Bobber out', 'depth', [[1, '1 tile'], [2, '2 tiles'], [3, '3 tiles']]),
                 mk('Fishing level', 'level', Array.from({ length: 11 }, (_, i) => [i, String(i)])),
@@ -22600,7 +23146,7 @@ function fshRenderOdds() {
   dl.innerHTML = ''; fshMapNames.forEach(m => dl.appendChild(new Option(m)));
   // the sums
   const fx = fshFx(o.rod, o.bait, o.tackle1, o.tackle2, +o.dayLuck, +o.level);
-  const c = { hour: +o.hour, day: +o.day, season: +o.season, rain: !!+o.rain, water: +o.water, depth: +o.depth, level: +o.level, magic: fx.on.magic, map: o.map || '' };
+  const c = { hour: +o.hour, day: +o.day, season: +o.season, rain: !!+o.rain, water: +o.water, climate: +o.climate, depth: +o.depth, level: +o.level, magic: fx.on.magic, map: o.map || '' };
   const avOf = e => fshDraft && fshDraft.id === e.id ? { ...Object.fromEntries(fshDraft.keep.map(a => [a.name, a.value])), ...fshDraft.a } : e.av;
   const pool = (name, cc, luck, rare) => {
     const rows = [];

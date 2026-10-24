@@ -57,6 +57,9 @@ bool     bed_open(void);          // "Go to bed?" — sleep until the next morni
 void     trough_tapped(int tx, int ty);   // a barn's trough: fill it with the held hay (FARM in main.c)
 bool     sell_menu_open(void);    // the inventory as a SELL screen
 bool     market_board_open(void); // today's demand for every market type, the photo requests, the capture book (MARKET BOARD in main.c)
+void     blacksmith_tapped(void); // cracks the held geode open for a random mineral (GEODES in main.c)
+bool     kitchen_tapped(void);    // the kitchen: cook any food (KITCHEN in main.c)
+void     museum_shelf_tapped(int x, int y, int w, int h);   // a museum shelf: donate onto it, or what's on it (MUSEUM in main.c)
 uint32_t money_get(void);
 void     money_add(int32_t amount);
 bool     money_spend(uint32_t amount);

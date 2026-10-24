@@ -39,6 +39,7 @@ static const item_attr_t k_hairy_frogfish_attrs[] = {
     { "fish_tier", 4 },
     { "mut", 200 },
     { "fish_seasons", 4 },
+    { "climate", 18 },
 };
 
 const item_asset_t k_item_hairy_frogfish = {
@@ -48,5 +49,5 @@ const item_asset_t k_item_hairy_frogfish = {
     .passive = { .w=16, .h=16, .frame_count=1, .interval_ms=150, .loop_count=-1, .pixels=k_hairy_frogfish_passive_pixels },
     .use = { .frame_count = 0 },
     .attrs = k_hairy_frogfish_attrs,
-    .attr_count = 10,
+    .attr_count = 11,
 };

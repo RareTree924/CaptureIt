@@ -3,7 +3,7 @@
 // One tree = the tree below + its seed item "fiddlehead_tree_seed" ("Fiddlehead Seed", what's planted).
 // Grown after 10 game days. Felled: 25-35 wood, 0-3 seeds (10 axe hits).
 // Everything here is const: it stays in flash (no RAM). RGB565, 0x0000 = see-through.
-// TREES-EDITOR {"name":"Fiddlehead Tree","seedName":"Fiddlehead Seed","fruit":false,"wood":"wood","chopTool":"axe","fruitItem":"","fruitSeasons":0,"fruitDays":3,"fruitMax":3,"sfxHit":"","sfxFall":"","seedPrice":10,"buyPrice":0,"growDays":10,"hits":10,"bushHits":2,"stumpHits":5,"woodMin":25,"woodMax":35,"seedMax":3,"bushWood":5,"stumpWoodMin":3,"stumpWoodMax":5,"shakeSeedMax":2,"mossPct":5,"art":{"grown_0":[48,80],"grown_2":[48,80],"grown_3":[48,80],"leaf_0":[16,16],"leaf_2":[16,16],"leaf_3":[16,16],"log_0":[16,16],"log_2":[16,16],"log_3":[16,16],"stage_0_0":[16,16],"stage_0_1":[16,16],"stage_0_2":[16,16],"stage_0_3":[16,32],"stage_2_0":[16,16],"stage_2_1":[16,16],"stage_2_2":[16,16],"stage_2_3":[16,32],"stage_3_0":[16,16],"stage_3_1":[16,16],"stage_3_2":[16,16],"stage_3_3":[16,32],"stump_0":[16,22],"stump_2":[16,22],"stump_3":[16,23]},"seedIcon":[16,16]}
+// TREES-EDITOR {"name":"Fiddlehead Tree","seedName":"Fiddlehead Seed","fruit":false,"wood":"wood","chopTool":"axe","fruitItem":"","fruitSeasons":0,"fruitDays":3,"fruitMax":3,"sfxHit":"","sfxFall":"","seedPrice":10,"buyPrice":0,"growDays":10,"hits":10,"bushHits":2,"stumpHits":5,"woodMin":25,"woodMax":35,"seedMax":3,"bushWood":5,"stumpWoodMin":3,"stumpWoodMax":5,"shakeSeedMax":2,"mossPct":5,"climates":17,"art":{"grown_0":[48,80],"grown_2":[48,80],"grown_3":[48,80],"leaf_0":[16,16],"leaf_2":[16,16],"leaf_3":[16,16],"log_0":[16,16],"log_2":[16,16],"log_3":[16,16],"stage_0_0":[16,16],"stage_0_1":[16,16],"stage_0_2":[16,16],"stage_0_3":[16,32],"stage_2_0":[16,16],"stage_2_1":[16,16],"stage_2_2":[16,16],"stage_2_3":[16,32],"stage_3_0":[16,16],"stage_3_1":[16,16],"stage_3_2":[16,16],"stage_3_3":[16,32],"stump_0":[16,22],"stump_2":[16,22],"stump_3":[16,23]},"seedIcon":[16,16]}
 #include "items.h"
 #include "trees.h"
 
@@ -1615,6 +1615,7 @@ static const uint16_t k_fiddlehead_tree_seed_icon_pixels[256] = {
 };
 static const item_attr_t k_fiddlehead_tree_seed_attrs[] = {
     { "sellable", 10 },
+    { "climate", 17 },
 };
 const item_asset_t k_item_fiddlehead_tree_seed = {
     .id = "fiddlehead_tree_seed",
@@ -1623,5 +1624,5 @@ const item_asset_t k_item_fiddlehead_tree_seed = {
     .passive = { .w=16, .h=16, .frame_count=1, .interval_ms=150, .loop_count=-1, .pixels=k_fiddlehead_tree_seed_icon_pixels },
     .use = { .frame_count = 0 },
     .attrs = k_fiddlehead_tree_seed_attrs,
-    .attr_count = 1,
+    .attr_count = 2,
 };

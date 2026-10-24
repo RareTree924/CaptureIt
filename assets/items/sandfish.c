@@ -39,6 +39,7 @@ static const item_attr_t k_sandfish_attrs[] = {
     { "fish_max", 25 },
     { "fish_tier", 2 },
     { "fish_map:desert", 1 },
+    { "climate", 10 },
 };
 
 const item_asset_t k_item_sandfish = {
@@ -48,5 +49,5 @@ const item_asset_t k_item_sandfish = {
     .passive = { .w=16, .h=16, .frame_count=1, .interval_ms=150, .loop_count=-1, .pixels=k_sandfish_passive_pixels },
     .use = { .frame_count = 0 },
     .attrs = k_sandfish_attrs,
-    .attr_count = 9,
+    .attr_count = 10,
 };

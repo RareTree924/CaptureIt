@@ -3,7 +3,7 @@
 // One tree = the tree below + its seed item "mystic_tree_seed" ("Mystic Seed", what's planted).
 // Grown after 10 game days. Felled: 25-35 wood, 0-3 seeds (10 axe hits).
 // Everything here is const: it stays in flash (no RAM). RGB565, 0x0000 = see-through.
-// TREES-EDITOR {"name":"Mystic Tree","seedName":"Mystic Seed","fruit":false,"wood":"wood","chopTool":"axe","fruitItem":"","fruitSeasons":0,"fruitDays":3,"fruitMax":3,"sfxHit":"","sfxFall":"","seedPrice":50,"buyPrice":0,"growDays":10,"hits":10,"bushHits":2,"stumpHits":5,"woodMin":25,"woodMax":35,"seedMax":3,"bushWood":5,"stumpWoodMin":3,"stumpWoodMax":5,"shakeSeedMax":2,"mossPct":5,"art":{"grown_0":[48,84],"leaf_0":[16,16],"log_0":[16,16],"stage_0_0":[16,16],"stage_0_1":[16,16],"stage_0_2":[16,16],"stage_0_3":[16,32],"stump_0":[16,20]},"seedIcon":[16,16]}
+// TREES-EDITOR {"name":"Mystic Tree","seedName":"Mystic Seed","fruit":false,"wood":"wood","chopTool":"axe","fruitItem":"","fruitSeasons":0,"fruitDays":3,"fruitMax":3,"sfxHit":"","sfxFall":"","seedPrice":50,"buyPrice":0,"growDays":10,"hits":10,"bushHits":2,"stumpHits":5,"woodMin":25,"woodMax":35,"seedMax":3,"bushWood":5,"stumpWoodMin":3,"stumpWoodMax":5,"shakeSeedMax":2,"mossPct":5,"climates":0,"art":{"grown_0":[48,84],"leaf_0":[16,16],"log_0":[16,16],"stage_0_0":[16,16],"stage_0_1":[16,16],"stage_0_2":[16,16],"stage_0_3":[16,32],"stump_0":[16,20]},"seedIcon":[16,16]}
 #include "items.h"
 #include "trees.h"
 

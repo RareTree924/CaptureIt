@@ -39,6 +39,7 @@ static const item_attr_t k_cherry_barb_attrs[] = {
     { "fish_min", 1 },
     { "fish_max", 2 },
     { "fish_seasons", 3 },
+    { "climate", 18 },
 };
 
 const item_asset_t k_item_cherry_barb = {
@@ -48,5 +49,5 @@ const item_asset_t k_item_cherry_barb = {
     .passive = { .w=16, .h=16, .frame_count=1, .interval_ms=150, .loop_count=-1, .pixels=k_cherry_barb_passive_pixels },
     .use = { .frame_count = 0 },
     .attrs = k_cherry_barb_attrs,
-    .attr_count = 10,
+    .attr_count = 11,
 };

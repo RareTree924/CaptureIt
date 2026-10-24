@@ -43,6 +43,7 @@ static const item_attr_t k_scorpion_carp_attrs[] = {
     { "fish_map:desert", 1 },
     { "fish_trait", 512 },
     { "mut", 150 },
+    { "climate", 10 },
 };
 
 const item_asset_t k_item_scorpion_carp = {
@@ -52,5 +53,5 @@ const item_asset_t k_item_scorpion_carp = {
     .passive = { .w=16, .h=16, .frame_count=1, .interval_ms=150, .loop_count=-1, .pixels=k_scorpion_carp_passive_pixels },
     .use = { .frame_count = 0 },
     .attrs = k_scorpion_carp_attrs,
-    .attr_count = 13,
+    .attr_count = 14,
 };

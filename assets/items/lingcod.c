@@ -42,6 +42,7 @@ static const item_attr_t k_lingcod_attrs[] = {
     { "fish_tier", 3 },
     { "fish_trait", 128 },
     { "mut", 150 },
+    { "climate", 5 },
 };
 
 const item_asset_t k_item_lingcod = {
@@ -51,5 +52,5 @@ const item_asset_t k_item_lingcod = {
     .passive = { .w=16, .h=16, .frame_count=1, .interval_ms=150, .loop_count=-1, .pixels=k_lingcod_passive_pixels },
     .use = { .frame_count = 0 },
     .attrs = k_lingcod_attrs,
-    .attr_count = 11,
+    .attr_count = 12,
 };

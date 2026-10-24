@@ -165,6 +165,7 @@ static const item_attr_t k_axe_attrs[] = {
     { "mut", 0 },
     { "tool", 1 },
     { "tool_sfx:hoeHit", 1 },
+    { "energy", 2 },
 };
 
 const item_asset_t k_item_axe = {
@@ -174,5 +175,5 @@ const item_asset_t k_item_axe = {
     .passive = { .w=16, .h=16, .frame_count=1, .interval_ms=150, .loop_count=-1, .pixels=k_axe_passive_pixels },
     .use = { .w=16, .h=32, .frame_count=3, .interval_ms=500, .loop_count=0, .pixels=k_axe_use_pixels },
     .attrs = k_axe_attrs,
-    .attr_count = 3,
+    .attr_count = 4,
 };

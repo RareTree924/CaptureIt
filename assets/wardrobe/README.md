@@ -17,6 +17,7 @@ Transparent (or pure black) pixels are see-through.
 | `hair/` | 16x32 | 16 x 96 (or 128) | down, right, up (and left; without it, left is right mirrored). Drawn on the body. |
 | `accessories/` | 16x16 | 16 x 32 (or 16) | down, right (left: mirrored). None from behind. Drawn at (0, 2). |
 | `hats/` | 20x20 | 20 x 80 | down, right, left, up. Drawn at (-2, -4): a brim may stick out of the body's 16 px. |
+| `gear/` | 20x36 | 80 x 144 | Climate gear, worn by the player only (main.c GEAR): named after its item (`thermal_jacket.png`). A whole composed frame a cell — 4 columns = the walking frames, rows down, right, left, up — drawn at (0, 0) over the outfit, in place of its hat / shirt / pants (boots go over the pants); a jacket's colour goes on the sleeves. Never in Customize or on shoppers. `tools/make_gear.py` drew the first ones. |
 
 Everything above the waist moves with the frame's head: each body frame's "bob" is how much lower
 its head is than a Stardew body's (whose head starts at row 4).

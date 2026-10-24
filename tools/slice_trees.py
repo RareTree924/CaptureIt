@@ -68,6 +68,12 @@ FRUIT = [
     ('mango_tree',       'Mango Tree',       8, 'mango',       'Mango',       130, 2, 0,    1),
 ]
 TYPE_ROUND, TYPE_FOOD = 11, 32   # pipeline_msgs.h CAM_TYPES
+# Where each tree grows: the seed's "climate" bits (main.c CLIMATE: 1 normal, 2 hot, 4 cold, 8 dry, 16 lush; 0 = any)
+_N, _H, _C, _D, _L = 1, 2, 4, 8, 16
+TREE_CLIMATES = {'oak_tree': _N | _C | _L, 'maple_tree': _N | _C, 'pine_tree': _N | _C | _D, 'mahogany_tree': _H | _L, 'vine_tree': _N | _L,
+                 'weeping_tree': _N | _L, 'fiddlehead_tree': _N | _L, 'palm_tree': _H | _D, 'island_palm': _H | _L, 'mushroom_tree': _N | _L,
+                 'mystic_tree': 0, 'cherry_tree': _N | _C, 'apricot_tree': _N | _H | _D, 'orange_tree': _N | _H, 'peach_tree': _N | _H,
+                 'pomegranate_tree': _H | _D, 'apple_tree': _N | _C, 'banana_tree': _H | _L, 'mango_tree': _H | _L}
 
 WILD_NUM = dict(growDays=10, hits=10, bushHits=2, stumpHits=5, woodMin=25, woodMax=35, seedMax=3, bushWood=5,
                 stumpWoodMin=3, stumpWoodMax=5, shakeSeedMax=2, mossPct=5)
@@ -211,12 +217,13 @@ ART_FIELD = {'grown': 'grown', 'moss': 'moss', 'log': 'log', 'stump': 'stump', '
 
 META_ORDER = ['name', 'seedName', 'fruit', 'wood', 'chopTool', 'fruitItem', 'fruitSeasons', 'fruitDays', 'fruitMax', 'sfxHit', 'sfxFall',
               'seedPrice', 'buyPrice', 'growDays', 'hits', 'bushHits', 'stumpHits', 'woodMin', 'woodMax', 'seedMax', 'bushWood',
-              'stumpWoodMin', 'stumpWoodMax', 'shakeSeedMax', 'mossPct']   # gameTools.html treBuildC()'s order
+              'stumpWoodMin', 'stumpWoodMax', 'shakeSeedMax', 'mossPct', 'climates']   # gameTools.html treBuildC()'s order
 
 
 def tree_c(tid, meta, art, seed_icon):
     seed_id = f'{tid}_seed'
     keys = sorted(art)
+    meta = dict(meta, climates=TREE_CLIMATES.get(tid, 0))
     meta = {k: meta[k] for k in META_ORDER}
     meta.update(art={k: [art[k].width, art[k].height] for k in keys}, seedIcon=[seed_icon.width, seed_icon.height])
     out = []
@@ -279,6 +286,8 @@ def tree_c(tid, meta, art, seed_icon):
     if meta['buyPrice'] > 0:
         attrs.append(('buyable', meta['buyPrice']))
         attrs.append(('shop', 1))
+    if meta['climates']:
+        attrs.append(('climate', meta['climates']))
     px = pack565(seed_icon)
     out.append(f'// The {"sapling" if meta["fruit"] else "seed"}: hold it and tap open ground to plant the tree.')
     out.append(f'static const uint16_t k_{seed_id}_icon_pixels[{len(px)}] = {{')

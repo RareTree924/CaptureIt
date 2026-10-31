@@ -377,6 +377,24 @@ bool                item_droppable(item_id_t item);
 // rod's cast (the Item Editor's "Energy a use"). None = 0 for tools, ENERGY_ROD_DEFAULT (5)
 // for fishing rods.
 #define ITEM_ATTR_ENERGY         "energy"
+
+// Boats (BOATS + DOCKS in main.c; the Item Editor's Boat card): "boat 1" = it's a boat. Held on
+// a dock (or any deck over the water), a tap on the water puts it in — for good: a boat on the
+// water is never picked up again. Its deck is "boat_len" x "boat_wide" tiles (none = 3 x 2),
+// lengthwise the way its bow points; the player walks around on it and steers it from its helm,
+// the tile in the middle of its stern ("boat_helm" = tiles forward of the stern, none = 0).
+// "boat_speed" = % of walking speed (none = 100); "boat_water" = the water it goes on, the
+// "fish_water" bits 1 pond, 2 river, 4 ocean, 8 lava (none = 7: not lava; never ice).
+// Its look on the water is its "use" art (the Swing tab), a square frame each way centred on the
+// deck (at most BOAT_ART_MAX, 96 px): 1 frame = every way, 2 = up/down and sideways, 3 = down, up,
+// right, 4 = down, up, left, right (sideways art points right; mirrored for left). None = a drawn
+// hull with a wheel at the helm.
+#define ITEM_ATTR_BOAT           "boat"
+#define ITEM_ATTR_BOAT_SPEED     "boat_speed"
+#define ITEM_ATTR_BOAT_WATER     "boat_water"
+#define ITEM_ATTR_BOAT_LEN       "boat_len"
+#define ITEM_ATTR_BOAT_WIDE      "boat_wide"
+#define ITEM_ATTR_BOAT_HELM      "boat_helm"
 // Minigame tricks ("fish_trait" bits).
 #define FISH_TRAIT_FREEZE   0x001   // plays dead: caught in the bar it freezes a moment, then bolts
 #define FISH_TRAIT_STICKY   0x002   // sticky: while the bar is on it, the bar gets stuck (barely moves)

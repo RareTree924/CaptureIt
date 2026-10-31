@@ -10,27 +10,33 @@
       "files": [
         {
           "path": "items/hoe.c",
-          "marker": "Placeholder art"
+          "marker": "Placeholder art",
+          "done": true
         },
         {
           "path": "items/watering_can.c",
-          "marker": "Placeholder art"
+          "marker": "Placeholder art",
+          "done": true
         },
         {
           "path": "items/scythe.c",
-          "marker": "Placeholder art"
+          "marker": "Placeholder art",
+          "done": true
         },
         {
           "path": "items/shears.c",
-          "marker": "Placeholder art"
+          "marker": "Placeholder art",
+          "done": true
         },
         {
           "path": "items/milk_pail.c",
-          "marker": "Placeholder art"
+          "marker": "Placeholder art",
+          "done": true
         }
       ],
-      "done": false,
-      "reply": ""
+      "done": true,
+      "reply": "i want it so they playa  sound when used ",
+      "doneOn": "2026-10-25"
     },
     {
       "id": "art_animal_products",
@@ -369,17 +375,42 @@
       "what": "Capacities are yours (small 2, medium 4, large 8 animals, for barns and coops). The rest Claude picked: Build shop prices are Stardew's (barns 6000 / 12000 / 25000, coops 4000 / 10000 / 20000, silo 100, well 1000), the solid footprint is the bottom 4 tile rows for a barn and 3 for a coop, the silo and the well (the rows above are roof you walk behind), the silo holds 240 hay, and the player's door is the 2nd tile from the left. Change any of them in Farm tab › Barns, coops & silos (Open building .c…, change, Save), or write the numbers you want below.",
       "added": "2026-10-18",
       "files": [
-        "buildings/small_barn.c",
-        "buildings/medium_barn.c",
-        "buildings/large_barn.c",
-        "buildings/small_coop.c",
-        "buildings/medium_coop.c",
-        "buildings/large_coop.c",
-        "buildings/silo.c",
-        "buildings/well.c"
+        {
+          "path": "buildings/small_barn.c",
+          "done": true
+        },
+        {
+          "path": "buildings/medium_barn.c",
+          "done": true
+        },
+        {
+          "path": "buildings/large_barn.c",
+          "done": true
+        },
+        {
+          "path": "buildings/small_coop.c",
+          "done": true
+        },
+        {
+          "path": "buildings/medium_coop.c",
+          "done": true
+        },
+        {
+          "path": "buildings/large_coop.c",
+          "done": true
+        },
+        {
+          "path": "buildings/silo.c",
+          "done": true
+        },
+        {
+          "path": "buildings/well.c",
+          "done": true
+        }
       ],
-      "done": false,
-      "reply": ""
+      "done": true,
+      "reply": "",
+      "doneOn": "2026-10-24"
     },
     {
       "id": "data_watering_can_size",
@@ -388,10 +419,14 @@
       "what": "With the well, the watering can now runs dry: it holds 40 water (Stardew's basic can), one tile of farmland each, and a blue bar under it on the hotbar shows how full it is. Fill it by tapping the well (or water) while holding it. Change the number in the Item Editor (watering_can › Farming tools › holds N water; 0 = never runs dry), or say below.",
       "added": "2026-10-18",
       "files": [
-        "items/watering_can.c"
+        {
+          "path": "items/watering_can.c",
+          "done": true
+        }
       ],
-      "done": false,
-      "reply": ""
+      "done": true,
+      "reply": "",
+      "doneOn": "2026-10-24"
     },
     {
       "id": "test_farm_buildings_board",
@@ -400,8 +435,9 @@
       "what": "Claude tried these on the board over the dev link (2026-10-18, test save 3, map farmtest): the small barn, small coop and well build; the barn's animal door shows the dark piece shut and the planks open; hay pipes from the silo run right up to the barn's and the silo's walls; a small barn takes 2 cows and refuses a 3rd; the cows and the rabbit walk home and in through their doors at 5 pm (and inside, 2 troughs with hay); watering farmland takes 1 from the can (the blue bar shows it) and tapping the well fills it to 40. What's left for you: build them in your own farm and say below if anything looks or feels wrong — especially the medium and large sizes, which Claude didn't build on the board.",
       "added": "2026-10-18",
       "files": [],
-      "done": false,
-      "reply": ""
+      "done": true,
+      "reply": "",
+      "doneOn": "2026-10-24"
     },
     {
       "id": "data_bed_prices",
@@ -410,18 +446,46 @@
       "what": "Your bed sheet became 9 beds (the pirate bed was on it twice, so it's in once). I named them and guessed prices:\nBed 150, Tropical Bed 1200, Double Bed 2000, Tropical Double Bed 3000, Starry Double Bed 3500, Checkered Double Bed 3500, Pirate Double Bed 4000, Deluxe Red Double Bed 5000, Modern Double Bed 5000.\nChange any name or price in the Item Editor (Sold in shops) and Export, or write the ones you want below. The faint drop shadow under each bed was left out (the game's art can't be see-through).",
       "added": "2026-10-18",
       "files": [
-        "items/bed.c",
-        "items/tropical_bed.c",
-        "items/double_bed.c",
-        "items/tropical_double_bed.c",
-        "items/starry_double_bed.c",
-        "items/checkered_double_bed.c",
-        "items/pirate_double_bed.c",
-        "items/deluxe_red_double_bed.c",
-        "items/modern_double_bed.c"
+        {
+          "path": "items/bed.c",
+          "done": true
+        },
+        {
+          "path": "items/tropical_bed.c",
+          "done": true
+        },
+        {
+          "path": "items/double_bed.c",
+          "done": true
+        },
+        {
+          "path": "items/tropical_double_bed.c",
+          "done": true
+        },
+        {
+          "path": "items/starry_double_bed.c",
+          "done": true
+        },
+        {
+          "path": "items/checkered_double_bed.c",
+          "done": true
+        },
+        {
+          "path": "items/pirate_double_bed.c",
+          "done": true
+        },
+        {
+          "path": "items/deluxe_red_double_bed.c",
+          "done": true
+        },
+        {
+          "path": "items/modern_double_bed.c",
+          "done": true
+        }
       ],
-      "done": false,
-      "reply": ""
+      "done": true,
+      "reply": "",
+      "doneOn": "2026-10-24"
     },
     {
       "id": "test_walk_in_beds",
@@ -462,8 +526,9 @@
       "what": "The 38 fish come from the FishIcons library (Documents/Arduino/libraries/FishIcons). Those 16x16 icons are shrunk-down pictures with 35-138 colours each (pixel art usually has 6-15), so they look soft. The game shows them exactly as they are (same colours; only near-black fringe pixels were made see-through). Options: redraw them as pixel art (or find a pixel-art fish set), or ask Claude to run an automatic clean-up over all of them (fewer colours + an outline) - it helps a little, not a lot. Write which you want.",
       "added": "2026-10-19",
       "files": [],
-      "done": false,
-      "reply": ""
+      "done": true,
+      "reply": "",
+      "doneOn": "2026-10-24"
     },
     {
       "id": "art_stardew_fish",
@@ -1670,6 +1735,259 @@
       "what": "Built but not flashed yet: the board was unplugged when the build finished. Flash it (python tools/devlink.py flash --build), then try: give gold_axe (dev link) and chop a tree. It should take fewer swings than the basic axe (power 4). Check that the new icons look right in the bag: Copper/Steel/Gold/Iridium tools, the scythes, Shears, Milk Pail, and the rods (Fishing Rod is now the Bamboo Pole picture).",
       "added": "2026-10-23",
       "files": [],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "test_hoed_dirt",
+      "kind": "test",
+      "title": "Try the new hoed dirt on the board",
+      "what": "Farmland now uses your Stardew hoed dirt sheets from Downloads. Each tile joins up with the farmland around it, and there's a snowy look in winter (not inside buildings). Built, not flashed yet: the board was unplugged. Things to check: hoe a few tiles in a row and in a block. The edges should join as you go, with no leftover dirt pixels around the tiles that changed. Water some of them. Sleep through a night (the farmland is drawn again at dawn). Try 'season winter' on the dev link, then wait for a new night stage or reload the map.",
+      "added": "2026-10-23",
+      "files": [
+        "farmland_dry.png",
+        "farmland_watered.png",
+        "farmland_winter_dry.png",
+        "farmland_winter_watered.png"
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "test_glacial_snow",
+      "kind": "test",
+      "title": "Try the snow on a Glacial map",
+      "what": "On a Glacial map the rain spells now come down as snow: white flakes that fall slowly, sway and lie a moment where they land, and the world gets one step darker like rain. While it snows the cold comes twice as fast: 7.5 game minutes with no gear, 3.5 game hours in a full Arctic set (it was 15 min / 7 h). Built, not flashed. Try: go to a Glacial map, 'rain on' on the dev link (it snows there instead), check the flakes look right by day and at night, and watch the temperature bar drop faster. 'rain auto' to go back.",
+      "added": "2026-10-24",
+      "files": [],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "art_ice_hole",
+      "kind": "art",
+      "title": "Ice: the frozen water tile and the hole",
+      "added": "2026-10-24",
+      "what": "Ice fishing is in. (1) Make your frozen water 16x16 tile a Map Editor asset, tick Fishable, and click Water: until it says Ice. Make it walkable or solid as you like. If it's walkable, the player can stand on the ice next to a hole. (2) The hole is assets/ice_hole.png: a 16x16 picture drawn over the ice tile, see-through where it's transparent. It's a placeholder Claude drew (a dark round hole with a white rim). Put your 'tile with a hole' picture there (same name, 16x16) and rebuild. Either keep the ice around the hole see-through or draw the whole tile.",
+      "files": [
+        "ice_hole.png"
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "sound_ice_break",
+      "kind": "sound",
+      "title": "Sound for breaking a hole in the ice",
+      "added": "2026-10-24",
+      "what": "When a pickaxe breaks a hole in the ice, the game plays 'ice_break'. Put an ice-cracking WAV (16-bit mono 44.1 kHz) on the card as sounds/sound effects/ice_break.wav. Until then it's silent.",
+      "files": [
+        "sd:sounds/sound effects/ice_break.wav"
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "test_ice_fishing",
+      "kind": "test",
+      "title": "Try ice fishing on the board",
+      "added": "2026-10-24",
+      "what": "Built, not flashed. On a map with Ice water: hold a pickaxe and tap the ice. The player walks over, swings, and a hole appears. Hold a rod and tap the hole to cast. Pond fish and fish with 'Ice hole' ticked (Fishing tab, Water) bite there. Things to check: casting onto ice that has no hole says it's frozen; the hole is solid; the watering can fills only from a hole; crab pots can't go on ice; the holes freeze over at 6:00 (or use 'ice freeze' on the dev link); a hole is still there after you leave the map and come back the same day. Dev link: 'ice', 'ice hole' (the faced tile), 'ice freeze'.",
+      "files": [],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "test_random_rocks",
+      "kind": "test",
+      "title": "Try the random rocks on a mining map",
+      "added": "2026-10-24",
+      "what": "Built, not flashed. In the Map Editor put some rock breakables on the map: they're the samples. Put more of the common ones (e.g. 5 stone, 2 copper, 1 iron). Click 'Mining map…' in the file row (it was called Random rocks…), tick the samples, set how many (e.g. 15), tick the cave floor ground, then Export. In the game the samples never show where you put them. Instead that many copies come up on random free tiles, and a new lot comes up every 6:00. Check: mining them works (drops, sounds, mining xp); broken ones stay gone until the next morning, even if you leave the map and come back; they still look right at night; and none come up on the player, a teleporter or something else. Dev link: 'rocks' (list), 'rocks new' (a new lot now).",
+      "files": [],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "art_greenhouse",
+      "kind": "art",
+      "title": "Make the greenhouse building",
+      "added": "2026-10-24",
+      "what": "The greenhouse needs no new code. Every building's inside already lets crops grow in any season, and they never wither there. Fruit trees inside now also fruit all year and always look like summer. To make it: (1) In the Map Editor, make its inside map (e.g. greenhouse_inside) with Tillable ground and a 'Building exit' teleporter, and export it to the card. (2) In the Buildings Editor, make the greenhouse with your art, set Interior to that map, give it a price, and export. Rain doesn't fall inside, so crops there need the watering can or sprinklers. Then try it on the board: plant something out of season inside, and plant a fruit tree.",
+      "files": [],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "monsters_hard",
+      "kind": "decision",
+      "title": "Monsters for you to cut in the Monsters tab",
+      "added": "2026-10-24",
+      "what": "I cut 42 monsters from the Stardew sheet (assets/monsters/). These ones aren't laid out in the usual 4-frames-a-row way, so I left them for you. Open the Monsters tab, Load sheet… (Downloads: 'PC _ Computer - Stardew Valley - Monsters - Monsters.png'), make a New monster for each, and click its frames into the animations. Positions are in sheet pixels. Stardew names and what they do:\n• Stone Golem (big grey rocks, x 222-350, y 0-64, 32x32): hides as a rock (Rest), wakes when you come near. HP 45, damage 5. Abilities: Hides.\n• Blue Squid (blue squid, x 362-480, y 0-62): floats over walls. HP 80, damage 15. Abilities: Flies.\n• Spider / Leaper (teal spider, x 496-560, y 14-80): hops. HP 100, damage 15. Abilities: Hops, Charges.\n• Haunted Skull (white skulls, x 443-475, y 891-971) and its blue version (x 485-515): flies about wildly. HP 50, damage 8. Abilities: Flies, Erratic.\n• Serpent (green dragon, x 296-460, y 1007-1103, 32x32 frames; the red one under it is its death): flies through walls and dives at you. HP 150, damage 23. Abilities: Flies, Charges.\n• Pepper Rex (green dinosaur, x 427-555, y 1123-1375, 32x32): charges (breathes fire in Stardew; projectiles come later). HP 300, damage 15. Abilities: Charges.\n• Shadow Sniper (dark figure with a gun, x 302-416, y 1126-1283, one column per direction): keeps its distance. HP 120, damage 15. Abilities: Keeps off.\n• The pink and orange round faces (x 296-430, y 891-987), the tiki masks (x 148-286, y 1123-1243), the stone faces with red/orange eyes (x 148-286, y 1007-1086), the pink mushrooms (x 370-434, y 466-508), the green slime-ghost column (x 444-460, y 292-456), the box (x 0-64, y 1389-1485), the red crabs at the bottom (x 74-138, y 1389-1533), and the slimes (only one frame each, x 2-46, y 268-278). I couldn't tell which Stardew monsters these are (maybe Hot Head, Dwarvish Sentry, Metal Head, False Magma Cap, Magma Duggy, Lava Lurk, Big Slime). Name them and pick their frames as you like.\nWhen you're done, Save each one, rebuild, and tick them on your mining maps (Map Editor › Mining map…). Or reply here with names and frames, and I'll cut them.",
+      "files": [
+        "monsters/rock_crab.c"
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "monsters_names",
+      "kind": "decision",
+      "title": "Check the monster names I guessed",
+      "added": "2026-10-24",
+      "what": "The sheet doesn't say which monster these are, so I guessed. Rename any in the Monsters tab (or reply here):\niridium_crab (navy-blue rock crab), truffle_crab (black crab with gold specks), bush_lurker (purple bush with legs), mushroom_lurker (pink mushroom tree), frost_fly / lava_fly (blue and red cave flies), armored_bug / fire_bug (blue-yellow and red bugs), cave_moth (white winged bug), cave_wasp (orange bee), shadow_bat (purple bat with antennae), blood_bat (red bat), shadow_lurker / shadow_cat (green and purple shadows that rise from a puddle), shadow_guy / shadow_girl (the two black figures, 8 rows each: the last 4 rows are used as their attack), putrid_ghost (the pale green ghost), wilderness_golem (the stump with legs).\nTheir stats are Stardew-ish guesses too: health, damage, speed, xp, what they drop. Tune them in the Monsters tab.\nAlso the four spiked cubes at the bottom of the sheet (x 264-296, y 1389-1421), which I made into sentries that float and shoot: dwarvish_sentry (orange, fireballs), frost_sentry (teal, ice), shadow_sentry (purple), iron_sentry (grey). Only the orange one is a real Stardew monster (the Dwarvish Sentry).",
+      "files": [
+        "monsters/iridium_crab.c",
+        "monsters/truffle_crab.c",
+        "monsters/bush_lurker.c",
+        "monsters/mushroom_lurker.c",
+        "monsters/shadow_guy.c",
+        "monsters/shadow_girl.c",
+        "monsters/putrid_ghost.c"
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "sound_combat",
+      "kind": "sound",
+      "title": "Sounds for each monster, getting hit, and the storm",
+      "added": "2026-10-24",
+      "what": "Every monster has its own sounds. Put 16-bit mono 44.1 kHz WAVs in sounds/sound effects/ on the card, named <monster id>_hit, <monster id>_die, <monster id>_wake (it pops out or notices you) and <monster id>_attack (it hurts you or dashes). For example rock_crab_hit.wav, bat_wake.wav, skeleton_die.wav. Any that's missing is just silent. To use other file names (or share one sound between monsters), type them in the Monsters tab under 'Its own sounds'. Also: ouch (you get hit) and thunder (a storm's lightning). A weapon swing uses the item's tool sound: give the weapons 'tool_sfx:<wav>' in the Item Editor if you want one. The monster ids: armored_bug, bat, blood_bat, bug, bush_lurker, cave_fly, cave_moth, cave_wasp, dust_sprite, fire_bug, frost_bat, frost_fly, ghost, grub, iridium_bat, iridium_crab, lava_bat, lava_crab, lava_fly, magma_sparker, magma_sprite, mummy, mummy_dangerous, mushroom_lurker, mutant_fly, mutant_grub, putrid_ghost, rock_crab, shadow_bat, shadow_brute, shadow_cat, shadow_girl, shadow_guy, shadow_lurker, shadow_shaman, skeleton, skeleton_dangerous, skeleton_mage, skeleton_mage_dangerous, stick_bug, truffle_crab, wilderness_golem. A slingshot shot plays 'slingshot'.",
+      "files": [
+        "sd:sounds/sound effects/rock_crab_hit.wav",
+        "sd:sounds/sound effects/ouch.wav",
+        "sd:sounds/sound effects/thunder.wav",
+        "sd:sounds/sound effects/slingshot.wav"
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "combat_numbers",
+      "kind": "data",
+      "title": "Numbers I picked for combat and weather",
+      "added": "2026-10-24",
+      "what": "Change any of these in main/main.c, or reply here: health 100, +5 for each combat level; 1 health back every 2 game minutes when you're not on a mining map (a night's sleep fills it); 1.2 s after a hit when nothing can hurt you again; when you die, you lose money like passing out from tiredness. Weapons now have Stardew's real numbers from the wiki: damage range, speed (each point makes the swing 8% quicker; daggers are quicker and clubs slower), crit chance, crit power, defense (taken off hits while it's held) and weight (knockback). Rapier wasn't on the wiki's list, so its numbers are my guess. Slingshot $500 and Master Slingshot $3000 at the General store; the Galaxy Slingshot has no way to get it yet. Six are sold at the General store: Wooden Blade $250, Rusty Sword $450, Steel Smallsword $1300, Cutlass $1500, Iron Edge $4000, Claymore $7000. The rest have no way to get them yet: monster drops or chests later? Weather: 30% of rain spells are thunderstorms, 35% of Glacial snow spells are blizzards (cold 3x as fast in them), 15% of mornings have fog (6:00–10:00).",
+      "files": [
+        "../main/main.c"
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "art_weapon_swing",
+      "kind": "art",
+      "title": "Weapons have no swing art yet",
+      "added": "2026-10-24",
+      "what": "The 61 weapons (assets/items/, e.g. rusty_sword.c) have their icon from the Stardew weapons sheet, but no Swing frames. For now a swing shows the icon over the head plus the swipe. In the Item Editor's Swing tab you can give each one its swing art (16x32 frames on the player: down / up / sideways), as the axe has.",
+      "files": [
+        "items/rusty_sword.c",
+        "items/wooden_blade.c",
+        "items/steel_smallsword.c"
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "test_combat",
+      "kind": "test",
+      "title": "Try the monsters and fighting on the board",
+      "added": "2026-10-24",
+      "what": "Built, not flashed. In the Map Editor open a mine map and click Mining map…. Tick 'This is a mining map', set how many monsters, tick some (rock_crab, bat, grub, skeleton, ghost...), set the rocks too, then Export. Rebuild and flash (the monsters are compiled in). On the board: buy a Wooden Blade at the General store (or 'give rusty_sword' on the dev link) and go to the mine. The health bar shows under the energy. Tap near you (with a monster awake close by) or tap a monster to swing. Things to check: monsters walk, fly and chase, and the rock crabs and bats hide until you're near; hits flash them white and knock them back; their death plays, then the bits fly; drops land on the ground; combat xp shows in the Skills tab; getting hit knocks you back; at 0 health you wake at the hospital; nothing comes up on top of you. Also, a mummy gets up again unless you hit it while it's down. Dev link: 'mon' (list), 'mon spawn bat', 'mon kill', 'mon clear', 'hp 10'.",
+      "files": [],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "test_weather",
+      "kind": "test",
+      "title": "Try the storms, blizzards and fog",
+      "added": "2026-10-24",
+      "what": "Built, not flashed. Use the dev link 'weather storm' on an outdoor map: more rain, a darker world, and every 5–16 s a lightning flash, then thunder. 'weather fog': soft fog wisps drifting across. On a Glacial map, 'weather blizzard': fast sideways snow, and the cold bar drops 3x as fast. 'weather auto' to go back. Check that they look right at night too, and that the flash doesn't leave a mess on the screen.",
+      "files": [],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "test_shooting",
+      "kind": "test",
+      "title": "Try the slingshots and the monsters that shoot",
+      "added": "2026-10-24",
+      "what": "Built, not flashed. Get a slingshot ('give slingshot' on the dev link, or $500 at the General store). Open the bag, pick up some stones (or ore, coal, wood, anything) and drop them onto the slingshot: they go in it, and the message says how hard each shot hits. On a mining map, tap a monster, or tap away from yourself with one awake nearby: a shot flies that way and uses one. Stone hits 3–11, iron ore 10–41, iridium ore 25–101, and anything else 1–3; the Master Slingshot does twice that and the Galaxy Slingshot four times. Monsters that shoot back: the skeletons throw spinning bones, the skeleton mages and magma sparkers throw fireballs (the blue mage's are ice), the shadow shaman's are purple, the new Lava Lurk hides as a puddle then pops up and spits fireballs, and the four sentries float at a distance and shoot. Shots stop at walls (except a flying monster's). Also try a few weapons: a dagger should swing quicker than a sword, and a club slower. Dev link: 'sling stone 50', 'mon spawn lava_lurk', 'mon spawn skeleton_mage'.",
+      "files": [
+        "items/slingshot.c",
+        "monsters/lava_lurk.c",
+        "monsters/dwarvish_sentry.c"
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "art_boats_dock",
+      "kind": "art",
+      "title": "Boats and the dock have placeholder art",
+      "what": "The Rowboat (2x1-tile deck) and Sailboat (4x3) have a simple held icon, and on the water the game draws a plain wooden hull with a wheel at the helm. Open each in the Item Editor, load your own held icon (Held tab) and, if you like, your boat seen from above (Swing tab: square frames, at most 96x96, side by side — 3 = pointing down, up, right; or 4 = down, up, left, right). Each frame is centred on the deck, so draw the deck to fill the deck size (e.g. 64x48 for 4x3 pointing right, inside a 64x64 frame) with the wheel on the helm tile (the middle of the stern). Then Export — the Boat card keeps its settings. The Dock is a plain plank deck with a sign post (bottom right = the boat shop): open dock.c in the Farm tab (Barns, coops & silos > Open .c…), load your picture, keep it all footprint, put the Door column on the post, Save.",
+      "added": "2026-10-24",
+      "files": [
+        {
+          "path": "items/rowboat.c",
+          "marker": "Placeholder art"
+        },
+        {
+          "path": "items/sailboat.c",
+          "marker": "Placeholder art"
+        },
+        "buildings/dock.c"
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "sound_boats",
+      "kind": "sound",
+      "title": "Boat sounds",
+      "what": "The game plays \"boat_launch\" when a boat is put in the water from a dock. Put it on the SD card: 16-bit, mono, 44.1 kHz. Without it it's silent.",
+      "added": "2026-10-24",
+      "files": [
+        "sd:sounds/sound effects/boat_launch.wav"
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "decision_boat_prices",
+      "kind": "decision",
+      "title": "Boat and dock prices and speeds are guesses",
+      "what": "Dock $2500 (Build shop). Rowboat $2000, a 2x1-tile deck, walking speed. Sailboat $12000, a 4x3 deck, 1.7x walking speed. Both go on ponds, rivers and the sea; a bigger deck needs wider water to sail and turn in. Change them in the Item Editor's Boat card / Buy price and the Farm tab's price. A boat with \"Lava\" ticked on its Boat card sails on lava too — want one?",
+      "added": "2026-10-24",
+      "files": [
+        "items/rowboat.c",
+        "items/sailboat.c",
+        "buildings/dock.c"
+      ],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "maps_for_boats",
+      "kind": "data",
+      "title": "Maps for sailing: the sea, islands, and teleporters between them",
+      "what": "Boats sail on Fishable water tiles (pond / River / Ocean in the Map Editor's Water:). To sail from one map to another, put a teleporter over the water at the edge of the sea map with its arrival tile on water in the next map (an island's sea), with room around it for the whole deck — steer onto it and the boat comes through with you. To go ashore on an island, sail alongside the shore and tap the land; the boat waits there for you. For a dock that's part of a map: draw the pier over the water with no collision (it counts as a dock), or name a 16x16 ground tile \"dock\" or \"pier\". Add the \"Boat shop\" action to a sign or hut to sell boats there too.",
+      "added": "2026-10-24",
+      "files": [],
+      "done": false,
+      "reply": ""
+    },
+    {
+      "id": "test_boats",
+      "kind": "test",
+      "title": "Try boats and docks on the board (built, not tested on the device)",
+      "what": "Buy a Dock at the Build shop and put it up on the water off a shore (the hologram is green over Fishable water touching land). Walk out on the deck, tap the post (bottom right) for the Boat shop, buy the Rowboat. Hold it and tap the water: the boat goes in by the dock (and it's gone from the bag for good). Tap its deck to walk on, walk around it, then stand on the helm (the wheel at the stern): it says you're at the helm. Tap the water: the boat sails there with you on it, turning to point the way it goes. Tap land: it sails alongside; tap the land again to walk off. Hold a rod at the helm and tap the water to fish. Sail onto a teleporter over the water. Save and load with a boat out. Try the Sailboat too (4x3 deck). Dev link: 'boat', 'boat put rowboat' (facing water), 'boat go X Y' (at a helm), 'boat shop'.",
+      "added": "2026-10-24",
+      "files": [
+        "items/rowboat.c",
+        "buildings/dock.c"
+      ],
       "done": false,
       "reply": ""
     }

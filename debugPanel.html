@@ -82,6 +82,8 @@ main { display: grid; grid-template-columns: 500px 1fr; gap: 14px; padding: 14px
 @media (max-width: 1400px) { .grid2 { grid-template-columns: 1fr; } }
 
 /* ---- items ---- */
+.pgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); gap: 6px; max-height: 420px; overflow: auto; padding: 2px; }
+.pgrid .itm img { width: 48px; height: 48px; image-rendering: pixelated; object-fit: contain; }
 #itemGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); gap: 6px; max-height: 520px; overflow: auto; padding: 2px; }
 .itm { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 6px 4px 5px; text-align: center; cursor: pointer; position: relative; }
 .itm:hover { border-color: var(--dim); }
@@ -198,6 +200,9 @@ textarea#fileText { width: 100%; height: 380px; font: 12px/1.4 var(--mono); resi
       <button data-tab="world">Player &amp; world</button>
       <button data-tab="farm">Farm &amp; animals</button>
       <button data-tab="fish">Fishing</button>
+      <button data-tab="combat">Monsters &amp; combat</button>
+      <button data-tab="weather">Weather &amp; climate</button>
+      <button data-tab="more">Trees, skills &amp; more</button>
       <button data-tab="market">Shops &amp; auctions</button>
       <button data-tab="saves">Saves &amp; files</button>
       <button data-tab="console">Console</button>
@@ -482,6 +487,137 @@ textarea#fileText { width: 100%; height: 380px; font: 12px/1.4 var(--mono); resi
     </div>
 
     <!-- ---------- CONSOLE ---------- -->
+    <!-- ---------- MONSTERS & COMBAT ---------- -->
+    <div class="tab" id="tab-combat">
+      <div class="grid2" style="grid-template-columns: 1fr 360px">
+        <div class="card">
+          <div class="row" style="margin-bottom:10px"><h2 style="margin:0">Monsters</h2><div class="grow"></div>
+            <input id="monSearch" placeholder="Search…" oninput="renderMonsters()" style="width:160px"></div>
+          <div id="monGrid" class="pgrid"></div>
+          <div class="row" style="margin-top:10px">
+            <b id="monSel" class="grow">Pick a monster</b>
+            <label>How many <input type="number" id="monN" min="1" max="16" value="1" style="width:56px"></label>
+            <button class="primary" onclick="monSpawn()">Spawn in front of me</button>
+          </div>
+          <div class="hint">Comes up 2 tiles in front of the player (on any map, not only mining ones). Double-click a monster to spawn one.</div>
+        </div>
+        <div class="stack">
+          <div class="card stack">
+            <div class="row"><h2 style="margin:0">On this map</h2><div class="grow"></div>
+              <label class="row" style="gap:5px"><input type="checkbox" id="monAuto"> auto</label><button class="small" onclick="monList()">Refresh</button></div>
+            <table class="ref" id="monTable"></table>
+            <div class="row"><button onclick="act('mon kill').then(monList)">💀 Kill them all</button><button onclick="act('mon clear').then(monList)">Remove them all</button></div>
+            <div class="hint">Kill: their deaths, drops and combat xp as if you'd done it. Remove: just gone.</div>
+          </div>
+          <div class="card stack">
+            <h2>You</h2>
+            <div class="row"><button id="btnGod" onclick="godToggle()">God mode: off</button><span class="hint">nothing can hurt you</span></div>
+            <div class="col"><label>Health: <b id="hpTxt">100</b></label>
+              <input type="range" min="0" max="150" value="100" id="hpR" oninput="hpTxt.textContent=this.value" onchange="act('hp '+this.value)"></div>
+            <div class="row"><button class="small" onclick="act('hp 999')">Full health</button><button class="small" onclick="act('hp 0')">Knock me out</button><button class="small" onclick="act('hp')">Show</button></div>
+          </div>
+        </div>
+        <div class="card">
+          <h2>Weapons <span class="hint">(click to get one)</span></h2>
+          <div id="weaponGrid" class="pgrid"></div>
+        </div>
+        <div class="card stack">
+          <h2>Slingshot ammo</h2>
+          <div class="row">
+            <select id="slAmmo"><option value="stone">Stone (5)</option><option value="wood">Wood (2)</option><option value="copper_ore">Copper ore (10)</option>
+              <option value="coal">Coal (15)</option><option value="iron_ore">Iron ore (20)</option><option value="gold_ore">Gold ore (30)</option>
+              <option value="iridium_ore">Iridium ore (50)</option><option value="cherry_bomb">Cherry bomb (20)</option></select>
+            <input type="number" id="slN" min="1" max="99" value="30" style="width:60px">
+            <button class="primary" onclick="act('sling '+$('slAmmo').value+' '+Math.max(1, +$('slN').value || 1))">Load it</button>
+            <button class="small" onclick="act('sling')">What's in it</button>
+          </div>
+          <div class="hint">Loads the slingshot (any of the three) without the bag. Stardew's ammo damage in brackets — the Master does 2x, the Galaxy 4x.</div>
+          <h2>Swing</h2>
+          <div class="row"><button class="small" onclick="act('swing')">Swing the held tool / weapon</button><button class="small" onclick="act('sparkle')">The new-item sparkle</button></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ---------- WEATHER & CLIMATE ---------- -->
+    <div class="tab" id="tab-weather">
+      <div class="grid2">
+        <div class="card stack">
+          <h2>Weather</h2>
+          <div class="row" id="wxBtns">
+            <button data-w="clear">☀ Clear</button><button data-w="rain">🌧 Rain</button><button data-w="storm">⛈ Storm</button>
+            <button data-w="snow">❄ Snow</button><button data-w="blizzard">🌨 Blizzard</button><button data-w="fog">🌫 Fog</button><button data-w="auto">Auto (forecast)</button>
+          </div>
+          <div class="hint">Snow and blizzards only fall on a Glacial map (try the climate below). Storms: lightning every 5-16 s. Fog: thick, clear round the player.</div>
+          <h2>Season</h2>
+          <div class="row"><button onclick="act('season spring')">🌱 Spring</button><button onclick="act('season summer')">☀ Summer</button><button onclick="act('season fall')">🍂 Fall</button><button onclick="act('season winter')">⛄ Winter</button></div>
+        </div>
+        <div class="card stack">
+          <h2>Climate &amp; temperature</h2>
+          <div class="row"><select id="clSel"><option>normal</option><option>hot</option><option>cold</option><option>dry</option><option>lush</option><option>volcanic</option><option>glacial</option><option>indoors</option></select>
+            <button onclick="act('climate '+$('clSel').value)">Pretend this map is it</button><button class="small" onclick="act('climate')">Show</button></div>
+          <div class="hint">Until the next map loads.</div>
+          <div class="col"><label>Temperature: <b id="tmpTxt">0</b>% <span class="hint">(-100 out cold … 100 out from the heat)</span></label>
+            <input type="range" min="-100" max="100" value="0" id="tmpR" oninput="tmpTxt.textContent=this.value" onchange="act('temp '+this.value)"></div>
+          <div class="row"><button class="small" onclick="act('temp 0')">Comfortable</button><button class="small" onclick="act('temp')">Show</button></div>
+          <h2>Gear</h2>
+          <div class="row"><button onclick="gearSet('arctic')">Wear the Arctic set</button><button onclick="gearSet('thermal')">Wear the Thermal set</button><button class="small" onclick="act('gear open')">Gear tab</button></div>
+          <div class="row"><span class="hint">Take off:</span><button class="small" onclick="act('gear off 0')">Hat</button><button class="small" onclick="act('gear off 1')">Jacket</button><button class="small" onclick="act('gear off 2')">Pants</button><button class="small" onclick="act('gear off 3')">Boots</button></div>
+        </div>
+        <div class="card stack">
+          <h2>Ice holes</h2>
+          <div class="row"><button onclick="act('ice hole')">Break a hole in front</button><button onclick="act('ice freeze')">Freeze them all</button><button class="small" onclick="act('ice',{end:['@@OK','@@ERR']})">List</button></div>
+          <div class="hint">Face Fishable water whose kind is Ice.</div>
+          <h2>Random rocks</h2>
+          <div class="row"><button onclick="act('rocks new')">A new lot now</button><button class="small" onclick="act('rocks',{end:['@@OK','@@ERR']})">List</button></div>
+        </div>
+        <div class="card stack">
+          <h2>Now and then</h2>
+          <div class="row"><button onclick="act('bat')">🦇 A bat flies over</button><button onclick="act('forage')">🌼 A morning's forage</button>
+            <button class="small" onclick="act('forage list',{end:['@@OK','@@ERR']})">Forage here</button><button class="small" onclick="act('forage clear')">Clear forage</button></div>
+          <div class="row"><button onclick="act('crops morning')">6:00 again (sprinklers, crows)</button><button onclick="act('crops crows 50')">Crows now</button></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ---------- TREES, SKILLS & MORE ---------- -->
+    <div class="tab" id="tab-more">
+      <div class="grid2">
+        <div class="card stack">
+          <h2>Trees</h2>
+          <div class="row">
+            <div class="col grow"><label>Tree</label><select id="trSel"></select></div>
+            <div class="col"><label>Tile X</label><input type="number" id="trX" min="0" max="29" style="width:60px"></div>
+            <div class="col"><label>Tile Y</label><input type="number" id="trY" min="0" max="29" style="width:60px"></div>
+            <div class="col"><label>Stage</label><select id="trSt"><option value="0">seed</option><option value="1">sprout</option><option value="2">sapling</option><option value="3">bush</option><option value="4" selected>grown</option></select></div>
+          </div>
+          <div class="row"><button class="primary" onclick="treePlant()">Plant</button><button class="small" onclick="treeHere()">Below me</button></div>
+          <div class="row"><button onclick="act('tree grow 30')">Grow 30 days</button><button onclick="act('tree fruit')">🍎 Fruit on them all</button><button onclick="act('tree moss')">Moss</button><button onclick="act('tree unshake')">Shake again today</button>
+            <button class="small" onclick="act('tree list',{end:['@@END','@@ERR']})">List</button></div>
+        </div>
+        <div class="card stack">
+          <h2>Energy &amp; skills</h2>
+          <div class="col"><label>Energy: <b id="enTxt">270</b></label>
+            <input type="range" min="-10" max="270" value="270" id="enR" oninput="enTxt.textContent=this.value" onchange="act('energy '+this.value)"></div>
+          <div class="row"><button class="small" onclick="act('energy 270')">Full</button><button class="small" onclick="act('passout')">Pass out now</button></div>
+          <div class="row"><select id="skSel"><option>farming</option><option>foraging</option><option>mining</option><option>combat</option><option>fishing</option></select>
+            <input type="number" id="skXp" min="0" max="999999" value="15000" style="width:90px"><span class="hint">xp</span>
+            <button onclick="act('skill '+$('skSel').value+' '+(+$('skXp').value || 0))">Set</button><button class="small" onclick="act('skill',{end:['@@OK','@@ERR']})">All skills</button></div>
+          <div class="hint">Levels: 100, 380, 770, 1300, 2150, 3300, 4800, 6900, 10000, 15000 xp (level 10).</div>
+        </div>
+        <div class="card stack">
+          <h2>Shops &amp; places</h2>
+          <div class="row"><button onclick="act('kitchen')">🍳 Kitchen</button><button onclick="act('blacksmith')">⚒ Crack the held geode</button><button onclick="act('museum')">🏛 Museum donations</button>
+            <button onclick="act('craft open')">🔨 Crafting</button><button onclick="act('board 0')">📋 Market board</button></div>
+        </div>
+        <div class="card stack">
+          <h2>Boats</h2>
+          <div class="row"><button onclick="act('boat put rowboat')">Rowboat on the water in front</button><button onclick="act('boat put sailboat')">Sailboat</button><button onclick="act('boat shop')">Boat shop</button><button class="small" onclick="act('boat')">Boats here</button></div>
+          <div class="row"><span class="hint">At a helm, sail to tile</span><input type="number" id="bX" min="0" max="29" style="width:56px"><input type="number" id="bY" min="0" max="29" style="width:56px">
+            <button class="small" onclick="act('boat go '+(+$('bX').value || 0)+' '+(+$('bY').value || 0))">Go</button></div>
+        </div>
+      </div>
+    </div>
+
     <div class="tab" id="tab-console">
       <div class="grid2">
         <div class="card stack">
@@ -1003,7 +1139,19 @@ const REF = [
   ['season spring|summer|fall|winter', 'jump to day 1 of that season (this year); 28 days a season'],
   ['sleep', 'like the bed: to 6:00 tomorrow, night played, saved'],
   ['save', 'Save Game now'],
-  ['rain on|off|auto', 'weather'],
+  ['rain on|off|auto', 'the rain switch'],
+  ['weather auto|clear|rain|storm|snow|blizzard|fog', 'force the weather here until auto'],
+  ['mon [spawn ID|kill|clear|shots]', 'the monsters here / one in front / all killed / all gone / the shots in the air'],
+  ['god on|off / hp [N]', 'nothing hurts the player / the health'],
+  ['sling [ID N]', 'what\'s in the slingshot / load N of item ID'],
+  ['swing / sparkle', 'swing the held tool or weapon / the new-item sparkle'],
+  ['tree list|plant ID TX TY [STAGE]|grow [N]|fruit|moss|unshake', 'this map\'s trees'],
+  ['ice [hole|freeze] / rocks [new]', 'ice holes / the random rocks'],
+  ['climate [NAME] / temp [PCT] / gear [ID|off SLOT|open]', 'climate, temperature, worn gear'],
+  ['energy [N] / passout / skill [NAME XP]', 'energy, passing out, skills'],
+  ['bat / forage [list|clear] / crops morning|crows [PCT]', 'a bat now / forage / the 6:00 morning, crows'],
+  ['kitchen [ID] / blacksmith / museum / board [TAB]', 'the kitchen, geodes, the museum, the market board'],
+  ['boat [put ID|go X Y|shop]', 'boats: put one on the water in front / sail to a tile / the shop'],
   ['noclip on|off', 'walk through everything'],
   ['speed N', 'walking speed x N (1-8)'],
   ['goto MAP [TX TY [INST]]', 'teleport (INST = a building\'s inside)'],
@@ -1044,8 +1192,80 @@ async function loadLog() {
   if (atEnd) el.scrollTop = el.scrollHeight;
 }
 
+// ---------------------------------------------------------------- monsters & combat
+let selMon = null, god = false;
+function picOf(o) {   // a catalog entry's picture (w, h, px as 4 hex digits a pixel; 0000 = see-through)
+  if (o._pic !== undefined) return o._pic;
+  if (!o.px || !o.w) return o._pic = '';
+  const c = document.createElement('canvas'); c.width = o.w; c.height = o.h;
+  const g = c.getContext('2d'), img = g.createImageData(o.w, o.h), d = img.data;
+  for (let i = 0; i < o.w * o.h; i++) {
+    const v = parseInt(o.px.substr(i * 4, 4), 16);
+    if (!v) continue;
+    d[i * 4] = (v >> 11 & 31) << 3; d[i * 4 + 1] = (v >> 5 & 63) << 2; d[i * 4 + 2] = (v & 31) << 3; d[i * 4 + 3] = 255;
+  }
+  g.putImageData(img, 0, 0);
+  return o._pic = c.toDataURL();
+}
+function renderMonsters() {
+  const q = $('monSearch').value.trim().toLowerCase();
+  const list = (catalog.monsters || []).filter(m => !q || m.id.includes(q) || m.name.toLowerCase().includes(q));
+  $('monGrid').innerHTML = list.map(m => `<div class="itm ${selMon === m.id ? 'sel' : ''}" title="${esc(m.name)} (${esc(m.id)}) · ${m.hp} hp, ${m.damage} damage${m.abilities && m.abilities.length ? ' · ' + esc(m.abilities.join(', ')) : ''}"
+      onclick="pickMon('${m.id}')" ondblclick="pickMon('${m.id}');monSpawn()"><img src="${picOf(m)}" alt=""><div class="nm">${esc(m.name)}</div></div>`).join('')
+    || '<span class="dim">No monsters in assets/monsters</span>';
+  const ws = catalog.items.filter(it => (it.attrs || {}).weapon > 0 || (it.attrs || {}).slingshot > 0);
+  $('weaponGrid').innerHTML = ws.map(it => { const a = it.attrs || {};
+    return `<div class="itm" title="${esc(it.name)}: ${a.slingshot ? 'slingshot x' + a.slingshot : (a.weapon_min || a.weapon) + '-' + (a.weapon_max || a.weapon) + ' damage'}" onclick="act('give ${it.id}')">
+      <img src="${iconOf(it.id)}" alt=""><div class="nm">${esc(it.name)}</div></div>`; }).join('');
+}
+function pickMon(id) { selMon = id; const m = (catalog.monsters || []).find(x => x.id === id); $('monSel').textContent = m ? m.name + ' (' + m.hp + ' hp)' : id; renderMonsters(); }
+async function monSpawn() {
+  if (!selMon) return toast('Pick a monster first', true);
+  const n = Math.max(1, Math.min(16, +$('monN').value || 1));
+  for (let i = 0; i < n; i++) await act('mon spawn ' + selMon);
+  monList();
+}
+const MON_STATE = { idle: 'wandering', rest: 'hiding', wake: 'popping out', chase: 'coming at you', wait: 'winding up', dash: 'dashing', dying: 'dying', down: 'down (gets up again)', parts: 'gone' };
+async function monList() {
+  const r = await cmd('mon', { quiet: true, end: ['@@OK', '@@ERR'] });
+  const rows = (r.lines || []).filter(l => l.startsWith('@@MON ')).map(l => l.split(' '));
+  $('monTable').innerHTML = rows.length ? '<tr><td><b>Monster</b></td><td><b>Where</b></td><td><b>Health</b></td><td><b>Doing</b></td></tr>' + rows.map(w =>
+    `<tr><td>${esc(w[1])}</td><td class="dim">${esc(w[3])}, ${esc(w[4])}</td><td>${esc(w[6])}</td><td class="dim">${esc(MON_STATE[w[7]] || w[7])}</td></tr>`).join('')
+    : '<tr><td class="dim">None here</td></tr>';
+  const ok = (r.lines || []).find(l => l.startsWith('@@OK'));
+  const m = ok && ok.match(/hp (\d+)\/(\d+)/);
+  if (m) { $('hpR').max = m[2]; $('hpR').value = m[1]; $('hpTxt').textContent = m[1]; }
+}
+async function godToggle() { const r = await act('god ' + (god ? 'off' : 'on')); if (answer(r).startsWith('@@OK')) { god = !god; $('btnGod').textContent = 'God mode: ' + (god ? 'on' : 'off'); } }
+setInterval(() => { if ($('monAuto').checked && status.board && $('tab-combat').classList.contains('active') && !pending) monList(); }, 1500);
+
+// ---------------------------------------------------------------- weather, gear
+for (const b of $('wxBtns').children) b.onclick = () => act('weather ' + b.dataset.w);
+async function gearSet(set) {
+  for (const slot of ['hat', 'jacket', 'pants', 'boots']) {
+    const id = set + '_' + slot;
+    if (!byId[id]) { toast('No ' + id + ' in assets/items', true); continue; }
+    await cmd('give ' + id, { quiet: true });
+    await act('gear ' + id);
+  }
+}
+
+// ---------------------------------------------------------------- trees
+function renderTrees() {
+  $('trSel').innerHTML = (catalog.trees || []).map(t => `<option value="${esc(t.id)}">${esc(t.name)}${t.fruit ? ' 🍎' : ''}</option>`).join('');
+}
+function treeHere() {
+  if (!state) return;
+  const m = (state.tile || '').split(',');
+  $('trX').value = +m[0] || 0; $('trY').value = Math.min(29, (+m[1] || 0) + 2);
+}
+function treePlant() {
+  if ($('trX').value === '' || $('trY').value === '') treeHere();
+  act(`tree plant ${$('trSel').value} ${+$('trX').value || 0} ${+$('trY').value || 0} ${$('trSt').value}`);
+}
+
 // ---------------------------------------------------------------- tabs + start
-const TAB_LOAD = { farm: () => { loadCrops(); loadMachines(); loadAnimals(); loadHerd(); }, fish: fishState, market: loadNpc, saves: () => { loadSlots(); ls(); }, console: loadLog, world: () => refreshDev(false) };
+const TAB_LOAD = { combat: monList, farm: () => { loadCrops(); loadMachines(); loadAnimals(); loadHerd(); }, fish: fishState, market: loadNpc, saves: () => { loadSlots(); ls(); }, console: loadLog, world: () => refreshDev(false) };
 for (const b of $('tabs').children) b.onclick = () => {
   for (const x of $('tabs').children) x.classList.toggle('active', x === b);
   for (const t of document.querySelectorAll('.tab')) t.classList.toggle('active', t.id === 'tab-' + b.dataset.tab);

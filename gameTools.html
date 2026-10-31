@@ -398,6 +398,15 @@ button.tool-tp.active { background: linear-gradient(#e05cc0, #a02c86); border-co
 #dupPanel .dupItem canvas { width: 80px; height: 80px; image-rendering: pixelated; background: #262626; border-radius: 4px; }
 #dupPanel .dupAttrs { font-size: 11px; color: #aaa; max-height: 140px; overflow: auto; align-self: stretch; }
 #dupPanel .dupWarn { color: #ffb070; font-size: 12px; }
+/* RANDOM ROCKS: the Map Editor's "Random rocks…" */
+#spawnOverlay { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: none; align-items: center; justify-content: center; z-index: 1000; }
+#spawnOverlay.show { display: flex; }
+#spawnPanel { background: #222; border: 1px solid #666; border-radius: 8px; padding: 16px 18px; display: flex; flex-direction: column; gap: 10px; width: min(640px, 92vw); max-height: 88vh; overflow: auto; }
+#spawnPanel .spList { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; }
+#spawnPanel .spList label { display: flex; align-items: center; gap: 6px; border: 1px solid #444; border-radius: 6px; padding: 5px 7px; background: #1a1a1a; font-size: 12px; cursor: pointer; }
+#spawnPanel .spList canvas { width: 32px; height: 32px; image-rendering: pixelated; background: #262626; border-radius: 3px; flex: none; }
+#spawnPanel .spNote { color: #aaa; font-size: 12px; }
+#spawnPanel .spWarn { color: #ffb070; font-size: 12px; }
 /* every editor tab: a grip to make the whole panel wider or narrower */
 .panelGrip { position: absolute; top: 40px; bottom: 40px; right: -7px; width: 10px; cursor: ew-resize; touch-action: none; z-index: 6; }
 .panelGrip::after { content: ''; position: absolute; top: 50%; right: 4px; height: 40px; width: 3px; margin-top: -20px; border-radius: 2px; background: #3a3a3a; }
@@ -811,6 +820,33 @@ body.farmOn #aniEdOverlay, body.farmOn #fbdEdOverlay, body.farmOn #fncEdOverlay 
 #fshCfgForm { grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 10px 18px; }
 #fshCfgForm label { flex-wrap: wrap; }
 #fshCfgForm .fshNote { flex-basis: 100%; }
+/* ---------- Game Tools: Monsters (assets/monsters/*.c) ---------- */
+#monOverlay { display: none; position: fixed; left: 0; right: 0; bottom: 0; top: 31px; background: #1a1a1a; z-index: 1000; align-items: flex-start; justify-content: center; overflow: auto; padding: 16px 0; box-sizing: border-box; }
+#monOverlay.show { display: flex; }
+#monPanel { background: #222; padding: 16px 18px; border-radius: 8px; border: 1px solid #444; display: flex; flex-direction: column; gap: 10px; width: min(1400px, 97vw); box-sizing: border-box; }
+#monPanel button { min-height: 26px; padding: 3px 10px; }
+#monPanel button.monPrimary { background: #1f6b34; border-color: #2f9a4c; color: #fff; font-weight: bold; }
+#monPanel .monCols { display: grid; grid-template-columns: 220px minmax(320px, 1fr) 380px; gap: 12px; align-items: start; }
+#monPanel .monList { display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); gap: 6px; max-height: 76vh; overflow: auto; }
+#monPanel .monCard { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 4px; font-size: 10px; background: #1a1a1a; border: 1px solid #383838; border-radius: 6px; min-height: 0 !important; }
+#monPanel .monCard.on { border-color: #40c8ff; background: #1d2b33; }
+#monPanel .monCard canvas { width: 48px; height: 48px; image-rendering: pixelated; }
+#monPanel .monSheetBar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 12px; color: #ccc; }
+#monPanel .monSheetBar input { width: 46px; }
+#monPanel .monSheetScroll { overflow: auto; max-height: 70vh; border: 1px solid #444; border-radius: 4px; background: #161616; }
+#monPanel #monSheet { image-rendering: pixelated; cursor: crosshair; display: block; }
+#monPanel .monAnims { display: flex; flex-wrap: wrap; gap: 4px; }
+#monPanel .monAnims button { font-size: 11px; padding: 2px 7px; min-height: 22px !important; }
+#monPanel .monAnims button.on { background: #1f5f82; border-color: #2b7aa6; color: #fff; }
+#monPanel .monFrames { display: flex; flex-wrap: wrap; gap: 4px; min-height: 44px; }
+#monPanel .monFrames canvas { width: 40px; height: 40px; image-rendering: pixelated; background: #262626; border-radius: 3px; cursor: pointer; }
+#monPanel #monPreview { width: 96px; height: 96px; image-rendering: pixelated; background: #262626; border-radius: 4px; }
+#monPanel .monStats { display: grid; grid-template-columns: auto 1fr auto 1fr; gap: 4px 8px; font-size: 12px; align-items: center; }
+#monPanel .monStats input { width: 100%; box-sizing: border-box; }
+#monPanel .monAbil { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 8px; font-size: 12px; }
+#monPanel .monDrop { display: flex; gap: 4px; align-items: center; font-size: 12px; margin-bottom: 3px; }
+#monPanel .spNote { color: #aaa; font-size: 12px; }
+
 /* ---------- Game Tools: Furniture (assets/furniture.json) ---------- */
 #furOverlay { display: none; position: fixed; left: 0; right: 0; bottom: 0; top: 31px; background: #1a1a1a; z-index: 1000; align-items: flex-start; justify-content: center; overflow: auto; padding: 16px 0; box-sizing: border-box; }
 #furOverlay.show { display: flex; }
@@ -911,6 +947,7 @@ body.farmOn #aniEdOverlay, body.farmOn #fbdEdOverlay, body.farmOn #fncEdOverlay 
   <button type="button" class="gtTab" data-tool="farm" title="Farm animals, barns, coops, silos, fences, gates and pipes">Farm</button>
   <button type="button" class="gtTab" data-tool="machine">Machines Editor</button>
   <button type="button" class="gtTab" data-tool="shop" title="Put any item up for sale: its price and which shop counter sells it">Shop Editor</button>
+  <button type="button" class="gtTab" data-tool="monster" title="Monsters for the mining maps: cut their frames from a sprite sheet (walking each way, hiding, popping out, dying, the bits they leave), their health, damage, speed and what they can do">Monsters</button>
   <button type="button" class="gtTab" data-tool="fishing" title="Stardew style fishing: fish, junk, crab pot catches, bait, tackle, rods — their icons, where and when they bite — and the game-wide fishing settings">Fishing</button>
   <button type="button" class="gtTab" data-tool="furniture" title="Furniture you want in the game: its name, price, pictures and what it should do — a list Claude builds from">Furniture <span id="furBadge" class="nyBadge" hidden></span></button>
   <button type="button" class="gtTab" data-tool="wardrobe" title="Who wears each piece of clothing (male, neutral, female): the shoppers dress by it, and Customize's lists go male, neutral, female">Wardrobe <span id="wgBadge" class="nyBadge" hidden></span></button>
@@ -951,7 +988,8 @@ body.farmOn #aniEdOverlay, body.farmOn #fbdEdOverlay, body.farmOn #fncEdOverlay 
       fight), <b>junk</b> (fished up instead now and then), <b>crab pot catches</b> (a crab pot in the water catches one overnight), <b>treasure</b>
       (found in the chests that sink into the fight), <b>bait</b> and <b>tackle</b> (put on a rod by dropping them on it in the bag), and <b>rods</b>.
       Pick one on the left (or make a new one), give it its icon, say where and when it shows up, and <b>Save</b> — then rebuild the firmware.
-      Map water is a pond unless its asset says River or Ocean (the Map Editor: select a Fishable asset → <b>Water:</b>).</div>
+      Map water is a pond unless its asset says River, Ocean, Lava or Ice (the Map Editor: select a Fishable asset → <b>Water:</b>). Ice is fished
+      through a hole a pickaxe breaks in it: fish with <b>Ice hole</b> bite there, and the pond / lake ones too.</div>
     <div id="fshStatus"></div>
     <div class="fshCols">
       <div class="fshSide">
@@ -978,6 +1016,70 @@ body.farmOn #aniEdOverlay, body.farmOn #fbdEdOverlay, body.farmOn #fncEdOverlay 
       <div class="fshSave"><button type="button" class="fshPrimary" id="fshCfgSave">Save settings</button><span class="fshNote" id="fshCfgMsg"></span></div>
     </div>
     <input type="file" id="fshIconFile" accept="image/png,image/*" style="display:none">
+  </div>
+</div>
+
+<div id="monOverlay">
+  <div id="monPanel">
+    <div class="itemHead">
+      <div class="itemTitle">Monsters</div>
+      <button type="button" id="monNewBtn">New monster</button>
+      <button type="button" id="monSheetBtn" title="A sprite sheet to cut the frames from (a PNG)">Load sheet…</button>
+      <button type="button" id="monOpenBtn" title="Open a monster's .c (assets/monsters/) — or click one on the left">Open .c…</button>
+      <button type="button" id="monSaveBtn" class="monPrimary" title="Writes assets/monsters/&lt;id&gt;.c; rebuild the firmware">Save</button>
+      <span id="monMsg" class="itemMsg"></span>
+    </div>
+    <div class="spNote">Monsters come up on mining maps (Map Editor › <b>Mining map…</b>). Load a sprite sheet, pick an animation on the right, then
+      <b>click a grid cell</b> (set the grid's size and where it starts to fit the sheet) or <b>drag a box</b> on the sheet to add that picture to it;
+      click a frame under the animations to take it out. Walk left can stay empty (it's walk right, mirrored); so can right and up (walk down
+      is used). <b>Rest</b> is what a hider looks like while it waits (a rock crab's rock), <b>Pop out</b> plays once as it wakes, <b>Death</b> once
+      as it dies, and the <b>Particles</b> fly out after it. Frames are stood bottom-middle in one box (at most 32x32). Save, then rebuild.</div>
+    <div class="monCols">
+      <div><b style="font-size:13px;">In the game</b><div class="monList" id="monList"></div></div>
+      <div>
+        <div class="monSheetBar">Grid <label>w <input type="number" id="monGW" value="16" min="1" max="64"></label><label>h <input type="number" id="monGH" value="24" min="1" max="64"></label>
+          <label>from x <input type="number" id="monGX" value="0" min="0"></label><label>y <input type="number" id="monGY" value="0" min="0"></label>
+          <label>Zoom <select id="monZoom"><option value="1">1x</option><option value="2" selected>2x</option><option value="3">3x</option><option value="4">4x</option></select></label></div>
+        <div class="monSheetScroll"><canvas id="monSheet" width="320" height="120"></canvas></div>
+        <div class="spNote">Green: the picked animation's frames on the sheet; yellow: the others'.</div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        <div class="monAnims" id="monAnims"></div>
+        <div class="monFrames" id="monFrames"></div>
+        <div style="display:flex;gap:10px;align-items:flex-start;"><canvas id="monPreview" width="96" height="96" title="The picked animation, playing"></canvas>
+          <div class="monStats" style="flex:1;">
+            <span>Id</span><input type="text" id="monId" placeholder="rock_crab" title="The file name: lowercase letters, digits and _">
+            <span>Name</span><input type="text" id="monName" placeholder="Rock Crab">
+            <span>Health</span><input type="number" id="mon_hp" min="1" max="9999">
+            <span>Damage</span><input type="number" id="mon_damage" min="0" max="255" title="What touching the player costs them">
+            <span>Defense</span><input type="number" id="mon_defense" min="0" max="255" title="Taken off every hit it takes">
+            <span>Speed</span><input type="number" id="mon_speed" min="0" max="60" title="Quarter pixels a game tick: the player walks 12">
+            <span>XP</span><input type="number" id="mon_xp" min="0" max="255" title="Combat xp for killing it">
+            <span>Wakes at</span><input type="number" id="mon_wake" min="1" max="30" title="Tiles: how near the player must come for it to notice them">
+            <span>Frame ms</span><input type="number" id="mon_frameMs" min="20" max="2000" title="How long each frame of an animation shows">
+          </div></div>
+        <b style="font-size:13px;">Shooting <span class="spNote">(tick Shoots, and give it Shot frames)</span></b>
+        <div class="monStats">
+            <span>Shot hurts</span><input type="number" id="mon_projDamage" min="0" max="255" title="What one of its shots costs the player">
+            <span>Shot speed</span><input type="number" id="mon_projSpeed" min="1" max="80" title="Quarter pixels a game tick (the player walks 12; 20 is a good shot)">
+            <span>Every ms</span><input type="number" id="mon_shootMs" min="200" max="60000" title="It shoots at most this often">
+            <span>From tiles</span><input type="number" id="mon_shootTiles" min="1" max="30" title="It shoots when the player is this near">
+        </div>
+        <b style="font-size:13px;">Its own sounds <span class="spNote">(WAVs in sounds/sound effects on the card, no .wav — empty: &lt;id&gt;_hit, _die, _wake, _attack)</span></b>
+        <div class="monStats">
+            <span>Hit</span><input type="text" id="monSound" placeholder="id_hit" title="It takes a hit">
+            <span>Dies</span><input type="text" id="monSoundDie" placeholder="id_die" title="It dies (or collapses)">
+            <span>Wakes</span><input type="text" id="monSoundWake" placeholder="id_wake" title="It pops out, or notices the player">
+            <span>Attacks</span><input type="text" id="monSoundAttack" placeholder="id_attack" title="It hurts the player, or starts a dash">
+          </div></div>
+        <b style="font-size:13px;">What it can do</b>
+        <div class="monAbil" id="monAbil"></div>
+        <b style="font-size:13px;">Drops <button type="button" id="monAddDrop" style="font-size:11px;min-height:20px;padding:1px 8px;">+ Add</button></b>
+        <div id="monDrops"></div>
+      </div>
+    </div>
+    <input type="file" id="monSheetFile" accept="image/png,image/*" style="display:none">
+    <input type="file" id="monOpenFile" accept=".c" style="display:none">
   </div>
 </div>
 
@@ -1643,7 +1745,7 @@ body.farmOn #aniEdOverlay, body.farmOn #fbdEdOverlay, body.farmOn #fncEdOverlay 
           <div class="aniStep"><b>3</b>What it is</div>
           <div class="aniForm">
             <span>Kind</span>
-            <div><select id="fbdKind"><option value="barn">Barn — cows, goats, sheep, pigs</option><option value="coop">Coop — chickens, rabbits, ducks</option><option value="silo">Silo — stores hay</option><option value="well">Well — fills the watering can</option></select></div>
+            <div><select id="fbdKind"><option value="barn">Barn — cows, goats, sheep, pigs</option><option value="coop">Coop — chickens, rabbits, ducks</option><option value="silo">Silo — stores hay</option><option value="well">Well — fills the watering can</option><option value="dock">Dock — out over the water, sells and launches boats</option></select></div>
             <span>Holds</span>
             <div id="fbdCapRow"><input type="number" id="fbdCap" min="1" max="24" value="4"> animals, and as many troughs inside</div>
             <span>Hay</span>
@@ -2084,6 +2186,31 @@ body.farmOn #aniEdOverlay, body.farmOn #fbdEdOverlay, body.farmOn #fncEdOverlay 
   </div>
 </div>
 
+<div id="spawnOverlay">
+  <div id="spawnPanel">
+    <div style="font-size:15px;font-weight:bold;">Mining map</div>
+    <label style="font-size:13px;"><input type="checkbox" id="spMining"> <b>This is a mining map</b> — monsters come up every time the player arrives, and the health bar shows</label>
+    <label style="font-size:13px;">Monsters each visit <input type="number" id="spMonCount" min="0" max="16" style="width:64px;"> <span class="spNote">(at most 16; they come up on free tiles away from the player)</span></label>
+    <b style="font-size:13px;">Which monsters — and how often (a bigger number: more of them)</b>
+    <div class="spList" id="spMons"></div>
+    <div style="font-size:14px;font-weight:bold;margin-top:6px;">Random rocks</div>
+    <div class="spNote">Rocks that come up again every morning in random places (main.c SPAWNS). Tick the breakables on this map to use as <b>samples</b>:
+      the game never shows the samples where you put them — each morning at 6:00 the rocks left from the day before go, and that many new ones come up on
+      random free tiles, each a copy of a sample picked at random (put down more of the common ones). Free = the ground ticked below, with nothing on it,
+      not water, nothing solid, not next to a teleporter. Export the map again after changing this (it writes <code>&lt;map&gt;.spawn</code>).</div>
+    <label style="font-size:13px;">Rocks each morning <input type="number" id="spCount" min="0" max="32" style="width:64px;"> <span class="spNote">(0 = off, at most 32)</span></label>
+    <b style="font-size:13px;">Samples — breakables on this map</b>
+    <div class="spList" id="spRocks"></div>
+    <b style="font-size:13px;">They come up on — none ticked: any free ground</b>
+    <div class="spList" id="spOn"></div>
+    <div class="spWarn" id="spWarn"></div>
+    <div class="row">
+      <button type="button" id="spDone" style="background:#1f6b34;border-color:#2f9a4c;color:#fff;">Done</button>
+      <button type="button" id="spOff">Turn off</button>
+    </div>
+  </div>
+</div>
+
 <div id="itemOverlay">
   <div id="itemPanel">
     <div class="itemHead">
@@ -2220,6 +2347,27 @@ body.farmOn #aniEdOverlay, body.farmOn #fbdEdOverlay, body.farmOn #fncEdOverlay 
           <div class="animFields"><span>Climate</span><span class="animFields" id="itemClimates"></span></div>
           <div class="animCap">The climates it lives in (each map has one — the Map Editor's Climate). A forageable only comes up there; a fish only bites there (the Fishing tab sets it too). None ticked = any but Volcanic and Glacial.</div>
           <div class="animCap">Every morning in game a few forageables come up on the ground tiles ticked "Forage" in the Map Editor — up to 8 on a map — and the player picks them up by walking onto them. Weight = how often this one is picked against the others that could come up. No season ticked = all year; out of season they go. It rolls a quality if "Rolls a quality" is ticked.</div>
+        </div>
+
+        <div class="itemCard">
+          <div class="itemCardTitle">Boat</div>
+          <div class="animFields">
+            <label title="boat 1: sailed from a dock (main.c BOATS + DOCKS); the Boat shop sells it"><input type="checkbox" id="itemBoat"> It's a boat</label>
+            <label title="boat_speed: how fast it goes, % of walking speed (25-400)">Speed <input type="number" id="itemBoatSpeed" min="25" max="400" value="100" style="width:56px;" disabled> %</label>
+          </div>
+          <div class="animFields">
+            <label title="boat_len: its deck's length in tiles, from the stern to the bow (1-6)">Deck <input type="number" id="itemBoatLen" min="1" max="6" value="3" style="width:44px;" disabled> long</label>
+            <label title="boat_wide: its deck's width in tiles (1-4)">× <input type="number" id="itemBoatWide" min="1" max="4" value="2" style="width:44px;" disabled> wide</label>
+            <label title="boat_helm: how many tiles forward of the stern the helm is (in the middle across)">Helm <input type="number" id="itemBoatHelm" min="0" max="5" value="0" style="width:44px;" disabled> tiles from the stern</label>
+          </div>
+          <div class="animFields">
+            <span>Goes on</span>
+            <label title="boat_water bit 1"><input type="checkbox" id="itemBoatPond" checked disabled> Ponds</label>
+            <label title="boat_water bit 2"><input type="checkbox" id="itemBoatRiver" checked disabled> Rivers</label>
+            <label title="boat_water bit 4"><input type="checkbox" id="itemBoatOcean" checked disabled> The sea</label>
+            <label title="boat_water bit 8: the Map Editor's Water: Lava"><input type="checkbox" id="itemBoatLava" disabled> Lava</label>
+          </div>
+          <div class="animCap">In game: hold it on a dock (a Dock from the Farm tab, a pier drawn over the water with no collision, or a ground tile named "dock" or "pier") and tap the water — the boat goes in the water there, for good (it never goes back in the bag). Its deck (length × width tiles, lengthwise the way it points) is walked on like the ground. Stand on its helm (in the middle of the stern, or Helm tiles forward) to steer: a tap on the water sails until the deck is over it, a tap on land sails alongside, a tap on the deck walks there. Teleporters over the water take the boat along when you're at the helm. Its look on the water is the <b>Swing</b> tab's art: square frames (at most 96×96) centred on the deck, the helm where the deck's helm tile is — 1 frame = every way, 2 = up/down and sideways, 3 = down, up, right, 4 = down, up, left, right (sideways art points right; mirrored for left). No art: a drawn hull with a wheel at the helm. The Boat shop (a dock's post, or the "Boat shop" action) sells it — set a Buy price.</div>
         </div>
 
         <div class="itemCard">
@@ -2910,19 +3058,23 @@ let showTeleporters = true;
 let mapTrees = [];
 // The map's climate (main.c CLIMATE): an index into CLIMATES — 0 Normal (no <map>.climate file).
 let mapClimate = 0;
+// RANDOM ROCKS (main.c SPAWNS): { count, rocks: [breakable asset names — the samples], on: [ground tile type names] }; count 0 = off.
+// A mining map (main.c MONSTERS + COMBAT): mining, monsters (how many each visit), mons: [{ id, w }] (which, by weight).
+let mapSpawn = { count: 0, rocks: [], on: [], mining: false, monsters: 0, mons: [] };
 let selClimateEl = null;   // its picker in the file row
 // Tile types (see TILE TYPES): mirror main.c's Tile types notes.
 const TILE_TYPE_MAX = 127, TILE_NAME_MAX = 31;
 const TILE_FLAG_TILLABLE = 0x01, TILE_FLAG_BUILDABLE = 0x02, TILE_FLAG_FISHABLE = 0x04, TILE_FLAG_GRASSY = 0x08, TILE_CELL_COVERED = 0x80;   // main.c TILE_FLAG_*
-// A Fishable asset's water kind (asset.water: undefined = a pond / lake, 'river', 'ocean', 'lava'): main.c TILE_FLAG_RIVER / _OCEAN / _LAVA —
+// A Fishable asset's water kind (asset.water: undefined = a pond / lake, 'river', 'ocean', 'lava', 'ice'): main.c TILE_FLAG_RIVER / _OCEAN / _LAVA —
 // which fish bite there (the Fishing tab's "Water" condition, "fish_water"). Lava: only "rod_lava" rods cast into it, only fish_water 8 bites.
-const TILE_FLAG_RIVER = 0x10, TILE_FLAG_OCEAN = 0x20, TILE_FLAG_LAVA = 0x40;
+// Ice (main.c ICE HOLES, TILE_WATER_ICE = River and Ocean both): frozen — a pickaxe breaks a hole, fished through it (fish_water 16, or pond ones).
+const TILE_FLAG_RIVER = 0x10, TILE_FLAG_OCEAN = 0x20, TILE_FLAG_LAVA = 0x40, TILE_WATER_ICE = 0x30;
 // asset.forage: main.c TILE_FLAG_FORAGE — forageables come up on it every morning (FORAGE). (A type's flag;
 // TILE_CELL_COVERED, the same bit, is a cell's.)
 const TILE_FLAG_FORAGE = 0x80;
-const WATER_KINDS = [undefined, 'river', 'ocean', 'lava'];
-function waterKindName(w) { return w === 'river' ? 'River' : w === 'ocean' ? 'Ocean' : w === 'lava' ? 'Lava' : 'Pond / lake'; }
-function waterKindOk(w) { return w === 'river' || w === 'ocean' || w === 'lava' ? w : undefined; }
+const WATER_KINDS = [undefined, 'river', 'ocean', 'lava', 'ice'];
+function waterKindName(w) { return w === 'river' ? 'River' : w === 'ocean' ? 'Ocean' : w === 'lava' ? 'Lava' : w === 'ice' ? 'Ice' : 'Pond / lake'; }
+function waterKindOk(w) { return w === 'river' || w === 'ocean' || w === 'lava' || w === 'ice' ? w : undefined; }
 // main.c SEASONS: SEASON_DAYS (28) game days each; a set of them is a bit mask (bit k = SEASONS[k]), 0 = all year
 const SEASONS = ['Spring', 'Summer', 'Fall', 'Winter'], SEASON_FILES = ['spring', 'summer', 'fall', 'winter'];
 const ITEM_SEASON_ATTR = 'season';   // items.h ITEM_ATTR_SEASON: a seed packet's seasons
@@ -5821,7 +5973,7 @@ mapResizeHandleEl.addEventListener('mousedown', e => {
 });
 
 makeButton(rowFile, 'Load…  (Ctrl+L)', () => openLoadMenu());
-const btnClear = makeButton(rowFile, 'Clear map', () => { stopAnimPreview(); stopBrkPreview(); pushUndo(); colorData.fill(40); hitboxData.fill(0); layerData.fill(0); placedAssets = []; importedAnims = []; importedBreakables = []; teleporters = []; mapTrees = []; importedTiles = null; importedTriggers = null; redrawAll(); });
+const btnClear = makeButton(rowFile, 'Clear map', () => { stopAnimPreview(); stopBrkPreview(); pushUndo(); colorData.fill(40); hitboxData.fill(0); layerData.fill(0); placedAssets = []; importedAnims = []; importedBreakables = []; teleporters = []; mapTrees = []; mapSpawn = { count: 0, rocks: [], on: [], mining: false, monsters: 0, mons: [] }; importedTiles = null; importedTriggers = null; redrawAll(); });
 const btnRemoveHidden = makeButton(rowFile, 'Remove hidden', removeHiddenPlacements);
 btnRemoveHidden.title = 'Remove placements that are completely covered by plain (not animated, not breakable) assets above them — they can never be seen, so the device shouldn\'t spend time on them';
 const btnExportMap = makeButton(rowFile, 'Export', exportMap);
@@ -5835,6 +5987,8 @@ selClimate.title = 'This map\'s climate. Crops, trees, forage and fish say which
 selClimate.addEventListener('change', () => { pushUndo(); mapClimate = +selClimate.value; });
 rowFile.appendChild(selClimate);
 function syncClimateUi() { if (selClimateEl) selClimateEl.value = String(mapClimate); }
+const btnSpawn = makeButton(rowFile, 'Mining map…', () => openSpawnDialog());
+btnSpawn.title = 'Make this a mining map: monsters come up every visit (the Monsters tab makes them), and rocks (any breakables) come up again every morning in random places — pick the samples and how many. Exported as <map>.spawn.';
 const btnBackup = makeButton(rowFile, 'Backup', saveBackup);
 const btnConvertCloud = makeButton(rowFile, 'Convert to Cloud File', () => convertToCloud());
 const btnSaveActive = makeButton(rowFile, 'Save', () => saveActiveFile());
@@ -7223,7 +7377,7 @@ function axRenderDetails() {
       fs.classList.toggle('on', !!a.fishable);
       c2.appendChild(fs);
       if (a.fishable) {   // which water it is: the fish that bite there (FISHING, "fish_water")
-        const wk = axButton(`Water: ${waterKindName(a.water)}`, 'Which water this is — Pond / lake, River, Ocean or Lava (lava: only a rod with "Can fish in lava" casts into it). Each fish says which it bites in (the Fishing tab). Click to change. Export the map again after changing it.', () => { axRecordAssets([i], `water kind ${axAssetLabel(i)}`); a.water = nextWaterKind(a.water); if (showTiles) redrawAll(); renderAssetList(); }, editing);
+        const wk = axButton(`Water: ${waterKindName(a.water)}`, 'Which water this is — Pond / lake, River, Ocean, Lava or Ice (lava: only a rod with "Can fish in lava" casts into it; ice: frozen over — a pickaxe breaks a hole in it, and the rod casts into the hole, until it freezes over at 6:00). Each fish says which it bites in (the Fishing tab). Click to change. Export the map again after changing it.', () => { axRecordAssets([i], `water kind ${axAssetLabel(i)}`); a.water = nextWaterKind(a.water); if (showTiles) redrawAll(); renderAssetList(); }, editing);
         wk.classList.toggle('on', !!a.water);
         c2.appendChild(wk);
       }
@@ -9297,6 +9451,7 @@ function buildBackupData() {
     teleporters: teleporters.map(t => ({ ...t })),
     trees: mapTrees.map(t => ({ ...t })),
     climate: CLIMATE_FILES[mapClimate] || 'normal',
+    spawn: { count: mapSpawn.count, rocks: mapSpawn.rocks.slice(), on: mapSpawn.on.slice(), mining: mapSpawn.mining, monsters: mapSpawn.monsters, mons: mapSpawn.mons.map(m => ({ ...m })) },
     importedTiles: importedTiles ? { types: importedTiles.types.map(t => ({ ...t })), cells: u8ToBase64(importedTiles.cells), hashes: Array.from(importedTiles.hashes) } : null,
     importedTriggers: importedTriggers ? importedTriggers.map(t => ({ ...t, ids: t.ids.slice() })) : null
   };
@@ -9599,6 +9754,7 @@ function loadBackupData(data) {
   teleporters = (data.teleporters || []).map(tpNormalize);
   mapTrees = (data.trees || []).map(mtNormalize).filter(Boolean);
   mapClimate = Math.max(0, CLIMATE_FILES.indexOf(data.climate));   // (a backup from before climates: Normal)
+  mapSpawn = spawnNormalize(data.spawn);   // (from before random rocks: off)
   syncClimateUi();
   importedTiles = (data.importedTiles && data.importedTiles.cells) ? {
     types: (data.importedTiles.types || []).map(t => ({ name: String(t.name), flags: t.flags | 0 })),
@@ -10148,6 +10304,121 @@ function bundleExportProblems(bundles) {
 //  (importedTiles) for the cells nothing has been placed on since; a cell
 //  whose pixels changed counts as covered.
 // ================================================================
+// ================================================================
+//  RANDOM ROCKS — main.c SPAWNS. The map's mapSpawn: how many rocks come up
+//  each morning, the breakable assets on the map that are their samples
+//  (by name), and the ground tile types they come up on. Export writes
+//  <map>.spawn: "count N", "on <tile type>" lines, and a "rock X Y" line for
+//  each placed sample (its footprint's top-left, as collectBrkExport() puts
+//  it in the .map — that's how the device finds it).
+// ================================================================
+function spawnNormalize(d) {
+  const names = a => Array.isArray(a) ? a.filter(x => typeof x === 'string' && x) : [];
+  const mons = a => Array.isArray(a) ? a.filter(x => x && typeof x.id === 'string' && x.id).map(x => ({ id: x.id, w: Math.max(1, Math.min(255, x.w | 0 || 1)) })) : [];
+  return d && typeof d === 'object' ? { count: Math.max(0, Math.min(32, d.count | 0)), rocks: names(d.rocks), on: names(d.on), mining: !!d.mining,
+                                        monsters: Math.max(0, Math.min(16, d.monsters | 0)), mons: mons(d.mons) }
+                                    : { count: 0, rocks: [], on: [], mining: false, monsters: 0, mons: [] };
+}
+function spawnRecName(rec) { const a = placementSourceAsset(rec); return (a && a.name) || (rec.snapshot && rec.snapshot.name) || ''; }
+// The breakables placed on this map, by asset name: { name, recs: [...] }.
+function spawnBreakables() {
+  const by = new Map();
+  for (const rec of placedAssets) {
+    if (!rec.snapshot || !rec.snapshot.brk) continue;
+    const n = spawnRecName(rec);
+    if (!by.has(n)) by.set(n, { name: n, recs: [] });
+    by.get(n).recs.push(rec);
+  }
+  return [...by.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+// The ground tile types on this map that rocks could come up on (not water).
+function spawnGroundTypes() {
+  let types = [];
+  try { types = collectTileExport().types; } catch (e) { types = []; }
+  return [...new Set(types.filter(t => !(t.flags & TILE_FLAG_FISHABLE)).map(t => t.name))].sort();
+}
+function spawnExport(base) {
+  const lines = [`# ${base}'s random rocks (main.c SPAWNS): each morning ${mapSpawn.count} copies of the samples below come up on random free tiles`,
+                 `count ${mapSpawn.count}`, ...mapSpawn.on.map(n => `on ${n}`)];
+  let samples = 0;
+  for (const rec of placedAssets) {
+    if (!mapSpawn.count || !rec.snapshot || !rec.snapshot.brk || !mapSpawn.rocks.includes(spawnRecName(rec))) continue;
+    lines.push(`rock ${rec.cx - Math.floor(rec.w / 2)} ${rec.cy - Math.floor(rec.h / 2)}`);   // (collectBrkExport()'s x0, y0)
+    samples++;
+  }
+  const mons = mapSpawn.mining ? mapSpawn.mons.filter(m => m.id) : [];
+  if (mapSpawn.mining)   // a mining map (main.c MONSTERS + COMBAT): monsters every visit, the health bar
+    lines.push(`# a mining map: ${mapSpawn.monsters} monsters every visit, picked by weight`, 'mining 1', `monsters ${mapSpawn.monsters}`, ...mons.map(m => `monster ${m.id} ${m.w}`));
+  return samples || mapSpawn.mining ? { text: lines.join('\n') + '\n', samples, mons: mons.length } : { text: null, samples: 0, mons: 0 };
+}
+function spawnExportInfo() {
+  const e = spawnExport('map');
+  let t = '';
+  if (mapSpawn.mining) t += `\nMining map: ${mapSpawn.monsters} monsters every visit, of ${e.mons} kind${e.mons === 1 ? '' : 's'}${e.mons ? '' : ' — none ticked, so none come up'}.`;
+  if (mapSpawn.count) t += e.samples ? `\nRandom rocks: ${mapSpawn.count} each morning, from ${e.samples} sample${e.samples === 1 ? '' : 's'} (<map>.spawn).`
+                                     : '\nRandom rocks are on, but none of the ticked samples is on the map — nothing will come up.';
+  return t;
+}
+// A placed record's first look, drawn into a small canvas.
+function spawnDrawRec(cv, rec) {
+  const sn = rec.snapshot, w = sn.w, h = sn.h, img = new ImageData(w, h);
+  for (let i = 0; i < w * h; i++) {
+    img.data[i * 4] = sn.rgba_color[i * 3]; img.data[i * 4 + 1] = sn.rgba_color[i * 3 + 1]; img.data[i * 4 + 2] = sn.rgba_color[i * 3 + 2];
+    img.data[i * 4 + 3] = sn.rgba_alpha ? sn.rgba_alpha[i] : 255;
+  }
+  cv.width = w; cv.height = h;
+  cv.getContext('2d').putImageData(img, 0, 0);
+}
+async function openSpawnDialog() {
+  const el = x => document.getElementById(x);
+  mapSpawn = spawnNormalize(mapSpawn);
+  const brks = spawnBreakables(), grounds = spawnGroundTypes();
+  el('spCount').value = mapSpawn.count || (brks.length ? 15 : 0);
+  el('spMining').checked = mapSpawn.mining;
+  el('spMonCount').value = mapSpawn.monsters || 6;
+  let lib = [];
+  try { lib = await monLoadLib(true); } catch (e) { lib = []; }
+  const mw = el('spMons');
+  mw.innerHTML = lib.length ? '' : '<span class="spNote">No monsters found: make some in the Monsters tab (assets/monsters, with the assets folder linked).</span>';
+  for (const e of lib) {
+    const lb = document.createElement('label'), cb = document.createElement('input'), wt = document.createElement('input'), cv = document.createElement('canvas');
+    const had = mapSpawn.mons.find(m => m.id === e.id);
+    cb.type = 'checkbox'; cb.checked = !!had; cb.dataset.id = e.id;
+    wt.type = 'number'; wt.min = 1; wt.max = 255; wt.value = had ? had.w : 10; wt.style.width = '44px'; wt.title = 'How often it comes up, against the others ticked';
+    cv.width = 32; cv.height = 32;
+    monDrawImg(cv, e.m.anims.down[0] || e.m.anims.rest[0] || Object.values(e.m.anims).find(a => a.length)?.[0]);
+    lb.append(cb, cv, document.createTextNode(e.name + ' '), wt);
+    mw.appendChild(lb);
+  }
+  const list = (wrap, items, picked, draw) => {
+    wrap.innerHTML = '';
+    if (!items.length) { wrap.innerHTML = '<span class="spNote">(none on this map)</span>'; return; }
+    for (const it of items) {
+      const lb = document.createElement('label'), cb = document.createElement('input');
+      cb.type = 'checkbox'; cb.checked = picked.includes(it.name || it); cb.dataset.name = it.name || it;
+      lb.appendChild(cb);
+      if (draw) { const cv = document.createElement('canvas'); draw(cv, it); lb.appendChild(cv); }
+      lb.appendChild(document.createTextNode(it.name ? `${axStripPng(it.name)} (${it.recs.length} placed)` : it));
+      wrap.appendChild(lb);
+    }
+  };
+  list(el('spRocks'), brks, mapSpawn.rocks, (cv, it) => spawnDrawRec(cv, it.recs[0]));
+  list(el('spOn'), grounds, mapSpawn.on, null);
+  el('spWarn').textContent = brks.length ? '' : 'Put some breakables (rocks) on the map first — any of them can be a sample.';
+  const read = name => [...el(name).querySelectorAll('input[type=checkbox]')].filter(c => c.checked).map(c => c.dataset.name);
+  const close = () => el('spawnOverlay').classList.remove('show');
+  el('spDone').onclick = () => {
+    pushUndo();
+    const mons = [...el('spMons').querySelectorAll('label')].map(l => { const c = l.querySelector('input[type=checkbox]'), w = l.querySelector('input[type=number]'); return c && c.checked ? { id: c.dataset.id, w: +w.value | 0 } : null; }).filter(Boolean);
+    mapSpawn = spawnNormalize({ count: +el('spCount').value, rocks: read('spRocks'), on: read('spOn'), mining: el('spMining').checked, monsters: +el('spMonCount').value, mons });
+    if (mapSpawn.count && !mapSpawn.rocks.length) alert('No samples ticked: no rocks will come up. Tick at least one breakable.');
+    close();
+  };
+  el('spOff').onclick = () => { pushUndo(); mapSpawn = { ...mapSpawn, count: 0, mining: false }; close(); };
+  el('spawnOverlay').onmousedown = e => { if (e.target.id === 'spawnOverlay') close(); };
+  el('spawnOverlay').classList.add('show');
+}
+
 function tileTypeName(name) {
   const s = String(name || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
   return (s || 'tile').slice(0, TILE_NAME_MAX);
@@ -10229,7 +10500,8 @@ function collectTileExport() {
       const a = placementSourceAsset(ground[c]), ok = tileAssetCanTill(a);
       t = typeNumber(tileTypeName(a ? a.name : ground[c].snapshot.name),
                      (ok && a.tillable ? TILE_FLAG_TILLABLE : 0) | (ok && a.buildable ? TILE_FLAG_BUILDABLE : 0) | (ok && a.fishable ? TILE_FLAG_FISHABLE : 0) | (ok && a.grassy ? TILE_FLAG_GRASSY : 0) | (ok && a.forage ? TILE_FLAG_FORAGE : 0) |
-                     (ok && a.fishable && a.water === 'river' ? TILE_FLAG_RIVER : 0) | (ok && a.fishable && a.water === 'ocean' ? TILE_FLAG_OCEAN : 0) | (ok && a.fishable && a.water === 'lava' ? TILE_FLAG_LAVA : 0));
+                     (ok && a.fishable && a.water === 'river' ? TILE_FLAG_RIVER : 0) | (ok && a.fishable && a.water === 'ocean' ? TILE_FLAG_OCEAN : 0) | (ok && a.fishable && a.water === 'lava' ? TILE_FLAG_LAVA : 0) |
+                     (ok && a.fishable && a.water === 'ice' ? TILE_WATER_ICE : 0));
     } else if (importedTiles && (importedTiles.cells[c] & ~TILE_CELL_COVERED)) {
       const it = importedTiles.types[(importedTiles.cells[c] & ~TILE_CELL_COVERED) - 1];
       if (it) {
@@ -10280,7 +10552,7 @@ function drawTileOverlay() {
     if (!v) continue;
     const x = (c % cols) * T, y = Math.floor(c / cols) * T, flags = g.types[(v & ~TILE_CELL_COVERED) - 1].flags;
     if (flags & TILE_FLAG_FISHABLE) {   // cyan = fishable water (a pond); teal = a river; deep blue = the ocean; orange = lava
-      ctx.fillStyle = (flags & TILE_FLAG_LAVA) ? 'rgba(255,110,30,.38)' : (flags & TILE_FLAG_OCEAN) ? 'rgba(40,90,240,.38)' : (flags & TILE_FLAG_RIVER) ? 'rgba(40,220,150,.34)' : 'rgba(40,220,230,.30)';
+      ctx.fillStyle = (flags & TILE_WATER_ICE) === TILE_WATER_ICE ? 'rgba(220,240,255,.45)' : (flags & TILE_FLAG_LAVA) ? 'rgba(255,110,30,.38)' : (flags & TILE_FLAG_OCEAN) ? 'rgba(40,90,240,.38)' : (flags & TILE_FLAG_RIVER) ? 'rgba(40,220,150,.34)' : 'rgba(40,220,230,.30)';
       ctx.fillRect(x, y, T, T);
       ctx.setLineDash([]);
       ctx.strokeStyle = 'rgba(40,220,230,.9)';
@@ -10316,7 +10588,7 @@ function tileCursorChip(p) {
   const bits = [];
   if (t.flags & TILE_FLAG_TILLABLE) bits.push('tillable');
   if (t.flags & TILE_FLAG_BUILDABLE) bits.push('buildable');
-  if (t.flags & TILE_FLAG_FISHABLE) bits.push((t.flags & TILE_FLAG_LAVA) ? 'fishable (lava)' : (t.flags & TILE_FLAG_OCEAN) ? 'fishable (ocean)' : (t.flags & TILE_FLAG_RIVER) ? 'fishable (river)' : 'fishable (pond)');
+  if (t.flags & TILE_FLAG_FISHABLE) bits.push((t.flags & TILE_WATER_ICE) === TILE_WATER_ICE ? 'fishable (ice: through a hole)' : (t.flags & TILE_FLAG_LAVA) ? 'fishable (lava)' : (t.flags & TILE_FLAG_OCEAN) ? 'fishable (ocean)' : (t.flags & TILE_FLAG_RIVER) ? 'fishable (river)' : 'fishable (pond)');
   if (t.flags & TILE_FLAG_GRASSY) bits.push('grassy');
   if (t.flags & TILE_FLAG_FORAGE) bits.push('forage');
   if (v & TILE_CELL_COVERED) bits.push('covered');
@@ -10385,6 +10657,7 @@ const BUILTIN_ACTIONS = [
   { id: 'ranch_shop', label: 'Ranch shop', help: 'Opens a shop that sells farm animals, hay, grass starter and animal tools' },
   { id: 'fish_shop', label: 'Fish shop', help: 'Opens a shop that sells fishing rods, bait, tackle and crab pots' },
   { id: 'general_shop', label: 'General store', help: 'Opens a shop that sells any other item with a price (Item Editor / Shop Editor)' },
+  { id: 'boat_shop', label: 'Boat shop', help: 'Opens a shop that sells the boats (sail them from a dock: hold one and tap the water)' },
   { id: 'auction_house', label: 'Auction house', help: 'Opens the auction house: put things up for auction, see the bids' },
   { id: 'ledger', label: 'Ledger', help: 'Opens the ledger: everything bought and sold in the last 20 days (also ledger.csv in the save)' },
   { id: 'bed', label: 'Bed', help: 'Asks to go to bed: sleeps until 6:00 am the next morning, and crops in watered soil grow overnight' },
@@ -11073,7 +11346,7 @@ async function exportMap() {
     `\n${tiles.grassy} tile${tiles.grassy === 1 ? '' : 's'} where wild grass grows back` + (tiles.grassy ? '.' : ' (tick "Grassy" on a 16x16 ground asset for that).') +
     `\n${tiles.forage} tile${tiles.forage === 1 ? '' : 's'} where forage comes up` + (tiles.forage ? '.' : ' (tick "Forage" on a 16x16 ground asset for that).') +
     `\nObjects with actions: ${trigs.list.length}.` +
-    `\nClimate: ${CLIMATES[mapClimate]}${mapClimate ? ` (${base}.climate)` : ''}.`;
+    `\nClimate: ${CLIMATES[mapClimate]}${mapClimate ? ` (${base}.climate)` : ''}.` + spawnExportInfo();
   const suggested = `${tabBaseName()}.map`;
   let fileName = (prompt('File name (its 6 night files are saved next to it):', suggested) || suggested).trim();
   if (!/\.map$/i.test(fileName)) fileName += '.map';
@@ -11088,6 +11361,8 @@ async function exportMap() {
   if (treesText) files.push({ name: `${base}.trees`, buf: new TextEncoder().encode(treesText) });
   const climateText = mapClimate ? `# ${base}'s climate (main.c CLIMATE): normal, hot, cold, dry, lush, volcanic or glacial\nclimate ${CLIMATE_FILES[mapClimate]}\n` : null;   // Normal: no file
   if (climateText) files.push({ name: `${base}.climate`, buf: new TextEncoder().encode(climateText) });
+  const spawn = spawnExport(base);   // RANDOM ROCKS: <base>.spawn
+  if (spawn.text) files.push({ name: `${base}.spawn`, buf: new TextEncoder().encode(spawn.text) });
   const treeInfo = mapTrees.length ? `
 Trees: ${mapTrees.length} (${base}.trees) — put on the map the first time a save goes there.` : '';
   const seasonInfo = seasons.length ? `\nSeasonal art: ${seasons.map(k => SEASONS[k]).join(', ')} (${seasons.length * (NIGHT_STAGES + 1)} more files: ${base}.${SEASON_FILES[seasons[0]]}.map …).` : '';
@@ -11112,6 +11387,7 @@ Trees: ${mapTrees.length} (${base}.trees) — put on the map the first time a sa
       }
       if (!treesText) try { await out.removeEntry(`${base}.trees`); } catch (e) { /* wasn't there */ }   // no trees any more
       if (!climateText) try { await out.removeEntry(`${base}.climate`); } catch (e) { /* wasn't there */ }   // Normal again
+      if (!spawn.text) try { await out.removeEntry(`${base}.spawn`); } catch (e) { /* wasn't there */ }   // no random rocks any more
     } catch (e) {
       alert(`Couldn't write into "${out.name}": ${e.message}`);
       return;
@@ -12528,6 +12804,8 @@ const ITEM_TILLS_ATTR = 'tills', ITEM_WATERS_ATTR = 'waters', ITEM_WATER_MAX_ATT
 const ITEM_TOOL_ATTR = 'tool', ITEM_TOOL_SWIPE_ATTR = 'tool_swipe', ITEM_TOOL_POWER_ATTR = 'tool_power',   // main.c TOOL SWING: swings when used, the swipe (0 = off), hits a swing
       ITEM_TOOL_SFX_PREFIX = 'tool_sfx:', ITEM_COUNTS_AS_PREFIX = 'counts_as:';                              // ...its sound(s), what breakables count it as
 const ITEM_FORAGE_ATTR = 'forage', ITEM_FORAGE_SEASONS_ATTR = 'forage_seasons', ITEM_FORAGE_MAP_PREFIX = 'forage_map:';   // items.h ITEM_ATTR_FORAGE*: main.c FORAGE
+const ITEM_BOAT_ATTR = 'boat', ITEM_BOAT_SPEED_ATTR = 'boat_speed', ITEM_BOAT_WATER_ATTR = 'boat_water';   // items.h ITEM_ATTR_BOAT*: main.c BOATS + DOCKS
+const ITEM_BOAT_LEN_ATTR = 'boat_len', ITEM_BOAT_WIDE_ATTR = 'boat_wide', ITEM_BOAT_HELM_ATTR = 'boat_helm';
 const ITEM_ENERGY_ATTR = 'energy';                                                                      // items.h ITEM_ATTR_ENERGY: a use's energy (main.c ENERGY)
 const ITEM_MARKET_BOARD_ATTR = 'market_board';                                                          // items.h ITEM_ATTR_MARKET_BOARD: a prop that opens the market board
 const ITEM_TYPES_ATTR = 'types', ITEM_TYPES2_ATTR = 'types2';                                           // items.h ITEM_ATTR_TYPES / _TYPES2: market types, bits 0-30 / 31-61
@@ -13311,6 +13589,36 @@ function itemForageAttrs() {
   return out;
 }
 
+// Boat (main.c BOATS + DOCKS): "boat 1", "boat_speed" % of walking (none = 100), "boat_water" = fish_water bits
+// 1 pond, 2 river, 4 ocean, 8 lava (none = 7), its deck "boat_len" x "boat_wide" tiles (none = 3 x 2), the helm
+// "boat_helm" tiles forward of the stern (none = 0). Its look on the water is the Swing tab's art.
+const ITEM_BOAT_WATER_IDS = ['itemBoatPond', 'itemBoatRiver', 'itemBoatOcean', 'itemBoatLava'], ITEM_BOAT_WATER_DEFAULT = 7;
+function itemBoatEnable(on) { ['itemBoatSpeed', 'itemBoatLen', 'itemBoatWide', 'itemBoatHelm', ...ITEM_BOAT_WATER_IDS].forEach(id => { itemEl(id).disabled = !on; }); }
+function setItemBoat(on, speed, water, len, wide, helm) {
+  itemEl('itemBoat').checked = on;
+  itemBoatEnable(on);
+  itemEl('itemBoatSpeed').value = itemClamp(speed || 100, 25, 400);
+  ITEM_BOAT_WATER_IDS.forEach((id, k) => { itemEl(id).checked = !!((water >> k) & 1); });
+  itemEl('itemBoatLen').value = itemClamp(len || 3, 1, 6);
+  itemEl('itemBoatWide').value = itemClamp(wide || 2, 1, 4);
+  itemEl('itemBoatHelm').value = itemClamp(helm || 0, 0, 5);
+}
+itemEl('itemBoat').addEventListener('change', e => itemBoatEnable(e.target.checked));
+// The attributes the card writes, or a string saying what's wrong.
+function itemBoatAttrs() {
+  const out = [{ name: ITEM_BOAT_ATTR, value: 1 }], speed = itemClamp(parseInt(itemEl('itemBoatSpeed').value) || 100, 25, 400);
+  let water = 0;
+  ITEM_BOAT_WATER_IDS.forEach((id, k) => { if (itemEl(id).checked) water |= 1 << k; });
+  if (!water) return 'The boat goes on no water — tick Ponds, Rivers, the Sea or Lava.';
+  const len = itemClamp(parseInt(itemEl('itemBoatLen').value) || 3, 1, 6), wide = itemClamp(parseInt(itemEl('itemBoatWide').value) || 2, 1, 4);
+  const helm = itemClamp(parseInt(itemEl('itemBoatHelm').value) || 0, 0, len - 1);
+  out.push({ name: ITEM_BOAT_LEN_ATTR, value: len }, { name: ITEM_BOAT_WIDE_ATTR, value: wide });   // (always written: the deck is its size)
+  if (helm) out.push({ name: ITEM_BOAT_HELM_ATTR, value: helm });
+  if (speed !== 100) out.push({ name: ITEM_BOAT_SPEED_ATTR, value: speed });
+  if (water !== ITEM_BOAT_WATER_DEFAULT) out.push({ name: ITEM_BOAT_WATER_ATTR, value: water });
+  return out;
+}
+
 // ---- Tool use preview: the player facing down, up, left and right, swinging it the way main.c's TOOL SWING draws it ----
 const TOOL_SWIPE_PX = 32, TOOL_SWIPE_FRAMES = 4, TOOL_SWIPE_FRAME_MS = 60;        // main.c SWIPE_PX / SWIPE_FRAMES / SWIPE_FRAME_MS
 const TOOL_SWIPE_AT = [[-8, 16], [-8, -4], [-16, 0], [0, 0]];                      // main.c k_swipe_at[]: down, up, left, right
@@ -13521,7 +13829,7 @@ itemEl('itemBedSheetFile').addEventListener('change', e => { const f = e.target.
 itemEl('itemBedSheetClear').addEventListener('click', () => setItemBed(itemEl('itemBed').checked, null));
 ['itemBedHead', 'itemBedFoot'].forEach(id => itemEl(id).addEventListener('input', drawItemBedPreview));
 const ITEM_SHOP_ATTR = 'shop';   // items.h ITEM_ATTR_SHOP: which counter sells it (none = its usual one)
-const SHOP_COUNTERS = ['Usual', 'Seeds', 'Build', 'Ranch', 'Fish', 'General'];   // main.c SHOP_* + 1 (0 = "usual": not written)
+const SHOP_COUNTERS = ['Usual', 'Seeds', 'Build', 'Ranch', 'Fish', 'General', 'Boats'];   // main.c SHOP_* + 1 (0 = "usual": not written)
 SHOP_COUNTERS.forEach((n, i) => itemEl('itemShopKind').add(new Option(n, i)));
 function setItemBuyable(on, price, counter) {
   itemEl('itemBuyable').checked = on;
@@ -13858,7 +14166,8 @@ itemMutRefresh();
 const ITEM_OWNED_ATTRS = () => [ITEM_SELL_ATTR, ITEM_DROP_ATTR, ITEM_QUALITY_ATTR, ITEM_BUY_ATTR, ITEM_PROP_ATTR, ITEM_PROP_ROWS_ATTR, ITEM_PROP_SOLID_ATTR, ITEM_SHELF_ATTR, ITEM_SHELF_Y_ATTR,
                                 ITEM_BED_ATTR, ITEM_BED_HEAD_ATTR, ITEM_BED_FOOT_ATTR, ITEM_AQUA_ATTR, ITEM_SPRINKLER_ATTR, ITEM_SCARECROW_ATTR, ITEM_TILLS_ATTR, ITEM_WATERS_ATTR, ITEM_WATER_MAX_ATTR, ...ITEM_RANCH_ATTRS.map(r => r[1]), ITEM_ROD_ATTR, ...ROD_STATS.map(s => s.attr), ...ITEM_FISH_ATTRS, ITEM_MUT_ATTR,
                                 ITEM_TOOL_ATTR, ITEM_TOOL_SWIPE_ATTR, ITEM_TOOL_POWER_ATTR, ITEM_MARKET_BOARD_ATTR, ITEM_TYPES_ATTR, ITEM_TYPES2_ATTR,
-                                ITEM_FORAGE_ATTR, ITEM_FORAGE_SEASONS_ATTR, ITEM_ENERGY_ATTR, ITEM_CLIMATE_ATTR];
+                                ITEM_FORAGE_ATTR, ITEM_FORAGE_SEASONS_ATTR, ITEM_ENERGY_ATTR, ITEM_CLIMATE_ATTR, ITEM_BOAT_ATTR, ITEM_BOAT_SPEED_ATTR, ITEM_BOAT_WATER_ATTR,
+                                ITEM_BOAT_LEN_ATTR, ITEM_BOAT_WIDE_ATTR, ITEM_BOAT_HELM_ATTR];
 // What the cards own (a hand-added row with one of these names is ignored): the list above, a recipe's craft:<id> / craft_makes, a tool's tool_sfx:<name> / counts_as:<id>.
 function itemOwnsAttr(name) {
   return ITEM_OWNED_ATTRS().includes(name) || name === ITEM_SHOP_ATTR || name.startsWith(ITEM_CRAFT_PREFIX) || name === ITEM_CRAFT_MAKES_ATTR ||
@@ -14108,6 +14417,8 @@ function importItemC(text, id) {
   itemEl('itemEnergy').value = p.attrs.some(a => a.name === ITEM_ENERGY_ATTR) ? av(ITEM_ENERGY_ATTR, 0) : '';   // (none: the game's default)
   const fg = itemForageFromAttrs(p.attrs);
   setItemForage(fg.on, fg.weight, fg.seasons, fg.maps);
+  setItemBoat(av(ITEM_BOAT_ATTR, 0) > 0, av(ITEM_BOAT_SPEED_ATTR, 100), av(ITEM_BOAT_WATER_ATTR, ITEM_BOAT_WATER_DEFAULT),
+              av(ITEM_BOAT_LEN_ATTR, 3), av(ITEM_BOAT_WIDE_ATTR, 2), av(ITEM_BOAT_HELM_ATTR, 0));
   climateBoxesSet('itemClimate', av(ITEM_CLIMATE_ATTR, 0));
   const recipe = itemCraftFromAttrs(p.attrs);
   itemCraft = [];
@@ -14171,6 +14482,7 @@ function resetItemEditor(ask) {
   setItemTool(false, { swipe: true, power: 1, sfx: '', as: '' });
   itemEl('itemEnergy').value = '';
   setItemForage(false, 10, 0, '');
+  setItemBoat(false, 100, ITEM_BOAT_WATER_DEFAULT, 3, 2, 0);
   climateBoxesSet('itemClimate', 0);
   setItemProp(false, 0, true);
   setItemBuyable(false, 10, 0);
@@ -14268,7 +14580,9 @@ async function exportItemAsset(asNew) {
   if (typeof toolAttrs === 'string') { alert(toolAttrs); return; }
   const forageAttrs = itemEl('itemForage').checked ? itemForageAttrs() : [];   // Forage (main.c FORAGE)
   if (typeof forageAttrs === 'string') { alert(forageAttrs); return; }
-  if (uArt && !itemEl('itemTool').checked && !confirm('It has Swing art, but "Swings like a tool" (Tool use box) is off — the game won\'t swing it. Export anyway?')) return;
+  const boatAttrs = itemEl('itemBoat').checked ? itemBoatAttrs() : [];   // Boat (main.c BOATS + DOCKS) — its Swing art is its look on the water
+  if (typeof boatAttrs === 'string') { alert(boatAttrs); return; }
+  if (uArt && !itemEl('itemTool').checked && !itemEl('itemBoat').checked && !confirm('It has Swing art, but "Swings like a tool" (Tool use box) is off — the game won\'t swing it. Export anyway?')) return;
   const useBlock = uArt ? buildItemAnimBlock(`${id}_use`, itemPackOutput(itemOutput(uArt)), uArt.interval, 0)   // a swing plays once
                         : { decl: '', initExpr: '{ .frame_count = 0 }' };
   // A walk-in bed's sheet layer (item_asset_t.front): only exported with "Bed" ticked.
@@ -14317,7 +14631,8 @@ async function exportItemAsset(asNew) {
   const energy = String(itemEl('itemEnergy').value).trim();   // a use's energy (main.c ENERGY; none = the game's default)
   if (energy !== '') validAttrs.push({ name: ITEM_ENERGY_ATTR, value: itemClamp(parseInt(energy) || 0, 0, 270) });
   validAttrs.push(...forageAttrs);
-  const climates = climateAttrValue(climateBoxesRead('itemClimate'));   // where it lives (main.c CLIMATE; none = any)
+  validAttrs.push(...boatAttrs);
+  const climates =climateAttrValue(climateBoxesRead('itemClimate'));   // where it lives (main.c CLIMATE; none = any)
   if (climates) validAttrs.push({ name: ITEM_CLIMATE_ATTR, value: climates });
   validAttrs.push(...itemTypeAttrs());   // market types (none = x1)
   if (itemEl('itemBuyable').checked) {
@@ -14426,19 +14741,19 @@ function blankTabState() {
   return {
     colorData: new Uint8ClampedArray(REAL_MAP_W * REAL_MAP_H * 3).fill(DEFAULT_BG[0]),
     hitboxData: new Uint8Array(REAL_MAP_W * REAL_MAP_H), layerData: new Uint8Array(REAL_MAP_W * REAL_MAP_H),
-    placedAssets: [], importedAnims: [], importedBreakables: [], teleporters: [], mapTrees: [], mapClimate: 0, importedTiles: null, importedTriggers: null,
+    placedAssets: [], importedAnims: [], importedBreakables: [], teleporters: [], mapTrees: [], mapClimate: 0, mapSpawn: { count: 0, rocks: [], on: [] }, importedTiles: null, importedTriggers: null,
     undoStack: [], redoStack: [], activeFileHandle: null, activeFileIsCloud: false, selectionRect: null,
     mapZoom, scrollLeft: 0, scrollTop: 0
   };
 }
 function captureTabState() {
   const wrap = document.getElementById('canvasWrap');
-  return { colorData, hitboxData, layerData, placedAssets, importedAnims, importedBreakables, teleporters, mapTrees, mapClimate, importedTiles, importedTriggers,
+  return { colorData, hitboxData, layerData, placedAssets, importedAnims, importedBreakables, teleporters, mapTrees, mapClimate, mapSpawn, importedTiles, importedTriggers,
            undoStack, redoStack, activeFileHandle, activeFileIsCloud, selectionRect,
            mapZoom, scrollLeft: wrap.scrollLeft, scrollTop: wrap.scrollTop };
 }
 function applyTabState(st) {
-  ({ colorData, hitboxData, layerData, placedAssets, importedAnims, importedBreakables, teleporters, mapTrees = [], mapClimate = 0, importedTiles, importedTriggers,
+  ({ colorData, hitboxData, layerData, placedAssets, importedAnims, importedBreakables, teleporters, mapTrees = [], mapClimate = 0, mapSpawn = { count: 0, rocks: [], on: [] }, importedTiles, importedTriggers,
      undoStack, redoStack, activeFileHandle, activeFileIsCloud, selectionRect } = st);
 }
 function tabState(i) { return i === activeTabIdx ? captureTabState() : mapTabs[i].state; }
@@ -18694,8 +19009,8 @@ function bldProblems(b) {
 //   door ({ x, y, w, h } px in the art: the opening the looks cover — null = the animalDoor tile),
 //   doorOpen, doorShut (images of door.w x door.h, or null) }
 function bldBuildC(b, iconAuto = bldIconAuto) {
-  const id = bldId(b), px = cropPack(b.art), f = b.farm || null, silo = !!f && f.kind === 'silo', well = !!f && f.kind === 'well';
-  const houses = !!f && !silo && !well && f.animalDoor >= 0;
+  const id = bldId(b), px = cropPack(b.art), f = b.farm || null, silo = !!f && f.kind === 'silo', well = !!f && f.kind === 'well', dock = !!f && f.kind === 'dock';
+  const houses = !!f && !silo && !well && !dock && f.animalDoor >= 0;
   const meta = { name: b.name, footRows: b.footRows, doorCol: b.doorCol, interior: b.interior, price: b.price,
                  w: b.art.w, h: b.art.h, iconW: b.icon.w, iconH: b.icon.h, iconAuto };
   if (f) meta.farm = { kind: f.kind, capacity: f.capacity, animalDoor: f.animalDoor, hay: f.hay, doorOpen: !!f.doorOpen, doorShut: !!f.doorShut,
@@ -18703,6 +19018,7 @@ function bldBuildC(b, iconAuto = bldIconAuto) {
   const door = houses && f.doorOpen ? cropPack(f.doorOpen) : null, shut = houses && f.door && f.doorShut ? cropPack(f.doorShut) : null;
   const farmLine = !f ? '' : silo ? `\n// A silo: stores ${f.hay} hay (cut grass goes in; pipes carry it to barns' troughs).`
     : well ? `\n// A well: tap it holding a watering can to fill the can.`
+    : dock ? `\n// A dock: built out over the water from the shore, a deck to walk on; its post (column ${b.doorCol}) is the boat shop.`
     : `\n// A ${f.kind}: houses ${f.capacity} ${f.kind} animals (as many troughs inside), animal door in column ${f.animalDoor}${f.door ? ` (looks ${f.door.w}x${f.door.h} at ${f.door.x},${f.door.y})` : ''}${door ? '' : ' (darkened when open)'}.`;
   const farmFields = !f ? '' : `
     .houses = "${houses ? cString(f.kind) : ''}",
@@ -18712,7 +19028,8 @@ function bldBuildC(b, iconAuto = bldIconAuto) {
     .hay_capacity = ${silo ? f.hay : 0},${houses && f.door ? `
     .door_x = ${f.door.x}, .door_y = ${f.door.y}, .door_w = ${f.door.w}, .door_h = ${f.door.h},   // where the door's looks go
     .door_shut = ${shut ? `k_building_${id}_door_shut` : 'NULL'},` : ''}${well ? `
-    .water_source = true,` : ''}`;
+    .water_source = true,` : ''}${dock ? `
+    .dock = true,` : ''}`;
   const attrs = b.price > 0 ? [[ITEM_BUY_ATTR, b.price]] : [];
   return `// AUTO-GENERATED by gameTools.html (Buildings Editor) — "${b.name.replace(/\r?\n/g, ' ')}"
 // Lives in assets/buildings/ as ${id}.c — the file name is the building id, keep it.
@@ -20533,6 +20850,7 @@ const FBD_PRESETS = {
   large_barn:  { name: 'Large Barn',  kind: 'barn', capacity: 8, price: 25000, interior: 'large_barn_inside' },
   silo:        { name: 'Silo',        kind: 'silo', hay: 240, price: 100, interior: '' },
   well:        { name: 'Well',        kind: 'well', price: 1000, interior: '' },
+  dock:        { name: 'Dock',        kind: 'dock', price: 2500, interior: '' },
 };
 const fbdEl = id => document.getElementById(id);
 let fbd = null;              // a building like the Buildings Editor's (bldBlank()), with .farm
@@ -20544,7 +20862,7 @@ function fbdBlank() {
   return { name: '', art: null, icon: null, footRows: 3, doorCol: 1, interior: '', price: 6000,
            farm: { kind: 'barn', capacity: 4, animalDoor: 3, hay: 240, door: null, doorOpen: null, doorShut: null } };
 }
-function fbdSilo() { return fbd.farm.kind === 'silo' || fbd.farm.kind === 'well'; }   // (no animals, no doors: a silo or a well)
+function fbdSilo() { return fbd.farm.kind === 'silo' || fbd.farm.kind === 'well' || fbd.farm.kind === 'dock'; }   // (no animals, no inside: a silo, a well or a dock)
 // Where the animal door's looks go, px in the art: the opening found or set, else its tile.
 function fbdDoorRect(b = fbd) {
   const f = b.farm;
@@ -20647,7 +20965,7 @@ function fbdWriteForm() {
   fbdEl('fbdCapRow').style.opacity = silo ? .35 : 1; fbdEl('fbdCap').disabled = silo;
   fbdEl('fbdHayRow').style.opacity = f.kind === 'silo' ? 1 : .35; fbdEl('fbdHay').disabled = f.kind !== 'silo';
   fbdEl('fbdInsideRow').style.opacity = silo ? .35 : 1; fbdEl('fbdInterior').disabled = silo;
-  fbdEl('fbdADoorCol').disabled = silo; fbdEl('fbdDoorCol').disabled = silo;
+  fbdEl('fbdADoorCol').disabled = silo; fbdEl('fbdDoorCol').disabled = silo && f.kind !== 'dock';   // (a dock's "door" is its boat shop post)
   fbdEl('fbdDoorCard').style.display = silo ? 'none' : '';
   fbdEl('fbdClickMode').style.display = silo ? 'none' : '';
   fbdEl('fbdClickMode').querySelectorAll('button').forEach(x => x.classList.toggle('on', x.dataset.m === fbdClick));
@@ -20670,6 +20988,7 @@ function fbdDrawPreview() {
   g.fillStyle = 'rgba(255,80,80,.28)';
   g.fillRect(0, footY, cols * T, b.footRows * T);
   if (!fbdSilo() && b.interior) { g.fillStyle = 'rgba(80,230,110,.55)'; g.fillRect(b.doorCol * T, (rows - 1) * T, T, T); }
+  if (f.kind === 'dock') { g.fillStyle = 'rgba(80,170,255,.55)'; g.fillRect(b.doorCol * T, (rows - 1) * T, T, T); }   // its post: the boat shop
   if (!fbdSilo() && f.animalDoor >= 0) {
     const r = fbdDoorRect();
     if (f.doorShut) farmDraw(cv, f.doorShut, k, r.x * k, r.y * k);   // (as it stands, shut)
@@ -20719,13 +21038,15 @@ function fbdRenderInfo() {
                                                    : `Saves as ${id}.c into assets/buildings — the building and the item that builds it are both "${id}".`;
   fbdEl('fbdArtInfo').textContent = !b.art ? 'Load a PNG (padded to whole 16 px tiles, standing on its bottom edge; at most 240×240), or make placeholder art.'
     : `${b.art.w}×${b.art.h} px = ${bldCols(b)}×${bldRows(b)} tiles: a ${bldCols(b)}×${b.footRows} footprint` +
-      (silo ? ', no door.' : `, door in column ${b.doorCol}${b.interior ? '' : ' (no inside yet)'}, animal door in column ${f.animalDoor}.`) +
+      (f.kind === 'dock' ? `, the boat shop's post in column ${b.doorCol} (blue).` : silo ? ', no door.' : `, door in column ${b.doorCol}${b.interior ? '' : ' (no inside yet)'}, animal door in column ${f.animalDoor}.`) +
       (!silo && f.animalDoor === b.doorCol ? ' The two doors are on the same tile — move one.' : '');
   const r = fbdDoorRect();
   fbdEl('fbdDoorInfo').textContent = (r ? `The door's looks go over ${r.w}×${r.h} px at ${r.x},${r.y}${f.door ? ' (the opening)' : ' (its tile)'}; the animals walk through column ${f.animalDoor}. ` : '') +
     'Load each look as a picture of just the door, the whole building picture again with the door shut / open, or a door piece (it\'s set in the opening, the rest of the opening dark). ' +
     (!f.doorOpen ? 'No open look: the door just goes dark when it opens. ' : '') + '(No door animation yet.)';
-  fbdEl('fbdHelp').textContent = f.kind === 'well'
+  fbdEl('fbdHelp').textContent = f.kind === 'dock'
+    ? 'A dock: built out over the water instead of on Buildable ground — every footprint tile Fishable water (not lava or ice), touching the shore. Its footprint is a deck the player walks on, all of it but one tile: the post on the bottom row in the Door column (blue), which is solid — tap it in game for the boat shop (every item with the Item Editor\'s Boat card and a price). Holding a boat on the deck, tap the water to sail. Make the whole picture footprint (Footprint rows = its height) unless it has a roof or a sign to walk behind.'
+    : f.kind === 'well'
     ? 'A water source: tap it in game holding the watering can and the can fills up (a can that holds water — the Item Editor\'s "holds N water"). It has no inside and no animals.'
     : silo
     ? `Stores ${f.hay} hay for every barn and coop: a scythe on grass gives hay half the time, and it goes in here. Tap the silo to take hay out (or hold hay to put it in). A line of pipes (Fences & pipes) from the silo to a barn fills that barn's troughs every morning.`
@@ -20742,7 +21063,7 @@ function fbdApplyPreset(key) {
   if (p.hay) f.hay = p.hay;
   fbd.price = p.price;
   if (!fbd.interior || Object.values(FBD_PRESETS).some(q => q.interior === fbd.interior)) fbd.interior = p.interior;
-  if (p.kind === 'silo' || p.kind === 'well') { fbd.interior = ''; f.animalDoor = -1; f.door = null; f.doorOpen = f.doorShut = null; }
+  if (p.kind === 'silo' || p.kind === 'well' || p.kind === 'dock') { fbd.interior = ''; f.animalDoor = -1; f.door = null; f.doorOpen = f.doorShut = null; }
   fbdRender();
 }
 async function fbdTakeArt(file) {
@@ -20810,7 +21131,18 @@ function fbdPlaceholder() {
   fbdReadForm();
   const f = fbd.farm, OUT = [52, 30, 22];
   let img, open;
-  if (f.kind === 'silo' || f.kind === 'well') {
+  if (f.kind === 'dock') {   // planks out over the water, the boat shop's post and sign bottom right
+    img = farmImg(48, 48);
+    const PLANK = [156, 110, 66], GAP = [104, 70, 40], EDGE = [84, 54, 30];
+    farmBox(img, 0, 0, 47, 47, PLANK, EDGE);
+    for (let y = 4; y < 47; y += 4) farmRect(img, 1, y, 46, y, GAP);
+    for (const [x, y] of [[1, 1], [43, 1], [1, 43]]) farmRect(img, x, y, x + 3, y + 3, [70, 46, 26]);
+    farmBox(img, 36, 34, 43, 46, [96, 62, 34], OUT);
+    farmBox(img, 33, 33, 46, 40, [226, 206, 160], OUT);
+    farmRect(img, 36, 37, 43, 37, [60, 110, 170]); farmRect(img, 37, 38, 42, 38, [60, 110, 170]);
+    Object.assign(fbd, { footRows: 3, doorCol: 2, interior: '' });
+    f.animalDoor = -1;
+  } else if (f.kind === 'silo' || f.kind === 'well') {
     img = farmImg(32, 80);
     const STONE = [150, 150, 140], DARK = [96, 96, 92], DOME = [120, 70, 50];
     farmBox(img, 2, 14, 29, 79, STONE, OUT);
@@ -20857,7 +21189,7 @@ function fbdPlaceholder() {
   fbd.art = img;
   f.doorOpen = open || null;
   f.door = null; f.doorShut = null;
-  if (!fbd.name) fbd.name = { barn: 'Barn', coop: 'Coop', silo: 'Silo', well: 'Well' }[f.kind];
+  if (!fbd.name) fbd.name = { barn: 'Barn', coop: 'Coop', silo: 'Silo', well: 'Well', dock: 'Dock' }[f.kind];
   if (!fbd.interior && !fbdSilo()) fbd.interior = `${f.kind}_inside`;
   fbd.icon = bldFitIcon(img); fbdIconAuto = true;
   fbdStatus('Placeholder art — swap in your own picture any time (the doors and footprint stay where they are).');
@@ -20869,7 +21201,7 @@ function fbdProblems(b) {
   if (!b.name) p.push('Give it a name.');
   if (!b.art) p.push('Load its picture (or make placeholder art).');
   if (!b.icon) p.push('It needs an icon (Icon from the picture).');
-  if (f.kind !== 'silo' && f.kind !== 'well') {
+  if (f.kind !== 'silo' && f.kind !== 'well' && f.kind !== 'dock') {
     if (f.animalDoor < 0) p.push('Put its animal door on the picture (click the bottom row).');
     if (f.animalDoor === b.doorCol && b.interior) p.push('The door and the animal door are on the same tile — move one.');
     if (!b.interior) p.push('Name its inside map: the animals live in it.');
@@ -20920,7 +21252,8 @@ function closeFarmBuildingEditor() { fbdEl('fbdEdOverlay').classList.remove('sho
   for (const [key, p] of Object.entries(FBD_PRESETS)) {
     const b = document.createElement('button');
     b.type = 'button'; b.textContent = p.name;
-    b.title = p.kind === 'silo' ? `${p.name}: stores ${p.hay} hay — $${p.price}` : `${p.name}: ${p.capacity} ${p.kind} animals — $${p.price}`;
+    b.title = p.kind === 'silo' ? `${p.name}: stores ${p.hay} hay — $${p.price}` : p.kind === 'well' ? `${p.name}: fills the watering can — $${p.price}`
+            : p.kind === 'dock' ? `${p.name}: out over the water — sells and launches boats — $${p.price}` : `${p.name}: ${p.capacity} ${p.kind} animals — $${p.price}`;
     b.onclick = () => fbdApplyPreset(key);
     presets.appendChild(b);
   }
@@ -22432,7 +22765,8 @@ const FSH_CFG = [
   { key: 'perfect_grade', label: 'Perfect = better grade', def: 1, min: 0, max: 1, unit: '', what: '1 = a perfect catch comes out a quality grade better' },
 ];
 const FSH_SEASONS = ['Spring', 'Summer', 'Fall', 'Winter'], FSH_DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-const FSH_WATERS = [{ bit: 1, name: 'Pond / lake' }, { bit: 2, name: 'River' }, { bit: 4, name: 'Ocean' }, { bit: 8, name: 'Lava' }];   // 8: main.c TILE_FLAG_LAVA
+const FSH_WATERS = [{ bit: 1, name: 'Pond / lake' }, { bit: 2, name: 'River' }, { bit: 4, name: 'Ocean' }, { bit: 8, name: 'Lava' }, { bit: 16, name: 'Ice hole' }];   // 8: main.c TILE_FLAG_LAVA, 16: ICE HOLES
+const FSH_WATER_ANY = 1 | 2 | 4 | 16;   // fish_water 0: any water but lava
 const FSH_MOVES = ['A mix of everything', 'Smooth glides', 'Sudden darts', 'Keeps to the bottom (sinker)', 'Keeps to the top (floater)'];
 const FSH_ROLES = [   // role, the attribute that makes it, its value when ticked, label
   { role: 'fish', attr: 'fish', on: 30, label: 'Fish (a rod catches it after a fight)' },
@@ -22667,7 +23001,8 @@ function fshWaterBits(attr) {
       const b = document.createElement('button');
       b.type = 'button'; b.textContent = w.name;
       b.classList.toggle('on', (v === 0 && w.bit !== 8) || !!(v & w.bit));   // none = any water, but never lava
-      b.onclick = () => { let cur = fshGet(attr, 0) || 7; cur ^= w.bit; if (!cur) cur = w.bit; fshSet(attr, cur === 7 ? 0 : cur, 0); draw(); fshRenderOdds(); };
+      b.onclick = () => { let cur = fshGet(attr, 0) || FSH_WATER_ANY; cur ^= w.bit; if (!cur) cur = w.bit; fshSet(attr, cur === FSH_WATER_ANY ? 0 : cur, 0); draw(); fshRenderOdds(); };
+      if (w.bit === 16) b.title = 'A hole a pickaxe breaks in frozen water (the Map Editor\'s Water: Ice). Pond / lake fish bite there too.';
       wrap.appendChild(b);
     });
     const hint = document.createElement('span'); hint.className = 'fshNote'; hint.textContent = v === 0 ? ' (any water, not lava)' : ''; wrap.appendChild(hint);
@@ -23061,7 +23396,8 @@ function fshCondOk(av, pre, c) {
     const s = g('seasons', 0); if (s && !((s >> c.season) & 1)) return false;
     const dd = g('days', 0); if (dd && !((dd >> c.day) & 1)) return false;
   }
-  const wa = g('water', 0); if (wa && c.water && !(wa & c.water)) return false;
+  const cw = c.water === 16 ? 16 | 1 : c.water;   // an ice hole: ice fish and the pond's (main.c fish_ctx_now)
+  const wa = g('water', 0); if (wa && cw && !(wa & cw)) return false;
   if (c.water === 8 && !(wa & 8)) return false;   // lava: only what says it lives there (main.c fish_cond_ok)
   if (c.depth < g('depth', 0)) return false;
   if (c.level < g('level', 0)) return false;
@@ -23484,6 +23820,7 @@ let shRows = [];   // [{ id, name, icon, attrs, handle, text, sale, price, count
 // main.c shop_kind_of() for an item without "shop": its usual counter (1..5).
 function shUsualCounter(attrs) {
   const has = n => attrs.some(a => a.name === n && a.value > 0);
+  if (has(ITEM_BOAT_ATTR)) return 6;   // main.c shop_kind_of(): a boat (BOATS + DOCKS)
   if (ITEM_RANCH_ATTRS.some(r => has(r[1]))) return 3;
   if (has(ITEM_TILLS_ATTR) || has(ITEM_WATERS_ATTR)) return 1;
   if (has(ITEM_ROD_ATTR) || has('bait') || has('tackle') || has('crab_pot')) return 4;   // main.c fish_shop_sells()
@@ -23617,6 +23954,437 @@ function closeShopEditor() { shEl('shEdOverlay').classList.remove('show'); }
 </script>
 
 <script>
+// ================================================================
+//  MONSTERS — the Monsters tab: main/monsters.h's monster_def_t, one per
+//  assets/monsters/<id>.c (k_monster_<id>), with a "// MONSTERS-EDITOR
+//  {json}" line so it opens again (tools/slice_monsters.py writes the same).
+//  Load a sprite sheet, pick an animation on the right, then click a grid
+//  cell (or drag a box) on the sheet to add that picture to it; click a
+//  frame under the animations to take it out. Every frame is stood
+//  bottom-middle in one box (the biggest picture, at most 32x32); the
+//  particles (the bits it leaves when it dies) are centred in 16x16.
+//  Save writes the .c; rebuild the firmware. main.c MONSTERS + COMBAT plays it.
+// ================================================================
+const MON_SEQS = [['down', 'Walk down'], ['right', 'Walk right'], ['up', 'Walk up'], ['left', 'Walk left'], ['rest', 'Rest / hidden'], ['wake', 'Pop out'],
+                  ['death', 'Death'], ['attack_down', 'Attack down'], ['attack_right', 'Attack right'], ['attack_up', 'Attack up'], ['attack_left', 'Attack left']];
+// monsters.h MON_* bits, in order
+const MON_ABILS = [['flies', 'Flies', 'Walls don\'t stop it (bats, ghosts, flies)'], ['hides', 'Hides', 'Shows its Rest frames until the player comes near, plays Pop out, chases; hides again when they get away (rock crabs)'],
+                   ['hops', 'Hops', 'Moves in hops: a burst, a pause (dust sprites, slimes)'], ['erratic', 'Erratic', 'Darts about at random on its way (flies)'],
+                   ['charges', 'Charges', 'Stops, then dashes at the player at 3x its speed, with its Attack frames'], ['revives', 'Revives', 'Collapses at 0 hp and gets up again 10 s later with half its hp, unless hit while it\'s down (mummies)'],
+                   ['heals', 'Heals', 'Every 6 s heals the hurt monsters near it by a quarter (shadow shamans)'], ['straight', 'Straight', 'Flies in straight lines and turns at walls, never chases (bugs)'],
+                   ['keeps_off', 'Keeps off', 'Keeps a few tiles away from the player instead of touching them (casters)'], ['ghostly', 'Ghostly', 'A little see-through, shimmering (ghosts)'],
+                   ['shoots', 'Shoots', 'Shoots its Shot frames at the player (bones, fireballs): set how hard, how fast, how often and from how far below']];
+const MON_SEQ_MAX = 8, MON_FRAME_MAX = 32, MON_PART = 16, MON_PARTS = 4, MON_PROJ = 16, MON_PROJ_FRAMES = 4, MONSTERS_DIR_KEY = 'monstersDirHandle';
+let mon = null, monAnim = 'down', monSheet = null, monDrag = null, monLib = null, monsDirHandle = null, monPrevT = 0;
+const monEl = id => document.getElementById(id);
+
+function monBlank() {
+  const anims = {};
+  for (const [k] of MON_SEQS) anims[k] = [];
+  anims.parts = [];
+  anims.proj = [];
+  return { id: '', name: '', anims, hp: 40, damage: 6, defense: 0, speed: 6, xp: 5, wake: 5, frameMs: 150, abilities: [], drops: [], sound: '', soundDie: '', soundWake: '', soundAttack: '',
+           projDamage: 10, projSpeed: 20, shootMs: 2000, shootTiles: 6 };
+}
+function monMsg(t, bad) { const m = monEl('monMsg'); m.textContent = t || ''; m.className = 'itemMsg' + (bad ? ' bad' : ''); }
+
+// ---- the folder: assets/monsters ----
+async function getMonstersDir(allowPrompt) {
+  if (axRoot && await axHasPermission(false)) {
+    try { return await axRoot.getDirectoryHandle('monsters', { create: true }); } catch (e) { /* fall through */ }
+  }
+  if (!monsDirHandle) { try { monsDirHandle = (await idbGet(MONSTERS_DIR_KEY)) || null; } catch (e) { monsDirHandle = null; } }
+  if (monsDirHandle && await verifyWritePermission(monsDirHandle, allowPrompt)) return monsDirHandle;
+  if (!allowPrompt || !window.showDirectoryPicker) return null;
+  try { monsDirHandle = await window.showDirectoryPicker({ id: 'captureitMonsters', mode: 'readwrite' }); } catch (e) { return null; }
+  try { await idbSet(MONSTERS_DIR_KEY, monsDirHandle); } catch (e) { /* just won't be remembered */ }
+  return monsDirHandle;
+}
+
+// ---- a .c back into the editor ----
+function monParseC(text) {
+  const mm = text.match(/^\/\/ MONSTERS-EDITOR (\{.*\})$/m);
+  if (!mm) throw new Error('This .c has no Monsters tab information.');
+  const meta = JSON.parse(mm[1]);
+  const idm = text.match(/const monster_def_t k_monster_(\w+) =/);
+  if (!idm) throw new Error('No monster in this file.');
+  const id = idm[1], arrays = {};
+  for (const x of text.matchAll(/static const uint16_t (\w+)\[\d+\] = \{([^}]*)\}/g))
+    arrays[x[1]] = Uint16Array.from(x[2].match(/0x[0-9a-fA-F]+/g) || [], v => parseInt(v, 16));
+  const m = monBlank(), fw = meta.fw | 0, fh = meta.fh | 0, fpx = arrays[`k_monster_${id}_frames`] || new Uint16Array(0);
+  const frames = [];
+  for (let i = 0; i < (meta.frames | 0) && (i + 1) * fw * fh <= fpx.length; i++) {
+    const f = cropUnpack(fpx.subarray(i * fw * fh, (i + 1) * fw * fh), fw, fh);
+    f.cell = meta.cells && meta.cells[i] || null;
+    frames.push(f);
+  }
+  for (const [k] of MON_SEQS) m.anims[k] = (meta.seqs && meta.seqs[k] || []).map(i => frames[i]).filter(Boolean);
+  const ppx = arrays[`k_monster_${id}_particles`];
+  for (let i = 0; ppx && i < (meta.particles | 0) && (i + 1) * MON_PART * MON_PART <= ppx.length; i++)
+    m.anims.parts.push(cropUnpack(ppx.subarray(i * MON_PART * MON_PART, (i + 1) * MON_PART * MON_PART), MON_PART, MON_PART));
+  const jpx = arrays[`k_monster_${id}_proj`];
+  for (let i = 0; jpx && i < (meta.projectiles | 0) && (i + 1) * MON_PROJ * MON_PROJ <= jpx.length; i++)
+    m.anims.proj.push(cropUnpack(jpx.subarray(i * MON_PROJ * MON_PROJ, (i + 1) * MON_PROJ * MON_PROJ), MON_PROJ, MON_PROJ));
+  for (const k of ['hp', 'damage', 'defense', 'speed', 'xp', 'wake', 'frameMs', 'sound', 'soundDie', 'soundWake', 'soundAttack', 'name', 'projDamage', 'projSpeed', 'shootMs', 'shootTiles'])
+    if (meta[k] !== undefined && (meta[k] || !k.startsWith('proj') && !k.startsWith('shoot'))) m[k] = meta[k];
+  m.abilities = (meta.abilities || []).filter(a => MON_ABILS.some(x => x[0] === a));
+  m.drops = (meta.drops || []).map(d => ({ item: String(d.item || ''), chance: d.chance | 0, min: d.min | 0, max: d.max | 0 }));
+  m.id = id;
+  return m;
+}
+
+// Every monster in the folder: [{ id, name, m }] (for the list and the Map Editor's Mining map…).
+async function monLoadLib(force) {
+  if (monLib && !force) return monLib;
+  const lib = [];
+  const dir = await getMonstersDir(false);
+  if (dir) {
+    for await (const [name, h] of dir.entries()) {
+      if (h.kind !== 'file' || !/\.c$/i.test(name)) continue;
+      try { const m = monParseC(await (await h.getFile()).text()); lib.push({ id: m.id, name: m.name || m.id, m }); } catch (e) { /* not a Monsters tab file */ }
+    }
+  }
+  lib.sort((a, b) => a.name.localeCompare(b.name));
+  monLib = lib;
+  return lib;
+}
+
+// ---- drawing ----
+function monDrawImg(cv, img, scale) {
+  const g = cv.getContext('2d');
+  g.clearRect(0, 0, cv.width, cv.height);
+  if (!img) return;
+  const tmp = document.createElement('canvas');
+  tmp.width = img.w; tmp.height = img.h;
+  tmp.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(img.rgba), img.w, img.h), 0, 0);
+  const s = scale || Math.max(1, Math.floor(Math.min(cv.width / img.w, cv.height / img.h)));
+  g.imageSmoothingEnabled = false;
+  g.drawImage(tmp, Math.floor((cv.width - img.w * s) / 2), cv.height - img.h * s - Math.floor((cv.height - Math.min(cv.height, img.h * s)) / 2), img.w * s, img.h * s);
+}
+function monRenderList() {
+  const wrap = monEl('monList');
+  wrap.innerHTML = '';
+  if (!monLib || !monLib.length) { wrap.innerHTML = '<div class="spNote">No monsters in assets/monsters yet (or the folder isn\'t linked: link the assets folder in the Map Editor\'s Asset Explorer).</div>'; return; }
+  for (const e of monLib) {
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'monCard' + (mon && mon.id === e.id ? ' on' : ''); b.title = e.id;
+    const cv = document.createElement('canvas'); cv.width = 48; cv.height = 48;
+    monDrawImg(cv, e.m.anims.down[0] || e.m.anims.rest[0] || Object.values(e.m.anims).find(a => a.length)?.[0]);
+    const n = document.createElement('div'); n.textContent = e.name;
+    b.append(cv, n);
+    b.onclick = () => { mon = monParseCopy(e.m); monSyncForm(); monRenderAll(); };
+    wrap.appendChild(b);
+  }
+}
+function monParseCopy(m) { return { ...m, loadedFrom: m.id, anims: Object.fromEntries(Object.entries(m.anims).map(([k, v]) => [k, v.slice()])), abilities: m.abilities.slice(), drops: m.drops.map(d => ({ ...d })) }; }
+
+function monRenderSheet() {
+  const cv = monEl('monSheet'), z = +monEl('monZoom').value;
+  if (!monSheet) { cv.width = 320; cv.height = 120; const g = cv.getContext('2d'); g.fillStyle = '#1d1d1d'; g.fillRect(0, 0, cv.width, cv.height); g.fillStyle = '#888'; g.font = '13px system-ui'; g.fillText('Load sheet… to cut frames from a sprite sheet', 12, 60); return; }
+  cv.width = monSheet.w * z; cv.height = monSheet.h * z;
+  const g = cv.getContext('2d');
+  g.imageSmoothingEnabled = false;
+  for (let y = 0; y < cv.height; y += 16) for (let x = 0; x < cv.width; x += 16) { g.fillStyle = ((x + y) / 16) % 2 ? '#262626' : '#2e2e2e'; g.fillRect(x, y, 16, 16); }
+  g.drawImage(monSheet.canvas, 0, 0, cv.width, cv.height);
+  const gw = +monEl('monGW').value || 16, gh = +monEl('monGH').value || 16, gx = +monEl('monGX').value || 0, gy = +monEl('monGY').value || 0;
+  g.strokeStyle = 'rgba(64,200,255,.22)';
+  g.lineWidth = 1;
+  for (let x = gx; x <= monSheet.w; x += gw) { g.beginPath(); g.moveTo(x * z + .5, 0); g.lineTo(x * z + .5, cv.height); g.stroke(); }
+  for (let y = gy; y <= monSheet.h; y += gh) { g.beginPath(); g.moveTo(0, y * z + .5); g.lineTo(cv.width, y * z + .5); g.stroke(); }
+  if (mon) {   // what's picked already: yellow, the current animation's green
+    for (const [k, list] of Object.entries(mon.anims))
+      for (const f of list) if (f.cell) { g.strokeStyle = k === monAnim ? '#5f5' : 'rgba(255,220,80,.7)'; g.strokeRect(f.cell[0] * z + .5, f.cell[1] * z + .5, f.cell[2] * z - 1, f.cell[3] * z - 1); }
+  }
+  if (monDrag && monDrag.moved) { g.strokeStyle = '#fff'; const r = monDragRect(); g.strokeRect(r[0] * z + .5, r[1] * z + .5, r[2] * z - 1, r[3] * z - 1); }
+}
+function monDragRect() {
+  const x0 = Math.min(monDrag.x0, monDrag.x1), y0 = Math.min(monDrag.y0, monDrag.y1);
+  return [x0, y0, Math.abs(monDrag.x1 - monDrag.x0) + 1, Math.abs(monDrag.y1 - monDrag.y0) + 1];
+}
+// The sheet's pixels in rect r, as a frame (trimmed of empty rows at the top and columns at the sides kept: the cell is the frame).
+function monCut(r) {
+  const [x0, y0, w, h] = r, rgba = new Uint8ClampedArray(w * h * 4);
+  let any = false;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const sx = x0 + x, sy = y0 + y;
+    if (sx < 0 || sy < 0 || sx >= monSheet.w || sy >= monSheet.h) continue;
+    const si = (sy * monSheet.w + sx) * 4, di = (y * w + x) * 4;
+    if (monSheet.data[si + 3] < 128) continue;
+    rgba[di] = monSheet.data[si]; rgba[di + 1] = monSheet.data[si + 1]; rgba[di + 2] = monSheet.data[si + 2]; rgba[di + 3] = 255;
+    any = true;
+  }
+  return any ? { w, h, rgba, cell: r.slice() } : null;
+}
+function monAddFrame(r) {
+  if (!mon) mon = monBlank();
+  const small = monAnim === 'parts' || monAnim === 'proj';
+  const list = mon.anims[monAnim], cap = monAnim === 'parts' ? MON_PARTS : monAnim === 'proj' ? MON_PROJ_FRAMES : MON_SEQ_MAX;
+  if (list.length >= cap) { monMsg(`An animation holds ${cap} frames at most.`, true); return; }
+  const lim = small ? MON_PART : MON_FRAME_MAX;
+  if (r[2] > lim || r[3] > lim) { monMsg(`That's ${r[2]}x${r[3]}: at most ${lim}x${lim} for ${monAnim === 'parts' ? 'a particle' : monAnim === 'proj' ? 'a shot' : 'a frame'}.`, true); return; }
+  const f = monCut(r);
+  if (!f) { monMsg('Nothing there (all see-through).', true); return; }
+  list.push(f);
+  monMsg('');
+  monRenderAll();
+}
+
+function monRenderAnims() {
+  const wrap = monEl('monAnims');
+  wrap.innerHTML = '';
+  for (const [k, label] of [...MON_SEQS, ['parts', 'Particles'], ['proj', 'Shot']]) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    const n = mon ? mon.anims[k].length : 0;
+    b.textContent = `${label}${n ? ` (${n})` : ''}`;
+    b.classList.toggle('on', k === monAnim);
+    b.title = k === 'left' ? 'None: Walk right, mirrored' : k.startsWith('attack') ? 'Played while it attacks (none: its walk); missing ways as for walking' :
+              k === 'rest' ? 'A hider\'s disguise (Hides), else what it shows standing' : k === 'parts' ? 'The bits it leaves when it dies, 16x16 at most, up to 4' :
+              k === 'proj' ? 'What it shoots (tick Shoots), 16x16 at most, up to 4 frames played in a loop' :
+              k === 'right' || k === 'up' ? 'None: Walk down' : '';
+    b.onclick = () => { monAnim = k; monRenderAll(); };
+    wrap.appendChild(b);
+  }
+  const fr = monEl('monFrames');
+  fr.innerHTML = '';
+  (mon ? mon.anims[monAnim] : []).forEach((f, i) => {
+    const cv = document.createElement('canvas');
+    cv.width = 40; cv.height = 40; cv.title = 'Click: take it out';
+    monDrawImg(cv, f);
+    cv.onclick = () => { mon.anims[monAnim].splice(i, 1); monRenderAll(); };
+    fr.appendChild(cv);
+  });
+  if (!fr.children.length) fr.innerHTML = '<span class="spNote">No frames: click the sheet to add some.</span>';
+}
+
+function monSyncForm() {
+  const m = mon || monBlank();
+  monEl('monId').value = m.id; monEl('monName').value = m.name;
+  for (const k of ['hp', 'damage', 'defense', 'speed', 'xp', 'wake', 'frameMs', 'projDamage', 'projSpeed', 'shootMs', 'shootTiles']) monEl('mon_' + k).value = m[k];
+  monEl('monSound').value = m.sound || '';
+  monEl('monSoundDie').value = m.soundDie || ''; monEl('monSoundWake').value = m.soundWake || ''; monEl('monSoundAttack').value = m.soundAttack || '';
+  for (const [el, k] of [['monSound', 'hit'], ['monSoundDie', 'die'], ['monSoundWake', 'wake'], ['monSoundAttack', 'attack']]) monEl(el).placeholder = `${m.id || 'id'}_${k}`;
+  MON_ABILS.forEach(([k]) => { monEl('monAb_' + k).checked = m.abilities.includes(k); });
+  monRenderDrops();
+}
+function monReadForm() {
+  if (!mon) mon = monBlank();
+  mon.id = monEl('monId').value.trim().toLowerCase().replace(/[^a-z0-9_]+/g, '_');
+  mon.name = monEl('monName').value.trim();
+  for (const k of ['hp', 'damage', 'defense', 'speed', 'xp', 'wake', 'frameMs', 'projDamage', 'projSpeed', 'shootMs', 'shootTiles']) mon[k] = Math.max(0, +monEl('mon_' + k).value | 0);
+  mon.sound = monEl('monSound').value.trim();
+  mon.soundDie = monEl('monSoundDie').value.trim(); mon.soundWake = monEl('monSoundWake').value.trim(); mon.soundAttack = monEl('monSoundAttack').value.trim();
+  mon.abilities = MON_ABILS.filter(([k]) => monEl('monAb_' + k).checked).map(([k]) => k);
+}
+function monRenderDrops() {
+  const wrap = monEl('monDrops');
+  wrap.innerHTML = '';
+  (mon ? mon.drops : []).forEach((d, i) => {
+    const row = document.createElement('div');
+    row.className = 'monDrop';
+    const mk = (k, w, title) => { const e = document.createElement('input'); e.type = k === 'item' ? 'text' : 'number'; e.value = d[k]; e.style.width = w; e.title = title; e.oninput = () => { d[k] = k === 'item' ? e.value.trim() : Math.max(0, +e.value | 0); }; return e; };
+    const del = document.createElement('button'); del.type = 'button'; del.textContent = '✕'; del.onclick = () => { mon.drops.splice(i, 1); monRenderDrops(); };
+    row.append(mk('item', '120px', 'Item id (assets/items/<id>.c)'), document.createTextNode(' '), mk('chance', '48px', '% chance'), document.createTextNode('% '),
+               mk('min', '40px', 'At least'), document.createTextNode('–'), mk('max', '40px', 'At most'), del);
+    wrap.appendChild(row);
+  });
+}
+function monRenderAll() { monRenderAnims(); monRenderSheet(); monRenderList(); }
+
+// ---- the preview: the picked animation playing ----
+function monPreviewLoop(t) {
+  if (!monEl('monOverlay').classList.contains('show')) return;
+  const list = mon ? mon.anims[monAnim] : [], ms = mon && mon.frameMs ? mon.frameMs : 150;
+  if (list.length) monDrawImg(monEl('monPreview'), list[Math.floor(t / ms) % list.length], 3);
+  else monDrawImg(monEl('monPreview'), null);
+  requestAnimationFrame(monPreviewLoop);
+}
+
+// ---- saving: the .c ----
+function monBuildC(m) {
+  const all = MON_SEQS.flatMap(([k]) => m.anims[k]);
+  if (!all.length) throw new Error('No frames yet.');
+  const fw = Math.max(...all.map(f => f.w)), fh = Math.max(...all.map(f => f.h));
+  if (fw > MON_FRAME_MAX || fh > MON_FRAME_MAX) throw new Error(`Frames are up to ${fw}x${fh}: at most ${MON_FRAME_MAX}x${MON_FRAME_MAX}.`);
+  const frames = [], keys = new Map(), cells = [], seqs = {};
+  const boxed = f => {   // bottom-middle in the box
+    const px = new Uint16Array(fw * fh), ox = Math.floor((fw - f.w) / 2), oy = fh - f.h;
+    for (let y = 0; y < f.h; y++) for (let x = 0; x < f.w; x++) {
+      const i = (y * f.w + x) * 4;
+      if (f.rgba[i + 3] < 128) continue;
+      const v = pack565(f.rgba[i], f.rgba[i + 1], f.rgba[i + 2]);
+      px[(oy + y) * fw + ox + x] = v || 0x0841;
+    }
+    return px;
+  };
+  for (const [k] of MON_SEQS) {
+    seqs[k] = m.anims[k].slice(0, MON_SEQ_MAX).map(f => {
+      const px = boxed(f), key = px.join(',');
+      if (!keys.has(key)) { keys.set(key, frames.length); frames.push(px); cells.push(f.cell || null); }
+      return keys.get(key);
+    });
+  }
+  const parts = m.anims.parts.slice(0, MON_PARTS).map(f => {
+    const px = new Uint16Array(MON_PART * MON_PART), ox = Math.floor((MON_PART - f.w) / 2), oy = Math.floor((MON_PART - f.h) / 2);
+    for (let y = 0; y < f.h; y++) for (let x = 0; x < f.w; x++) {
+      const i = (y * f.w + x) * 4;
+      if (f.rgba[i + 3] >= 128) px[(oy + y) * MON_PART + ox + x] = pack565(f.rgba[i], f.rgba[i + 1], f.rgba[i + 2]) || 0x0841;
+    }
+    return px;
+  });
+  const proj = (m.anims.proj || []).slice(0, MON_PROJ_FRAMES).map(f => {
+    const px = new Uint16Array(MON_PROJ * MON_PROJ), ox = Math.floor((MON_PROJ - f.w) / 2), oy = Math.floor((MON_PROJ - f.h) / 2);
+    for (let y = 0; y < f.h; y++) for (let x = 0; x < f.w; x++) {
+      const i = (y * f.w + x) * 4;
+      if (f.rgba[i + 3] >= 128) px[(oy + y) * MON_PROJ + ox + x] = pack565(f.rgba[i], f.rgba[i + 1], f.rgba[i + 2]) || 0x0841;
+    }
+    return px;
+  });
+  const shoots = m.abilities.includes('shoots') && proj.length;
+  const id = m.id, ab = m.abilities.reduce((s, a) => s | (1 << MON_ABILS.findIndex(x => x[0] === a)), 0);
+  const meta = { name: m.name, fw, fh, frames: frames.length, seqs, frameMs: m.frameMs, hp: m.hp, damage: m.damage, defense: m.defense, speed: m.speed, xp: m.xp, wake: m.wake,
+                 abilities: m.abilities, drops: m.drops.filter(d => d.item), particles: parts.length, sound: m.sound, soundDie: m.soundDie || '', soundWake: m.soundWake || '', soundAttack: m.soundAttack || '',
+                 projectiles: proj.length, projDamage: shoots ? m.projDamage : 0, projSpeed: shoots ? m.projSpeed : 0, shootMs: shoots ? m.shootMs : 0, shootTiles: shoots ? m.shootTiles : 0, cells };
+  const jpx = new Uint16Array(proj.length * MON_PROJ * MON_PROJ);
+  proj.forEach((px, i) => jpx.set(px, i * MON_PROJ * MON_PROJ));
+  const fpx = new Uint16Array(frames.length * fw * fh);
+  frames.forEach((px, i) => fpx.set(px, i * fw * fh));
+  const ppx = new Uint16Array(parts.length * MON_PART * MON_PART);
+  parts.forEach((px, i) => ppx.set(px, i * MON_PART * MON_PART));
+  const drops = meta.drops, q = s => String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  const seqLen = MON_SEQS.map(([k]) => seqs[k].length).join(', ');
+  const seq = MON_SEQS.map(([k]) => seqs[k].length ? `{ ${seqs[k].join(', ')} }` : '{ 0 }').join(', ');
+  return [
+    `// AUTO-GENERATED by gameTools.html (Monsters tab) — "${m.name}"`,
+    `// Lives in assets/monsters/ as ${id}.c — the file name is the monster id, keep it.`,
+    `// ${frames.length} frames of ${fw}x${fh}, ${parts.length} particles.`,
+    '// Everything here is const: it stays in flash (no RAM). RGB565, 0x0000 = see-through.',
+    `// MONSTERS-EDITOR ${JSON.stringify(meta)}`,
+    '#include "monsters.h"',
+    '',
+    `static const uint16_t k_monster_${id}_frames[${fpx.length}] = {`,
+    u16FrameToCArray(fpx),
+    '};',
+    ...(ppx.length ? ['', `static const uint16_t k_monster_${id}_particles[${ppx.length}] = {`, u16FrameToCArray(ppx), '};'] : []),
+    ...(jpx.length ? ['', `static const uint16_t k_monster_${id}_proj[${jpx.length}] = {`, u16FrameToCArray(jpx), '};'] : []),
+    ...(drops.length ? ['', `static const mon_drop_t k_monster_${id}_drops[] = {`, ...drops.map(d => `    { "${q(d.item)}", ${Math.min(100, d.chance)}, ${Math.min(255, d.min)}, ${Math.min(255, Math.max(d.min, d.max))} },`), '};'] : []),
+    '',
+    `const monster_def_t k_monster_${id} = {`,
+    `    .id = "${id}",`,
+    `    .name = "${q(m.name)}",`,
+    `    .fw = ${fw}, .fh = ${fh},`,
+    `    .frame_count = ${frames.length},`,
+    `    .frames = k_monster_${id}_frames,`,
+    `    .seq_len = { ${seqLen} },`,
+    `    .seq = { ${seq} },`,
+    `    .frame_ms = ${m.frameMs || 150},`,
+    `    .hp = ${m.hp}, .damage = ${Math.min(255, m.damage)}, .defense = ${Math.min(255, m.defense)}, .speed_q = ${Math.min(255, m.speed)}, .xp = ${Math.min(255, m.xp)}, .wake_tiles = ${Math.min(255, m.wake)},`,
+    `    .abilities = 0x${ab.toString(16).padStart(4, '0')},`,
+    `    .particle_count = ${parts.length},`,
+    `    .particles = ${ppx.length ? `k_monster_${id}_particles` : 'NULL'},`,
+    `    .drop_count = ${drops.length},`,
+    `    .drops = ${drops.length ? `k_monster_${id}_drops` : 'NULL'},`,
+    `    .sound = "${q(m.sound || '')}",`,
+    `    .sound_die = "${q(m.soundDie || '')}",`,
+    `    .sound_wake = "${q(m.soundWake || '')}",`,
+    `    .sound_attack = "${q(m.soundAttack || '')}",`,
+    `    .proj_count = ${proj.length},`,
+    `    .proj = ${jpx.length ? `k_monster_${id}_proj` : 'NULL'},`,
+    `    .proj_damage = ${Math.min(255, meta.projDamage)}, .proj_speed_q = ${Math.min(255, meta.projSpeed)}, .shoot_ms = ${Math.min(60000, meta.shootMs)}, .shoot_tiles = ${Math.min(255, meta.shootTiles)},`,
+    '};',
+    '',
+  ].join('\n');
+}
+async function monSave() {
+  monReadForm();
+  if (!/^[a-z_][a-z0-9_]*$/.test(mon.id)) { monMsg('Give it an id: lowercase letters, digits and _ (it\'s the file name).', true); return; }
+  if (!mon.name) mon.name = mon.id;
+  let text;
+  try { text = monBuildC(mon); } catch (e) { monMsg(e.message, true); return; }
+  const dir = await getMonstersDir(true);
+  if (dir) {
+    let exists = false;
+    try { await dir.getFileHandle(`${mon.id}.c`); exists = true; } catch (e) { /* new */ }
+    if (exists && mon.loadedFrom !== mon.id && !confirm(`assets/monsters/${mon.id}.c is already there. Overwrite it?`)) return;
+    const w = await (await dir.getFileHandle(`${mon.id}.c`, { create: true })).createWritable();
+    await w.write(text);
+    await w.close();
+    mon.loadedFrom = mon.id;
+    monMsg(`Saved assets/monsters/${mon.id}.c — rebuild the firmware to have it in the game.`);
+    await monLoadLib(true);
+    monRenderList();
+    return;
+  }
+  const a = document.createElement('a');   // no folder: a download
+  a.href = URL.createObjectURL(new Blob([text], { type: 'text/plain' }));
+  a.download = `${mon.id}.c`;
+  a.click();
+  monMsg(`Downloaded ${mon.id}.c — put it in assets/monsters/.`);
+}
+
+function monLoadSheet(file) {
+  const img = new Image();
+  img.onload = () => {
+    const c = document.createElement('canvas');
+    c.width = img.width; c.height = img.height;
+    const g = c.getContext('2d');
+    g.drawImage(img, 0, 0);
+    URL.revokeObjectURL(img.src);
+    monSheet = { name: file.name, w: img.width, h: img.height, data: g.getImageData(0, 0, img.width, img.height).data, canvas: c };
+    monRenderSheet();
+    monMsg(`${file.name}: ${img.width}x${img.height}. Pick an animation, then click cells (or drag boxes) on it.`);
+  };
+  img.src = URL.createObjectURL(file);
+}
+
+function openMonsters() {
+  monEl('monOverlay').classList.add('show');
+  if (!mon) mon = monBlank();
+  monSyncForm();
+  monRenderAll();
+  monLoadLib(true).then(monRenderList);
+  requestAnimationFrame(monPreviewLoop);
+}
+function closeMonsters() { monEl('monOverlay').classList.remove('show'); }
+
+(() => {
+  const ab = monEl('monAbil');
+  MON_ABILS.forEach(([k, label, title]) => {
+    const l = document.createElement('label'); l.title = title;
+    const c = document.createElement('input'); c.type = 'checkbox'; c.id = 'monAb_' + k; c.onchange = monReadForm;
+    l.append(c, document.createTextNode(' ' + label));
+    ab.appendChild(l);
+  });
+  for (const id of ['monId', 'monName', 'mon_hp', 'mon_damage', 'mon_defense', 'mon_speed', 'mon_xp', 'mon_wake', 'mon_frameMs', 'mon_projDamage', 'mon_projSpeed', 'mon_shootMs', 'mon_shootTiles', 'monSound', 'monSoundDie', 'monSoundWake', 'monSoundAttack']) monEl(id).addEventListener('input', monReadForm);
+  for (const id of ['monGW', 'monGH', 'monGX', 'monGY', 'monZoom']) monEl(id).addEventListener('input', monRenderSheet);
+  monEl('monNewBtn').onclick = () => { mon = monBlank(); monAnim = 'down'; monSyncForm(); monRenderAll(); monMsg(''); };
+  monEl('monSheetBtn').onclick = () => monEl('monSheetFile').click();
+  monEl('monSheetFile').onchange = e => { const f = e.target.files[0]; e.target.value = ''; if (f) monLoadSheet(f); };
+  monEl('monOpenBtn').onclick = () => monEl('monOpenFile').click();
+  monEl('monOpenFile').onchange = async e => {
+    const f = e.target.files[0]; e.target.value = '';
+    if (!f) return;
+    try { mon = monParseC(await f.text()); mon.loadedFrom = mon.id; monSyncForm(); monRenderAll(); monMsg(`Opened ${f.name}.`); } catch (err) { monMsg(err.message, true); }
+  };
+  monEl('monSaveBtn').onclick = monSave;
+  monEl('monAddDrop').onclick = () => { if (!mon) mon = monBlank(); mon.drops.push({ item: '', chance: 50, min: 1, max: 1 }); monRenderDrops(); };
+  const cv = monEl('monSheet');
+  const at = e => { const r = cv.getBoundingClientRect(), z = +monEl('monZoom').value; return [Math.floor((e.clientX - r.left) * cv.width / r.width / z), Math.floor((e.clientY - r.top) * cv.height / r.height / z)]; };
+  cv.addEventListener('mousedown', e => { if (!monSheet || e.button) return; const [x, y] = at(e); monDrag = { x0: x, y0: y, x1: x, y1: y, moved: false }; });
+  cv.addEventListener('mousemove', e => { if (!monDrag) return; const [x, y] = at(e); if (x !== monDrag.x1 || y !== monDrag.y1) { monDrag.x1 = x; monDrag.y1 = y; monDrag.moved = Math.abs(x - monDrag.x0) + Math.abs(y - monDrag.y0) > 2; monRenderSheet(); } });
+  window.addEventListener('mouseup', () => {
+    if (!monDrag) return;
+    const d = monDrag;
+    monDrag = null;
+    if (d.moved) { monDrag = d; const r = monDragRect(); monDrag = null; monAddFrame(r); return; }
+    const gw = +monEl('monGW').value || 16, gh = +monEl('monGH').value || 16, gx = +monEl('monGX').value || 0, gy = +monEl('monGY').value || 0;
+    const cx = gx + Math.floor((d.x0 - gx) / gw) * gw, cy = gy + Math.floor((d.y0 - gy) / gh) * gh;
+    monAddFrame([cx, cy, gw, gh]);
+  });
+})();
+</script>
+
+<script>
 // ---------- Game Tools: Map Editor / Item Editor / Image Editor tabs ----------
 // The Item Editor is the map editor's Item Mode (it shares the map's item
 // list), shown as a page of its own; the Image Editor is #gtImage.
@@ -23643,18 +24411,19 @@ function closeShopEditor() { shEl('shEdOverlay').classList.remove('show'); }
     if (tool === 'needs') openNeeds(); else closeNeeds();
     if (tool === 'furniture') openFurniture(); else closeFurniture();
     if (tool === 'fishing') openFishing(); else closeFishing();
+    if (tool === 'monster') openMonsters(); else closeMonsters();
     if (tool === 'shop') openShopEditor();
     else if (document.getElementById('shEdOverlay').classList.contains('show')) closeShopEditor();
     if (tool === 'wardrobe') openWardrobe(); else closeWardrobe();
     tabs.forEach(t => t.classList.toggle('on', t.dataset.tool === tool));
-    if (tool !== 'farm') document.title = 'Game Tools · ' + { map: 'Map Editor', item: 'Item Editor', crop: 'Crops Editor', tree: 'Trees Editor', building: 'Buildings Editor', machine: 'Machines Editor', image: 'Image Editor', needs: 'Needs You', furniture: 'Furniture', wardrobe: 'Wardrobe', fishing: 'Fishing', shop: 'Shop Editor' }[tool];
+    if (tool !== 'farm') document.title = 'Game Tools · ' + { map: 'Map Editor', item: 'Item Editor', crop: 'Crops Editor', tree: 'Trees Editor', building: 'Buildings Editor', machine: 'Machines Editor', image: 'Image Editor', needs: 'Needs You', furniture: 'Furniture', wardrobe: 'Wardrobe', fishing: 'Fishing', shop: 'Shop Editor', monster: 'Monsters' }[tool];
     if (tool === 'image') frame.focus(); else if (document.activeElement === frame) frame.blur();
     try { localStorage.setItem('gameTools.tool', tool); } catch {}
   }
   window.gtShowTool = showTool;
   tabs.forEach(t => t.addEventListener('click', () => showTool(t.dataset.tool)));
   let tool = 'map';
-  try { const t = localStorage.getItem('gameTools.tool'); if (t === 'item' || t === 'crop' || t === 'tree' || t === 'building' || t === 'animal' || t === 'farm' || t === 'machine' || t === 'image' || t === 'needs' || t === 'furniture' || t === 'wardrobe' || t === 'fishing' || t === 'shop') tool = t; } catch {}
+  try { const t = localStorage.getItem('gameTools.tool'); if (t === 'item' || t === 'crop' || t === 'tree' || t === 'building' || t === 'animal' || t === 'farm' || t === 'machine' || t === 'image' || t === 'needs' || t === 'furniture' || t === 'wardrobe' || t === 'fishing' || t === 'shop' || t === 'monster') tool = t; } catch {}
   showTool(tool);
 })();
 </script>

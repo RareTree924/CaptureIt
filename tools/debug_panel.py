@@ -113,10 +113,29 @@ def catalog():
     key = tuple((f, os.path.getmtime(f)) for f in files)
     if _catalog["key"] == key:
         return _catalog["data"]
-    items, animals, crops = [], [], []
+    items, animals, crops, monsters, trees = [], [], [], [], []
     for f in files:
         sub = os.path.basename(os.path.dirname(f))
-        if sub not in ("items", "crops", "animals", "machines", "buildings"):
+        if sub == "monsters":   # (MONSTERS + COMBAT) its name, what it does, its first walking frame as a picture
+            with open(f, encoding="utf-8", errors="replace") as fh:
+                src = fh.read()
+            base = os.path.splitext(os.path.basename(f))[0]
+            j = _editor_json(src, "MONSTERS-EDITOR")
+            fw, fh_, seqs = int(j.get("fw", 0)), int(j.get("fh", 0)), j.get("seqs", {})
+            first = (seqs.get("down") or seqs.get("rest") or [0])[0]
+            vals = re.findall(r"0x([0-9a-fA-F]{1,4})", _arrays(src).get("k_monster_%s_frames" % base, ""))
+            n = fw * fh_
+            px = "".join(v.zfill(4) for v in vals[first * n:(first + 1) * n]) if n and len(vals) >= (first + 1) * n else ""
+            monsters.append({"id": base, "name": j.get("name", base), "hp": j.get("hp"), "damage": j.get("damage"),
+                             "abilities": j.get("abilities", []), "w": fw if px else 0, "h": fh_ if px else 0, "px": px})
+            continue
+        if sub == "trees":   # (TREES) planted by the dev link's "tree plant"
+            with open(f, encoding="utf-8", errors="replace") as fh:
+                src = fh.read()
+            base = os.path.splitext(os.path.basename(f))[0]
+            j = _editor_json(src, "TREES-EDITOR")
+            trees.append({"id": base, "name": j.get("name", base), "fruit": bool(j.get("fruit"))})
+        if sub not in ("items", "crops", "animals", "machines", "buildings", "trees"):
             continue
         with open(f, encoding="utf-8", errors="replace") as fh:
             src = fh.read()
@@ -133,7 +152,7 @@ def catalog():
     for it in items:   # an animal file's item and its own may share an id: keep the first
         if it["id"] not in seen:
             seen.add(it["id"]); uniq.append(it)
-    _catalog.update(key=key, data={"items": uniq, "animals": animals, "crops": crops})
+    _catalog.update(key=key, data={"items": uniq, "animals": animals, "crops": crops, "monsters": monsters, "trees": trees})
     return _catalog["data"]
 
 

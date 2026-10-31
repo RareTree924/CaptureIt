@@ -4,7 +4,7 @@
 // 48x80 px, a 3x3-tile footprint; no inside.
 // A well: tap it holding a watering can to fill the can.
 // Everything here is const: it stays in flash (no RAM). RGB565, 0x0000 = see-through.
-// BUILDINGS-EDITOR {"name":"Well","footRows":3,"doorCol":0,"interior":"","price":1000,"w":48,"h":80,"iconW":14,"iconH":24,"iconAuto":true,"farm":{"kind":"well","capacity":4,"animalDoor":-1,"hay":240,"doorOpen":false,"doorShut":false}}
+// BUILDINGS-EDITOR {"name":"Well","footRows":3,"doorCol":0,"interior":"","price":3000,"w":48,"h":80,"iconW":14,"iconH":24,"iconAuto":true,"farm":{"kind":"well","capacity":4,"animalDoor":-1,"hay":240,"doorOpen":false,"doorShut":false}}
 #include "items.h"
 #include "buildings.h"
 
@@ -347,7 +347,7 @@ const building_def_t k_building_well = {
     .water_source = true,
 };
 
-// The item that puts it up: hold it and tap its hologram. The Build shop sells it for 1000.
+// The item that puts it up: hold it and tap its hologram. The Build shop sells it for 3000.
 static const uint16_t k_well_icon_pixels[336] = {
     0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
     0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000,
@@ -379,7 +379,7 @@ static const uint16_t k_well_icon_pixels[336] = {
     0x1041, 0x6a27, 0x4985, 0x8b2a, 0x8b2a, 0x6a27, 0x8b2a, 0x6a27, 0x6a27, 0x3103, 0x0000, 0x0000,
 };
 static const item_attr_t k_well_attrs[] = {
-    { "buyable", 1000 },
+    { "buyable", 3000 },
 };
 const item_asset_t k_item_well = {
     .id = "well",

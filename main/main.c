@@ -263,7 +263,6 @@ static void dev_out(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 void display_begin(void)
 {
     spi_gpio_init();
-    st7701_init_sequence();
 
     // data_gpio_nums[0..15] = bit0..bit15 of RGB565: bits 0-4=B0-B4, 5-10=G0-G5, 11-15=R0-R4.
     esp_lcd_rgb_panel_config_t panel_config = {
@@ -303,6 +302,12 @@ void display_begin(void)
 
     // Direct pointer to the panel's own buffer — no second copy needed.
     ESP_ERROR_CHECK(esp_lcd_rgb_panel_get_frame_buffer(s_panel, 1, (void **)&s_fb));
+    memset(s_fb, 0, (size_t)LCD_H_RES * LCD_V_RES * sizeof(uint16_t));   // black while the panel wakes
+
+    // The ST7701's own setup only now, with the RGB signals already running: it locks onto
+    // their timing as it comes out of sleep. Woken before the clock ran, some boots came
+    // up with the picture's edges garbled until the next reset (2026-10-24).
+    st7701_init_sequence();
 
     ESP_LOGI(TAG, "display up: %dx%d", LCD_H_RES, LCD_V_RES);
 }
@@ -2447,7 +2452,7 @@ static void stream_init(void)
     if (s_stream_q) return;
     s_mapf_mx  = xSemaphoreCreateMutex();
     s_stream_q = xQueueCreate(BUNDLE_MAX_COUNT, sizeof(uint16_t));
-    xTaskCreate(stream_task, "stream", 2048, NULL, 4, NULL);   // peak 0.7 KB seen (dev link "stacks")
+    xTaskCreate(stream_task, "stream", 4096, NULL, 4, NULL);   // peak 0.7 KB seen (dev link "stacks"), but 2 KB overflowed loading barrens (2026-10-24: a FatFs seek far into a big map?)
 }
 
 // Puts frame f of bundle i on show (for anim_frame()). false = still on its
@@ -3443,6 +3448,11 @@ typedef struct {
     int16_t      fall_frame;   // frame in fall_px; -1 = none read yet
     uint32_t     fall_start_ms, fall_next_ms;
     uint16_t    *fall_px;      // PSRAM, one frame of the fall bundle (NULL = no memory: the fall isn't drawn)
+    // ---- SPAWNS ----
+    bool         spawn_tpl;    // a sample for the random rocks: never shown where it was put
+    bool         spawned;      // a random rock (a copy of sample spawn_src): its own levels and gone look, in PSRAM
+    int16_t      spawn_src;
+    uint16_t    *gone_px;      // a random rock's "gone" look: the map's pixels where it stands (none in the .map)
 } brk_inst_t;
 
 typedef struct {
@@ -3466,10 +3476,16 @@ static int  tree_at(int tx, int ty);           // TREES section: the tree whose 
 static bool tree_covers_rect(int x, int y, int w, int h);   // ...a tree's art overlaps this pixel rect (nothing else is baked there)
 
 // Masks are in the map store, freed with it; the art is on the card.
+// A random rock (SPAWNS) owns its gone look and masks.
 static void brk_inst_free(brk_inst_t *b)
 {
     free(b->levels);
     heap_caps_free(b->fall_px);
+    if (b->spawned) {
+        heap_caps_free(b->gone_px);
+        heap_caps_free(b->gone_solid);
+        heap_caps_free(b->gone_layer);
+    }
     memset(b, 0, sizeof(*b));
 }
 
@@ -3727,6 +3743,7 @@ static void brk_bank_rebase(brk_bank_t *bk, uintptr_t from, uint8_t *to)
             BRK_REBASE(b->levels[l].layer);
             if (b->levels[l].alpha) BRK_REBASE(b->levels[l].alpha);
         }
+        if (b->spawned) continue;   // (SPAWNS: its gone masks are its own)
         BRK_REBASE(b->gone_solid);
         BRK_REBASE(b->gone_layer);
     }
@@ -3860,6 +3877,7 @@ static bool tp_bank_read(FILE *f, tp_bank_t *out)
 #define TILE_FLAG_OCEAN        0x20  // ...and "Ocean" (FISHING: "fish_water" 4); neither = a pond or lake ("fish_water" 1)
 #define TILE_FLAG_LAVA         0x40  // ...and "Lava" (FISHING: "fish_water" 8): only a "rod_lava" rod casts into it, only lava fish bite
 #define TILE_FLAG_FORAGE       0x80  // the editor's "Forage": forageables come up here every morning (FORAGE)
+#define TILE_WATER_ICE         (TILE_FLAG_RIVER | TILE_FLAG_OCEAN)   // both = the water kind "Ice": frozen, fished through a hole (ICE HOLES, "fish_water" 16)
 #define TILE_CELL_COVERED      0x80
 #define TILE_NONE              0     // no tile type here (see above), off the map, or a map from before MAP11
 #define TILE_FARMLAND          254   // tilled with a hoe (FARMING) — the same on every map
@@ -3973,12 +3991,13 @@ bool tile_fishable(int tx, int ty)
     return t != TILE_NONE && (s_tiles->types[t].flags & TILE_FLAG_FISHABLE);
 }
 
-// Fishable water's kind (FISHING, "fish_water" bits): 1 pond / lake, 2 river, 4 ocean, 8 lava; 0 = not water.
+// Fishable water's kind (FISHING, "fish_water" bits): 1 pond / lake, 2 river, 4 ocean, 8 lava, 16 ice; 0 = not water.
 static int tile_water_kind(int tx, int ty)
 {
     uint8_t t = read_map_tile(tx, ty);
     if (t == TILE_NONE || !(s_tiles->types[t].flags & TILE_FLAG_FISHABLE)) return 0;
     uint8_t f = s_tiles->types[t].flags;
+    if ((f & TILE_WATER_ICE) == TILE_WATER_ICE) return 16;   // (ICE HOLES)
     return (f & TILE_FLAG_LAVA) ? 8 : (f & TILE_FLAG_OCEAN) ? 4 : (f & TILE_FLAG_RIVER) ? 2 : 1;
 }
 
@@ -4088,6 +4107,48 @@ static void fish_gear_text(item_id_t item, char *out, size_t n); // ...what a ro
 static item_id_t fish_rig_item(int k);                          // ...the line's bait (0) / tackle (1, 2), ITEM_NONE = none
 static int     fish_rig_count(int k);                         // ...how many baits / catches that tackle has left
 static void fish_reset(void);                                 // ...gone when another map loads
+static void fish_ice_froze(int tx, int ty);                   // ...an ice hole froze over: a line out in it comes in
+static int  ice_hole_at(int tx, int ty);                      // ICE HOLES: the hole on tile (tx,ty), or -1
+static bool tile_water_open(int tx, int ty);                  // ...water a can fills from / a rod casts into (not frozen over)
+static bool ice_tap_target(int tx, int ty);                   // ...nav_plan(): a tap on the ice with a pickaxe in hand
+static void ice_on_hit(void);                                 // ...a tool swing landing: a pickaxe on the ice breaks a hole
+static void ice_bake_all(void);                               // ...fresh map pixels: the holes on them again
+static void ice_restamp(int x0, int y0, int x1, int y1);      // ...over an animation's frame (animated water)
+static void spawn_map_loaded(void);                           // SPAWNS: a map loading — its <map>.spawn, the samples hidden
+enum { BOAT_AIM_NONE = 0, BOAT_AIM_LAUNCH, BOAT_AIM_SHOP };   // BOATS + DOCKS: what a tap means for boats
+static int  boat_deck_at(int tx, int ty);                     // BOATS + DOCKS: the boat on the water whose deck is tile (tx,ty), or -1
+static bool walk_px_blocked(int x, int y);                    // ...the player on foot: map_pixel_blocked(), but a boat's deck is walked on
+static int  boat_tap_aim(int gx, int gy, bool allowed);       // ...nav_plan(): what a tap on tile (gx,gy) means for boats (BOAT_AIM_*)
+static bool boat_shore_ok(int aim, int x, int y, int nx, int ny);   // ...nav_plan(): standing on (x,y), is (nx,ny) where that aim goes?
+static void boat_no_shore(int aim);                           // ...nav_plan(): no such spot in reach — says so
+static bool boat_on_action(void);                             // ...update_player(): launch a boat, the boat shop
+static bool boat_steer_tap(int tap_x, int tap_y);             // ...a tap while at a helm: sail there (true), or walk (false)
+static void boat_steer_tick(void);                            // ...once a frame, before update_player(): the steered boat moves, the player with it
+static int  boat_steered(void);                               // ...the boat being steered (the player at its helm), or -1
+static void boat_follow_tp(int b);                            // ...tp_travel(): the steered boat came through the teleporter too
+static void boat_paint_rect(int x, int y, int w, int h);      // ...the boats here, drawn by map_repaint_rect()
+static void boat_map_loaded(void);                            // ...a map loaded: its boats go on screen
+static void boat_card_text(item_id_t item, char *out, size_t n);   // ...the shop card: its deck, what water it goes on, how fast
+static void monster_paint_rect(int x, int y, int w, int h);   // MONSTERS + COMBAT: drawn by map_repaint_rect(), like the shoppers
+static void fog_apply(int x, int y, int w, int h);           // WEATHER: thick fog over a repaint, clear round the player
+static void monster_on_swing(item_id_t held);                 // ...a swing landed: the monsters in reach take it
+static void mon_clear(void);                                  // ...gone when another map loads
+static void monster_tick(void);                               // ...once a game frame: they move, hunt, hit, die
+static bool combat_tap(int tx, int ty);                       // ...a tap with a weapon in hand: a swing
+static void combat_chase_tick(uint32_t now);                  // ...walking to a tapped monster: the swing once it's in reach
+static bool hp_bar_wanted(void);                              // ...the clock panel shows the health bar
+static int  hp_max(void);                                     // ...the most health the player can have
+static void hp_write(FILE *f, char *line, size_t n);          // ...world.txt's "health" line...
+static void hp_load(int v);                                   // ...read back
+static void sling_load(const char *id, int n, int q);         // ...world.txt's "sling" line back
+static int16_t s_hp;                                          // ...the player's health now (defined there)
+#define ITEM_ATTR_WEAPON      "weapon"        // MONSTERS + COMBAT: a weapon's damage a hit (with "tool" 1: it swings)
+#define ITEM_ATTR_WEAPON_KIND "weapon_kind"   // ...0 sword, 1 dagger, 2 club (knocks further), 3 slingshot
+static uint16_t weapon_swipe_ms(item_id_t item);              // ...a swing's swipe frame for that item (a weapon's speed)
+static bool sling_attach(inv_slot_t *carry, item_id_t sling); // ...the bag: something dropped on a slingshot goes in it
+static void combat_reset(void);                               // ...a new game: full health, an empty slingshot
+static void proj_paint_rect(int x, int y, int w, int h, uint32_t now);   // ...the shots, drawn with the monsters
+static void proj_clear(void);                                 // ...gone with the map
 static void tool_swing_reset(void);                           // TOOL SWING: a swing (and the hit it's about to land) belongs to the old map
 static bool rain_now(void);                                   // WEATHER section
 static void npc_clear(void);                                  // ...gone when another map loads
@@ -4365,9 +4426,12 @@ bool load_map(const char *map_file)
     ranch_clear();                // its animals and grass (ANIMALS — in its save too)
     place_clear();                // and its props and buildings
     npc_clear();                  // and its shoppers' bodies (MARKET — they're still out shopping)
+    mon_clear();                  // and its monsters (MONSTERS + COMBAT — a mining map gets a new lot)
+    boat_map_loaded();            // the boats moored on it go on screen (BOATS + DOCKS)
     market_map_loaded();
     s_map_hash = s_load_hash;
     place_buildings_apply();      // buildings placed here (buildings.txt) — before the save, whose lines are checked against them
+    spawn_map_loaded();           // the random rocks' samples come off the map (SPAWNS) — before the save
     mapsave_load();               // broken breakables + dropped stacks from /sdcard/saves (the .map is never written)
     forage_catch_up(false);       // the forage that came up while the player was away (FORAGE) — baked by mapsave_show()
     // The fade repainted the whole screen, so the player sprite that was
@@ -4996,9 +5060,10 @@ static rect_t s_msg_rect;
 #define CLOCK_TIME_H 50                   // the weekday, season and time...
 #define CLOCK_H (CLOCK_TIME_H + 16)       // ...and the energy bar under them
 #define CLOCK_TEMP_H 14                   // ...and, in a hot or cold climate, the temperature bar (TEMPERATURE)
-#define CLOCK_H_MAX  (CLOCK_H + CLOCK_TEMP_H)   // the most it covers: things keep out from under all of it
+#define CLOCK_H_MAX  (CLOCK_H + 2 * CLOCK_TEMP_H)   // the most it covers (the temperature and the health bars): things keep out from under all of it
 static bool s_clock_on_screen = false;
-static int  s_clock_h = CLOCK_H;          // how tall it is now: CLOCK_H, or CLOCK_H_MAX with the temperature bar
+static int  s_clock_h = CLOCK_H;          // how tall it is now: CLOCK_H, + CLOCK_TEMP_H for each bar under the energy
+static uint8_t s_clock_bars = 0;          // ...which: 1 the temperature (TEMPERATURE), 2 the health (MONSTERS + COMBAT)
 
 static bool ui_overlay_covers(int px, int py)
 {
@@ -5101,7 +5166,7 @@ static int  temp_pct(void) { return s_temp * 100 / TEMP_MAX; }
 static bool temp_bar_wanted(void);        // ENERGY section: the clock panel shows the bar
 
 // Skills (SKILLS, after GEAR): xp and a level (0..SKILL_LEVEL_MAX) in each.
-enum { SKILL_FARMING, SKILL_FORAGING, SKILL_MINING, SKILL_FISHING, SKILL_COUNT };
+enum { SKILL_FARMING, SKILL_FORAGING, SKILL_MINING, SKILL_COMBAT, SKILL_FISHING, SKILL_COUNT };   // (fishing last: its xp is FISHING's own)
 static void    skill_xp(int skill, int xp);                      // xp earned (a level up says so)
 static int     skill_level(int skill);
 static uint8_t skill_roll_quality(item_id_t item, int skill);    // item_roll_quality(), better the higher the level
@@ -5911,9 +5976,14 @@ static void held_item_xy(const player_look_t *l, int iw, int ih, int *x, int *y)
 #define TOOL_ART_MAX_W  32    // swing art bigger than this isn't drawn (the player background cache is sized for it)
 #define TOOL_ART_MAX_H  48
 #define TOOL_ART_RAISE  16    // swing art sits this much higher than the player's own 16x32 box (it looked low on the board)
+#define SWING_CROUCH_PX 3     // a weapon's swing: the player crouches this much into the blow (player_look_t.squash)
 #define TOOL_ROT_MS     180   // the tool coming down: turning (sideways) or dropping (facing up / down); the swipe and the hit follow right after
 #define TOOL_ROT_FROM   (-40.0f)   // sideways (facing right): from raised back over the head, degrees clockwise from the art as drawn...
 #define TOOL_ROT_TO     100.0f     // ...to down in front (facing left: mirrored)
+#define WEAPON_ARC_DOWN_FROM  20.0f   // a weapon facing down: a sweep across the front, from up on their right...
+#define WEAPON_ARC_DOWN_TO    215.0f  // ...through pointing right and down, to down on their left
+#define WEAPON_ARC_UP_FROM   (-100.0f) // facing up: over the head, from their left...
+#define WEAPON_ARC_UP_TO      100.0f  // ...to their right (behind them)
 #define TOOL_CHOP_PX    14    // facing up / down: the tool starts this much higher and drops into place
 #define TOOL_ROT_MAX_W  16    // swing art up to this size turns around the hands (its bottom middle); bigger art drops instead
 #define TOOL_ROT_MAX_H  32
@@ -5932,6 +6002,7 @@ static struct {
     bool      swipe;      // with the swipe
     bool      hit_due;    // the breakable / farmland in front gets the hit at TOOL_HIT_MS
     uint16_t  art_ms;     // how long its swing art shows (0 = it has none)
+    uint16_t  frame_ms;   // each swipe frame (SWIPE_FRAME_MS; a weapon's speed changes it — weapon_swipe_ms())
     uint32_t  start_ms;
 } s_swing;
 
@@ -5975,11 +6046,12 @@ static int tool_power(item_id_t item)
 }
 
 // With swing art the tool comes down first (TOOL_ROT_MS) and the swipe follows; without, the swipe starts at once.
-static uint32_t tool_swing_lead_ms(void) { return s_swing.art_ms ? TOOL_ROT_MS : 0; }
+static uint32_t tool_swing_rot_ms(void)  { return (uint32_t)TOOL_ROT_MS * s_swing.frame_ms / SWIPE_FRAME_MS; }   // (a weapon's speed: quicker or slower)
+static uint32_t tool_swing_lead_ms(void) { return s_swing.art_ms ? tool_swing_rot_ms() : 0; }
 
 static uint32_t tool_swing_len_ms(void)
 {
-    uint32_t swipe = s_swing.swipe ? tool_swing_lead_ms() + SWIPE_FRAMES * SWIPE_FRAME_MS : 0;
+    uint32_t swipe = s_swing.swipe ? tool_swing_lead_ms() + SWIPE_FRAMES * s_swing.frame_ms : 0;
     return s_swing.art_ms > swipe ? s_swing.art_ms : swipe;
 }
 
@@ -6012,6 +6084,8 @@ static bool tool_swing_start(void)
     s_swing.dir      = (uint8_t)player_dir_from_facing(s_player_facing);
     s_swing.swipe    = item_attr(held, ITEM_ATTR_TOOL_SWIPE, 1) > 0;
     s_swing.art_ms   = art ? (art->interval_ms ? art->interval_ms : 250) : 0;
+    s_swing.frame_ms = weapon_swipe_ms(held);   // (MONSTERS + COMBAT: a weapon's speed)...
+    if (s_swing.art_ms) s_swing.art_ms = (uint16_t)((uint32_t)s_swing.art_ms * s_swing.frame_ms / SWIPE_FRAME_MS);   // ...its swing art's too
     s_swing.hit_due  = false;
     s_swing.start_ms = (uint32_t)(esp_timer_get_time() / 1000);
     tool_sfx_play(held);
@@ -6027,11 +6101,15 @@ static void tool_swing_tick(bool moved)
     if (moved) { tool_swing_reset(); return; }   // walked off: the swing is over, nothing gets hit
     uint32_t t   = (uint32_t)(esp_timer_get_time() / 1000) - s_swing.start_ms;
     uint32_t len = tool_swing_len_ms();
-    uint32_t hit = s_swing.art_ms ? TOOL_ROT_MS : s_swing.swipe ? TOOL_HIT_MS : len / 2;   // as the tool lands
+    uint32_t hit = s_swing.art_ms ? tool_swing_rot_ms() : s_swing.swipe ? 2 * s_swing.frame_ms : len / 2;   // as the tool lands (TOOL_HIT_MS at the usual speed)
     if (s_swing.hit_due && t >= hit) {
         s_swing.hit_due = false;
-        brk_on_action();   // hit whatever breakable is in reach (needs the right held item)
-        farm_on_action();  // till / water / harvest the faced tile
+        monster_on_swing(s_swing.item);   // the monsters in reach (MONSTERS + COMBAT)
+        if (item_attr(s_swing.item, ITEM_ATTR_WEAPON, 0) <= 0) {   // (a weapon hits nothing else)
+            brk_on_action();   // hit whatever breakable is in reach (needs the right held item)
+            farm_on_action();  // till / water / harvest the faced tile
+            ice_on_hit();      // a pickaxe on the ice: a hole (ICE HOLES)
+        }
     }
     if (t >= len && !s_swing.hit_due) s_swing.item = ITEM_NONE;
 }
@@ -6050,17 +6128,25 @@ static bool tool_swing_look(player_look_t *l, uint32_t now)
     if (t >= tool_swing_len_ms()) return false;
     l->tool_dir = s_swing.dir;
     uint32_t lead = tool_swing_lead_ms();   // the swipe follows the tool coming down
-    if (s_swing.swipe && t >= lead && t - lead < SWIPE_FRAMES * SWIPE_FRAME_MS) l->swipe = (uint8_t)((t - lead) / SWIPE_FRAME_MS + 1);
+    if (s_swing.swipe && t >= lead && t - lead < SWIPE_FRAMES * s_swing.frame_ms) l->swipe = (uint8_t)((t - lead) / s_swing.frame_ms + 1);
     if (!s_swing.art_ms || !tool_art(s_swing.item)) return false;
     l->tool      = s_swing.item;
-    l->tool_turn = (uint8_t)(t >= TOOL_ROT_MS ? 255 : t * 255 / TOOL_ROT_MS);
+    uint32_t rot = tool_swing_rot_ms();
+    l->tool_turn = (uint8_t)(t >= rot ? 255 : t * 255 / rot);
+    if (item_attr(s_swing.item, ITEM_ATTR_WEAPON, 0) > 0) {   // a weapon: a quick crouch into the blow, deepest as it lands (MONSTERS + COMBAT)
+        float k = t < rot ? (float)t / rot : 1.0f - (float)(t - rot) / (float)(tool_swing_len_ms() - rot + 1);
+        int   c = (int)lroundf(SWING_CROUCH_PX * (k < 0 ? 0 : k));
+        if (c > l->squash) l->squash = (uint8_t)c;
+    }
     return true;
 }
 
 // Sideways swing art that's small enough turns around the hands; the rest drops into place.
 static bool tool_art_turns(const player_look_t *l, const frame_bundle_t *b)
 {
-    return (l->tool_dir == PDIR_LEFT || l->tool_dir == PDIR_RIGHT) && b->w <= TOOL_ROT_MAX_W && b->h <= TOOL_ROT_MAX_H;
+    if (b->w > TOOL_ROT_MAX_W || b->h > TOOL_ROT_MAX_H) return false;
+    // a weapon sweeps round the hands every way (MONSTERS + COMBAT); a tool only sideways (up / down: it chops)
+    return l->tool_dir == PDIR_LEFT || l->tool_dir == PDIR_RIGHT || item_attr(l->tool, ITEM_ATTR_WEAPON, 0) > 0;
 }
 
 // How far down the tool has come, eased: slow off the top, fast into the hit.
@@ -6074,7 +6160,7 @@ static float tool_turn_eased(const player_look_t *l)
 static void tool_hands(const player_look_t *l, int *x, int *y)
 {
     *x = l->x + PLAYER_W / 2;
-    *y = l->y + PLAYER_H - TOOL_ART_RAISE;
+    *y = l->y + PLAYER_H - TOOL_ART_RAISE + l->squash;   // (crouching: the hands go down with them)
 }
 
 // Where the swing art is drawn now: turning, the square it can sweep around the hands; dropping, where it is on the way down.
@@ -6121,10 +6207,13 @@ static void tool_paint(const player_look_t *l)
         static const uint8_t k_pick[4][PDIR_COUNT] = { { 0, 0, 0, 0 }, { 0, 0, 1, 1 }, { 0, 1, 2, 2 }, { 0, 1, 2, 3 } };   // [frames - 1][direction]
         int n = b->frame_count < 4 ? b->frame_count : 4;
         bool flip = l->tool_dir == PDIR_LEFT && n < 4;   // sideways art faces right
-        const uint16_t *f = b->pixels + (size_t)k_pick[n - 1][l->tool_dir] * b->w * b->h;
+        bool arc  = (l->tool_dir == PDIR_DOWN || l->tool_dir == PDIR_UP) && tool_art_turns(l, b);   // a weapon sweeping up / down
+        const uint16_t *f = b->pixels + (size_t)k_pick[n - 1][arc ? PDIR_RIGHT : l->tool_dir] * b->w * b->h;   // (its upright, sideways look)
         rect_t r = tool_art_rect(l, b);
         if (tool_art_turns(l, b)) {   // turned around the hands: each screen pixel looks back into the art
-            float deg = TOOL_ROT_FROM + (TOOL_ROT_TO - TOOL_ROT_FROM) * tool_turn_eased(l);
+            float e = tool_turn_eased(l), deg = TOOL_ROT_FROM + (TOOL_ROT_TO - TOOL_ROT_FROM) * e;
+            if (l->tool_dir == PDIR_DOWN) deg = WEAPON_ARC_DOWN_FROM + (WEAPON_ARC_DOWN_TO - WEAPON_ARC_DOWN_FROM) * e;
+            if (l->tool_dir == PDIR_UP)   deg = WEAPON_ARC_UP_FROM + (WEAPON_ARC_UP_TO - WEAPON_ARC_UP_FROM) * e;
             if (l->tool_dir == PDIR_LEFT) deg = -deg;   // (with the art mirrored: the same swing the other way)
             float a = deg * 0.017453293f, ca = cosf(a), sa = sinf(a);
             int hx, hy;
@@ -6449,8 +6538,8 @@ static bool player_feet_blocked(int x, int y)
     if (s_dev_noclip) return false;
     int fx0 = x, fx1 = x + PLAYER_W - 1;
     int fy0 = y + PLAYER_H - PLAYER_FEET_H, fy1 = y + PLAYER_H - 1;
-    return map_pixel_blocked(fx0, fy0) || map_pixel_blocked(fx1, fy0) ||
-           map_pixel_blocked(fx0, fy1) || map_pixel_blocked(fx1, fy1);
+    return walk_px_blocked(fx0, fy0) || walk_px_blocked(fx1, fy0) ||   // (a boat's deck is walked on — BOATS + DOCKS)
+           walk_px_blocked(fx0, fy1) || walk_px_blocked(fx1, fy1);
 }
 
 // Un-XORs any highlight currently drawn and marks "no highlight" so the
@@ -6679,6 +6768,8 @@ void update_player(void)
         check_selected_area(current_map_name(), s_selected_tile_x, s_selected_tile_y);
         if (tool_swinging()) {
             // mid-swing (TOOL SWING): this press is dropped
+        } else if (boat_on_action()) {
+            // a boat launched, boarded or left ashore, or a dock's boat shop (BOATS + DOCKS)
         } else if (!trig_on_action(s_selected_tile_x, s_selected_tile_y)) {   // an object with actions (a shop) takes the press
             if (ranch_on_action()) {             // ...the animal / grass the walk was for (ANIMALS — before a rug under it)
                 if (item_attr(inv_held_item(), ITEM_ATTR_CUTS, 0) > 0) tool_swing_start();   // a scythe through the grass swings (TOOL SWING)
@@ -6819,7 +6910,9 @@ static void anim_paint_instance(const anim_instance_t *a)
     machine_paint_rect(a->x, a->y, a->w, a->h);
     farmfx_paint_rect(a->x, a->y, a->w, a->h);
     npc_paint_rect(a->x, a->y, a->w, a->h);
+    monster_paint_rect(a->x, a->y, a->w, a->h);   // (MONSTERS + COMBAT: over animated water, a lava pool...)
     fish_paint_rect(a->x, a->y, a->w, a->h);
+    fog_apply(a->x, a->y, a->w, a->h);            // (WEATHER: the fog over it too)
 
     // 2) Is the player (or its held item) standing in it? Put it back on
     //    top. Reads s_fb itself (not the raw animation frame) into the
@@ -7201,12 +7294,15 @@ static void map_repaint_rect_ex(int x, int y, int w, int h, void (*overlay)(void
     if (anim_restamp_current(x, y, w, h)) redraw_foreground_over_rect(x, y, w, h);
     nav_trail_paint_rect(x, y, w, h);   // a drawn path's dots, under the shoppers
     trough_paint_rect(x, y, w, h);      // hay in a barn's troughs (FARM)
+    boat_paint_rect(x, y, w, h);        // boats moored on the water (BOATS + DOCKS)
     ranch_paint_rect(x, y, w, h);       // the farm animals (ANIMALS)
     machine_paint_rect(x, y, w, h);     // a ready machine's icon (MACHINES)
     farmfx_paint_rect(x, y, w, h);      // crows, a held sprinkler's square (SPRINKLERS + SCARECROWS)
     npc_paint_rect(x, y, w, h);
+    monster_paint_rect(x, y, w, h);   // the monsters (MONSTERS + COMBAT)
     fish_paint_rect(x, y, w, h);   // a fishing line out (FISHING)
     if (overlay) overlay();
+    fog_apply(x, y, w, h);         // thick fog over it all, but round the player (WEATHER)
 
     // A breakable changing under the hotbar changes the map pixels its
     // translucent background is blended from (redrawn in step 4 below).
@@ -7581,8 +7677,16 @@ static inline void bit_put(uint8_t *m, int i, bool v)
 // returns it, or NULL on a card error — the caller skips that draw.
 static const uint16_t *brk_art_gone(const brk_inst_t *b)
 {
+    if (b->gone_px) return b->gone_px;   // a random rock (SPAWNS): kept in PSRAM
     uint16_t *d = s_brk.scratch;
     return d && mapf_read_px(b->gone_off, d, (size_t)b->w * b->h) ? d : NULL;
+}
+
+// A random rock (SPAWNS): what the map pixels have where it stands now becomes its gone look.
+static void brk_keep_gone_px(brk_inst_t *b)
+{
+    for (int row = 0; row < b->h; row++)
+        memcpy(&b->gone_px[row * b->w], &s_map_pixels[(b->y + row) * s_map_w + b->x], (size_t)b->w * sizeof(uint16_t));
 }
 
 static const uint16_t *brk_art_idle(const brk_level_t *L)
@@ -7599,8 +7703,9 @@ static const uint16_t *brk_art_hit(const brk_inst_t *b, const brk_level_t *L, ui
     if (!d) return NULL;
     size_t    lpx  = (size_t)L->w * L->h;
     uint16_t *rows = d + lpx;
-    if (!mapf_read_px(L->hit_off + (uint32_t)(frame * lpx * sizeof(uint16_t)), d, lpx) ||
-        !mapf_read_px(b->gone_off + (uint32_t)((size_t)L->oy * b->w * sizeof(uint16_t)), rows, (size_t)L->h * b->w)) return NULL;
+    if (!mapf_read_px(L->hit_off + (uint32_t)(frame * lpx * sizeof(uint16_t)), d, lpx)) return NULL;
+    if (b->gone_px) memcpy(rows, b->gone_px + (size_t)L->oy * b->w, (size_t)L->h * b->w * sizeof(uint16_t));   // (SPAWNS)
+    else if (!mapf_read_px(b->gone_off + (uint32_t)((size_t)L->oy * b->w * sizeof(uint16_t)), rows, (size_t)L->h * b->w)) return NULL;
     *base = rows;
     return d;
 }
@@ -7749,6 +7854,7 @@ static void brk_restamp_over_anim(int x0, int y0, int x1, int y1, bool fg_only)
     if (y0 < 0) y0 = 0;
     if (x1 > s_map_w) x1 = s_map_w;
     if (y1 > s_map_h) y1 = s_map_h;
+    if (!fg_only) ice_restamp(x0, y0, x1, y1);   // a hole in animated water (its waves) stays on top too (ICE HOLES)
     for (int n = 0; n < s_brk.count; n++) {
         const brk_inst_t *b = &s_brk.inst[n];
         if (!b->above_anims || b->level >= b->level_count) continue;   // not over animations / gone
@@ -7787,9 +7893,11 @@ static void brk_restore_masks(const brk_inst_t *b)
 // collision/layer bits never left.
 static void brk_rebake_all(void)
 {
+    for (int n = 0; n < s_brk.count; n++)   // random rocks (SPAWNS): these pixels never had them — what's there is their gone look
+        if (s_brk.inst[n].spawned) brk_keep_gone_px(&s_brk.inst[n]);
     for (int n = 0; n < s_brk.count; n++) {
         const brk_inst_t *b = &s_brk.inst[n];
-        if (b->level == 0 && b->hits_done == 0) continue;   // still exactly as placed
+        if (b->level == 0 && b->hits_done == 0 && !b->spawned) continue;   // still exactly as placed
         if (s_brk.composed) { brk_compose(b, true); continue; }
         const uint16_t *art, *base = NULL;
         if (b->level > 0 && (art = brk_art_gone(b))) brk_bake_pixels(b, 0, 0, b->w, b->h, art, NULL);
@@ -8276,6 +8384,7 @@ static bool ground_tile_ok(int tx, int ty)
     if (farm_covers_tile(tx, ty)) return false;        // a crop's top half isn't solid, but it's baked there
     if (tree_covers_rect(x, y, TILE_SIZE, TILE_SIZE)) return false;    // so is a tree's canopy (TREES)
     if (place_covers_rect(x, y, TILE_SIZE, TILE_SIZE)) return false;   // a prop (even a walk-on rug) or a building is baked there too
+    if (ice_hole_at(tx, ty) >= 0) return false;                         // a hole in the ice (ICE HOLES)
     for (int py = y + TILE_SIZE - PLAYER_FEET_H; py < y + TILE_SIZE; py++)
         for (int px = x; px < x + TILE_SIZE; px++)
             if (map_pixel_blocked(px, py)) return false;
@@ -8797,7 +8906,8 @@ static const char *season_map_path(const char *path, char *out, size_t n)
 //     Grassy ground grows grass back twice as often (FARMING)
 //   - Hot, Cold: the player heats up / cools down (TEMPERATURE: out cold after
 //     5 game hours); Volcanic, Glacial: the same in a quarter of an hour, and
-//     it never rains there
+//     it never rains there — on Glacial the rain spells come down as snow
+//     instead (snow_now() — WEATHER), and the cold bites twice as fast in it
 //  Dev link: "climate" (show) / "climate NAME" (pretend, until the next map loads).
 #define CLIMATE_NORMAL      0
 #define CLIMATE_HOT         1
@@ -9658,8 +9768,9 @@ static bool farm_tap_target(int *gx, int *gy)
     if (farm_at(*gx, *gy) >= 0) return true;
     if (farm_at(*gx, *gy + 1) >= 0) { (*gy)++; return true; }
     item_id_t held = inv_held_item();
+    if (ice_tap_target(*gx, *gy)) return true;   // a pickaxe on the ice (ICE HOLES)
     if (ITEM_TILLS(held)) return soil_tile_ok(*gx, *gy);
-    if (ITEM_WATERS(held)) return tile_on_map(*gx, *gy) && (s_soil[*gy][*gx] != SOIL_NONE || (tile_fishable(*gx, *gy) && can_max(held)));   // (water: fills it)
+    if (ITEM_WATERS(held)) return tile_on_map(*gx, *gy) && (s_soil[*gy][*gx] != SOIL_NONE || (tile_water_open(*gx, *gy) && can_max(held)));   // (water: fills it)
     return crop_of_seed(held) >= 0 && farm_tile_ok(*gx, *gy, false);
 }
 
@@ -9702,7 +9813,8 @@ static void can_fill(const char *from)
 // The watering can on tile (tx,ty) (farm_on_action()).
 static void soil_on_can(int tx, int ty)
 {
-    if (tile_fishable(tx, ty)) { can_fill("water"); return; }
+    if (tile_water_open(tx, ty)) { can_fill("water"); return; }
+    if (tile_fishable(tx, ty))   { message(2000, "The water's frozen - break a hole with a pickaxe"); return; }   // (ICE HOLES)
     if (!tile_on_map(tx, ty) || s_soil[ty][tx] == SOIL_NONE) { message(1500, "Only farmland needs water"); return; }
     if (s_soil[ty][tx] == SOIL_WATERED)                      { message(1500, "Already watered today"); return; }
     item_id_t held = inv_held_item();
@@ -10005,7 +10117,7 @@ static void mapsave_delete(void)
 
 // What a save has a line for: a breakable that isn't as placed, a stack on
 // the ground (not a photo item — those only last until reboot).
-static bool mapsave_brk_changed(const brk_inst_t *b)   { return b->level > 0 || b->hits_done > 0; }
+static bool mapsave_brk_changed(const brk_inst_t *b)   { return !b->spawn_tpl && !b->spawned && (b->level > 0 || b->hits_done > 0); }   // (SPAWNS: their own lines)
 static bool mapsave_ground_kept(const ground_item_t *g) { return g->count > 0 && g->item < item_count && !g->forage && !g->pack; }
 static bool mapsave_forage_kept(const ground_item_t *g) { return g->count > 0 && g->item < item_count && g->forage; }
 
@@ -10014,6 +10126,15 @@ static void tree_write(FILE *f, char *line, size_t n);       // ...their lines
 static bool tree_restore(const char *id, const int *v);      // ...one read back
 static bool tree_seed_from_map(void);                        // ...the map's own trees (<map>.trees), the first time
 static bool forage_tiles_any(void);                          // FORAGE section: the map has Forage tiles
+static bool ice_any(void);                                   // ICE HOLES: any holes in the ice here...
+static void ice_clear(void);                                 // ...another map: none
+static void ice_write(FILE *f, char *line, size_t n);        // ...their lines
+static bool ice_restore(int tx, int ty, int until);          // ...one read back
+static bool spawn_any(void);                                 // SPAWNS: rocks come up here every morning...
+static int  brk_own_count(void);                             // ...the map's own breakables (not the random rocks)
+static void spawn_write(FILE *f, char *line, size_t n);      // ...the save's lines
+static void spawn_pend(int32_t key, const int *v);           // ...a "rock" line read back
+static void spawn_after_load(void);                          // ...the save is read: the rocks out today
 static int32_t s_forage_day;                                 // ...the last morning forage came up on it
 
 // Writes the loaded map's save. Lines are formatted into a static buffer
@@ -10032,7 +10153,7 @@ static bool mapsave_write(void)
     for (int ty = 0; ty < TILE_ROWS; ty++)
         for (int tx = 0; tx < TILE_COLS; tx++) tilled += s_soil[ty][tx] != SOIL_NONE;
     if (broken == 0 && dropped == 0 && planted == 0 && tilled == 0 && props == 0 && animals == 0 && grassed == 0 && !grassy_any() &&
-        !tree_any() && !s_tree_seeded && !forage_tiles_any() && pack_ground() < 0) {   // back to as exported: no save, and the regrowth timer stops
+        !tree_any() && !s_tree_seeded && !forage_tiles_any() && pack_ground() < 0 && !ice_any() && !spawn_any()) {   // back to as exported: no save, and the regrowth timer stops
         // (a map with Grassy ground keeps one: without it, its wild grass would start full again — FARMING;
         // one whose own trees were put on it, the same: they'd come back — TREES; one with Forage tiles,
         // its "forage day": a new lot would come up on the next visit — FORAGE)
@@ -10049,7 +10170,7 @@ static bool mapsave_write(void)
           "# What the player changed on this map. The map file itself is never\n"
           "# written to - delete this file to get the map back as exported.\n", f);
     snprintf(line, sizeof(line), "map %s\nfingerprint %08lx\nbreakables %d\nsince day %ld\n",
-             s_map_path, (unsigned long)s_map_hash, s_brk.count, (long)s_save_since_day);
+             s_map_path, (unsigned long)s_map_hash, brk_own_count(), (long)s_save_since_day);
     fputs(line, f);
     int days = mapsave_regen_days();
     if (days > 0) snprintf(line, sizeof(line), "# grows back on day %ld (%d days after that)\n", (long)(s_save_since_day + days), days);
@@ -10115,6 +10236,8 @@ static bool mapsave_write(void)
         fputs(line, f);
     }
     ranch_write(f, line, sizeof(line));   // the grass and the animals (ANIMALS)
+    ice_write(f, line, sizeof(line));     // holes in the ice (ICE HOLES)
+    spawn_write(f, line, sizeof(line));   // today's random rocks (SPAWNS)
     bool ok = !ferror(f);
     if (fclose(f) != 0) ok = false;
     if (!ok) { unlink(tmp); return false; }
@@ -10192,11 +10315,12 @@ static bool mapsave_brk_is(const brk_inst_t *b, const int *v)
 static bool mapsave_restore_brk(const int *v)
 {
     brk_inst_t *b = (v[0] >= 0 && v[0] < s_brk.count) ? &s_brk.inst[v[0]] : NULL;
+    if (b && b->spawn_tpl) return true;   // a sample for the random rocks now (SPAWNS): it stays hidden
     if (!b || !mapsave_brk_is(b, v)) {   // the map was re-exported: look for it by footprint
         b = NULL;
         for (int n = 0; n < s_brk.count && !b; n++) {
             brk_inst_t *c = &s_brk.inst[n];
-            if (c->level == 0 && c->hits_done == 0 && mapsave_brk_is(c, v)) b = c;
+            if (c->level == 0 && c->hits_done == 0 && !c->spawn_tpl && mapsave_brk_is(c, v)) b = c;
         }
     }
     if (!b) {
@@ -10263,19 +10387,22 @@ static void mapsave_load(void)
     s_save_since_day = -1;
     s_regen_seen_min = -1;
     s_forage_day     = -1;             // no "forage day" line (or no save): the first visit (FORAGE)
-    if (!mapsave_path(s_map_path, ".sav", path, sizeof(path))) return;
+    ice_clear();                       // no holes in this map's ice yet (ICE HOLES)
+    if (!mapsave_path(s_map_path, ".sav", path, sizeof(path))) { spawn_after_load(); return; }
     FILE *f = fopen(path, "r");
     if (!f) {                          // a power cut between removing the old save and renaming the new one?
         mapsave_path(s_map_path, ".tmp", path, sizeof(path));
         if (!(f = fopen(path, "r"))) {
             bool trees = tree_seed_from_map();             // never been here: the map's own trees go on it (TREES)
             if (grass_seed_wild() || trees) mapsave_mark_dirty();   // ...and its Grassy ground starts full of grass (FARMING)
+            spawn_after_load();                            // ...and its random rocks come up (SPAWNS)
             return;
         }
     }
     if (!fgets(line, sizeof(line), f) || strncmp(line, "CAPTUREIT SAVE 1", 16) != 0) {
         ESP_LOGW(TAG, "save: %s isn't a CaptureIt save (version 1) — ignored", path);
         fclose(f);
+        spawn_after_load();
         return;
     }
 
@@ -10299,6 +10426,7 @@ static void mapsave_load(void)
     int  broken = 0, dropped = 0, foraged = 0, tilled = 0, planted = 0, props = 0, animals = 0, grassed = 0, treed = 0, skipped = 0, saved_count = -1;
     int  farm_day = -1;                // no "farm day" line (an older save): the crops count as up to date
     int  morning_day = -1;             // no "morning day" line (an older save): the farm day's morning counts as played
+    int  rocks_day = -1;               // the morning the save's random rocks came up for (SPAWNS)
     bool other_export = false;
     while (fgets(line, sizeof(line), f)) {
         int nw = mapsave_words(line, word), v[10];
@@ -10344,6 +10472,12 @@ static void mapsave_load(void)
             s_tree_seeded = true;
         } else if (mapsave_match(word, nw, "tree * at tile # # stage # age # moss # shaken # fruit # # hits #", v, &any)) {   // kept by regrowth
             if (tree_restore(any, v)) treed++; else skipped++;
+        } else if (mapsave_match(word, nw, "icehole at tile # # until #", v, &any)) {   // a hole in the ice (ICE HOLES) — kept by regrowth
+            if (!ice_restore(v[0], v[1], v[2])) skipped++;
+        } else if (mapsave_match(word, nw, "rocks day #", v, &any)) {   // (SPAWNS) — kept by regrowth: they're the map's own coming and going
+            rocks_day = v[0];
+        } else if (mapsave_match(word, nw, "rock # at tile # # level # hits #", v, &any)) {
+            spawn_pend(rocks_day, v);
         } else if (mapsave_match(word, nw, "grass at tile # # tufts #", v, &any)) {   // the player's too (ANIMALS)
             if (grass_restore(v[0], v[1], v[2])) grassed++; else skipped++;
         } else if (mapsave_match(word, nw, "animal * at tile # # fed # days # ready # pending #", v, &any) ||
@@ -10365,6 +10499,7 @@ static void mapsave_load(void)
     }
     fclose(f);
     if (!s_tree_seeded && tree_seed_from_map()) mapsave_mark_dirty();   // a save from before the map had trees of its own (TREES)
+    spawn_after_load();                // today's random rocks: the save's, or a new lot (SPAWNS)
 
     // The days that passed while the player was away: crops grow on the
     // ones it rained, the farmland dries (FARMING). Baked by mapsave_show().
@@ -10382,7 +10517,7 @@ static void mapsave_load(void)
     // with only them.
     if (regrown) {
         mapsave_delete();
-        if (planted || tilled || props || animals || grassed || treed || s_tree_seeded || foraged || forage_tiles_any() || pack_ground() >= 0) mapsave_mark_dirty();
+        if (planted || tilled || props || animals || grassed || treed || s_tree_seeded || foraged || forage_tiles_any() || pack_ground() >= 0 || ice_any() || spawn_any()) mapsave_mark_dirty();
     } else if (since >= 0 && since <= today) {
         s_save_since_day = since;
     } else if (broken || dropped) {
@@ -10403,6 +10538,7 @@ static void mapsave_show(void)
 {
     if (s_night_shown == 0) brk_rebake_all();   // at night, night_copy_arena() already did
     if (s_night_shown == 0) soil_bake_all();    // (that too) — before what lies on it
+    if (s_night_shown == 0) ice_bake_all();     // (and the holes in the ice — ICE HOLES)
     if (s_night_shown == 0) grass_bake_all();   // (and that) — the grass, the same
     for (int i = 0; i < GROUND_MAX; i++)
         if (s_ground[i].count > 0 && !s_ground[i].baked) ground_bake(i);
@@ -10465,8 +10601,8 @@ static bool mapsave_regrow_now(void)
     mapsave_delete();
     s_save_dirty     = false;
     s_save_since_day = -1;
-    if (farm_covers_any() || soil_any() || place_props_any() || ranch_any() || tree_any() || s_tree_seeded || forage_tiles_any() || pack_ground() >= 0)
-        mapsave_mark_dirty();   // farmland, crops, props, animals, grass, trees and forage stay: a new save with just them
+    if (farm_covers_any() || soil_any() || place_props_any() || ranch_any() || tree_any() || s_tree_seeded || forage_tiles_any() || pack_ground() >= 0 || ice_any() || spawn_any())
+        mapsave_mark_dirty();   // farmland, crops, props, animals, grass, trees, forage, ice holes and random rocks stay: a new save with just them
     return true;
 }
 
@@ -10547,9 +10683,13 @@ static void mapsave_regen_tick(void)
 #define TREE_PX           (TREE_W * TREE_H)
 #define TREE_MASK         ((TREE_PX + 7) / 8)
 #define TREE_WINTER       3        // clock_season(): nothing falls when a tree is shaken
+#define TREE_INDOOR_SEASON 1       // inside a building (a greenhouse) a tree always looks as in summer, and fruits all year
 #define TREE_LEAVES_MAX   48       // falling leaves at once
 #define TREE_HIT_LEAVES   3        // leaves a hit knocks off
-#define TREE_SHAKE_LEAVES 14       // ...and the day's shake
+#define TREE_SHAKE_LEAVES 6        // ...and the day's shake (over TREE_LEAF_SPREAD_MS)
+#define TREE_LEAF_SPREAD_MS 1000   // a shake's leaves come off one after another over this long (a hit's: a quarter of it)
+#define TREE_SHAKE_MS     520      // a shaken tree sways this long...
+#define TREE_SHAKE_PX     3        // ...its top this far either side at first, the trunk still, dying down
 #define TREE_CLOUD_LEAVES 30       // ...and the canopy hitting the ground
 #define TREE_FALL_MS      900      // the canopy tipping over to lying on the ground
 #define TREE_LEAF_VMAX    30.0f    // px/s a leaf drifts down at, at most
@@ -10610,6 +10750,8 @@ static struct { bool baked; const uint16_t *shown; uint8_t fruit; rect_t rect; }
 static tree_leaf_t s_leaf[TREE_LEAVES_MAX];
 static tree_fall_t s_tfall;
 static uint32_t    s_treefx_ms;
+static struct { bool on; int8_t i; uint32_t t0; rect_t r; } s_tshake;   // a tree swaying (shaken), drawn over its baked look
+EXT_RAM_BSS_ATTR static uint16_t s_tshake_px[TREE_PX];                 // ...its look (tree_compose()), laid out as s_tshake.r
 
 static void npc_dirty_add(rect_t r);   // MARKET: repainted at the end of the frame
 
@@ -10641,11 +10783,14 @@ static bool tree_has_moss(const tree_def_t *d)
     return false;
 }
 
+// The season trees on the loaded map are in: clock_season(), or inside a building (a greenhouse) TREE_INDOOR_SEASON.
+static int tree_season(void) { return s_map_inst ? TREE_INDOOR_SEASON : clock_season(); }
+
 // What tree t would show at `stage`, this season.
 static tree_look_t tree_look_at(const tree_t *t, int stage)
 {
     const tree_def_t *d = s_trees[t->def];
-    int s = clock_season();
+    int s = tree_season();
     tree_look_t l = { 0 };
     if (stage < TREE_STAGES) {
         for (int k = d->fruit ? 0 : s; k >= 0 && !l.main; k--)   // a fruit tree's growing stages aren't seasonal
@@ -10917,7 +11062,7 @@ static bool tree_room(int i, int stage)
 static bool tree_day(int32_t day)
 {
     bool changed = false;
-    int  next = season_of_day(day + 1);   // the morning it wakes up to
+    int  next = s_map_inst ? TREE_INDOOR_SEASON : season_of_day(day + 1);   // the morning it wakes up to (inside: always summer)
     for (int i = 0; i < TREE_MAX; i++) {
         tree_t *t = &s_tree[i];
         if (!t->used) continue;
@@ -10937,7 +11082,7 @@ static bool tree_day(int32_t day)
             }
             if (!d->fruit) continue;
             int most = d->fruit_max < 1 ? 1 : d->fruit_max > TREE_FRUIT_MAX ? TREE_FRUIT_MAX : d->fruit_max;
-            if ((d->fruit_seasons >> next) & 1) {
+            if (((d->fruit_seasons >> next) & 1) || s_map_inst) {   // (a greenhouse: all year)
                 if (++t->fruit_age >= (d->fruit_days ? d->fruit_days : 1) && t->fruit < most) { t->fruit++; t->fruit_age = 0; }
                 changed = true;
             } else if (t->fruit || t->fruit_age) {   // out of season: it drops them
@@ -10967,7 +11112,7 @@ static int tree_give(item_id_t item, int n, bool here)
 // ---- falling leaves, and a felled tree coming down ----
 // n leaves (frames of the season's leaf art) somewhere in `area`, falling to y
 // `ground`; burst: thrown out first (where a felled canopy hits the ground).
-static void tree_leaves(const tree_art_t *leaf, rect_t area, int n, int ground, bool burst)
+static void tree_leaves(const tree_art_t *leaf, rect_t area, int n, int ground, bool burst, uint16_t spread_ms)
 {
     if (!leaf || !leaf->px || leaf->w < TREE_LEAF_PX || leaf->h < TREE_LEAF_PX) return;
     int frames = leaf->w / TREE_LEAF_PX;
@@ -10981,7 +11126,7 @@ static void tree_leaves(const tree_art_t *leaf, rect_t area, int n, int ground, 
                             .vx = (float)(burst ? (int)(esp_random() % 61) - 30 : (int)(esp_random() % 11) - 5),
                             .vy = burst ? -(float)(15 + esp_random() % 35) : (float)(5 + esp_random() % 15),
                             .ground = (float)(ground + (int)(esp_random() % 14) - 6), .ph = (float)(esp_random() % 628) / 100.0f,
-                            .born = now, .life = (uint16_t)(1500 + esp_random() % 1500) };
+                            .born = now + (spread_ms ? esp_random() % spread_ms : 0), .life = (uint16_t)(1500 + esp_random() % 1500) };   // (spread: one after another)
         n--;
     }
 }
@@ -11013,7 +11158,7 @@ static void tree_fall_land(bool here)
     if (here && f.art) {
         int w = f.art->w, h = f.art->h;
         rect_t lie = { f.dir > 0 ? f.px : f.px - h, f.py - w / 2, h, w / 2 + TILE_SIZE / 2 };   // where it lies, its upper half
-        tree_leaves(f.leaf, lie, TREE_CLOUD_LEAVES, f.ground, true);
+        tree_leaves(f.leaf, lie, TREE_CLOUD_LEAVES, f.ground, true, 0);
         rect_t d = rect_clip_screen(f.drawn);
         if (d.w > 0 && d.h > 0) npc_dirty_add(d);
     }
@@ -11117,9 +11262,14 @@ static void tree_fx_tick(void)
         u = rect_clip_screen(u);
         if (u.w > 0 && u.h > 0) npc_dirty_add(u);
     }
+    if (s_tshake.on) {   // a shaken tree swaying: repainted every frame until it's still again
+        rect_t r = rect_clip_screen((rect_t){ s_tshake.r.x - TREE_SHAKE_PX, s_tshake.r.y, s_tshake.r.w + 2 * TREE_SHAKE_PX, s_tshake.r.h });
+        if (now - s_tshake.t0 >= TREE_SHAKE_MS) s_tshake.on = false;
+        if (r.w > 0 && r.h > 0) npc_dirty_add(r);
+    }
     for (int i = 0; i < TREE_LEAVES_MAX; i++) {
         tree_leaf_t *l = &s_leaf[i];
-        if (!l->used) continue;
+        if (!l->used || (int32_t)(now - l->born) < 0) continue;   // (one still waiting to come off)
         uint32_t age = now - l->born;
         l->vy += TREE_LEAF_GRAV * dt;
         if (l->vy > TREE_LEAF_VMAX) l->vy = TREE_LEAF_VMAX;
@@ -11145,6 +11295,26 @@ static void tree_fx_tick(void)
 // The felled canopy and the falling leaves inside (x,y,w,h), over what's there (farmfx_paint_rect()).
 static void tree_fx_paint_rect(int x, int y, int w, int h)
 {
+    if (s_tshake.on && s_tree_under[s_tshake.i]) {   // a shaken tree: each row shifted, more the higher it is
+        const tree_under_t *u = s_tree_under[s_tshake.i];
+        rect_t   r = s_tshake.r;
+        uint32_t t = tree_now_ms() - s_tshake.t0;
+        float    amp = TREE_SHAKE_PX * sinf((float)t * 6.2831853f / 170.0f) * (1.0f - (float)t / TREE_SHAKE_MS);
+        int      still = r.h > 2 * TILE_SIZE ? TILE_SIZE : 0;   // the bottom tile (the trunk's foot) doesn't move
+        int y0 = anim_imax(anim_imax(r.y, y), 0), y1 = anim_imin(anim_imin(r.y + r.h, y + h), s_fb_h);
+        int x0 = anim_imax(anim_imax(r.x - TREE_SHAKE_PX, x), 0), x1 = anim_imin(anim_imin(r.x + r.w + TREE_SHAKE_PX, x + w), s_fb_w);
+        for (int yy = y0; yy < y1; yy++) {
+            int   row = yy - r.y;
+            float f   = r.h - still > 0 ? (float)(r.h - still - row) / (float)(r.h - still) : 0.0f;
+            int   dx  = f > 0 ? (int)lroundf(amp * f) : 0;
+            for (int xx = x0; xx < x1; xx++) {
+                int col = xx - r.x, sc = col - dx;
+                uint16_t v = sc >= 0 && sc < r.w ? s_tshake_px[row * r.w + sc] : FB_TRANSPARENT_COLOR;
+                if (v != FB_TRANSPARENT_COLOR) s_fb[yy * s_fb_w + xx] = s_night_shown ? night_px(&s_night_lut, v) : v;
+                else if (col >= 0 && col < r.w && s_tshake_px[row * r.w + col] != FB_TRANSPARENT_COLOR) s_fb[yy * s_fb_w + xx] = u->px[row * r.w + col];   // where it was: what's under it
+            }
+        }
+    }
     if (s_tfall.on && s_tfall.art && s_tfall.drawn.w) {
         rect_t r = s_tfall.drawn;
         const tree_art_t *a = s_tfall.art;
@@ -11187,6 +11357,17 @@ static void tree_fx_paint_rect(int x, int y, int w, int h)
     }
 }
 
+// Tree i is shaken: it sways a moment (s_tshake, drawn by tree_fx_paint_rect()).
+static void tree_shake_start(int i)
+{
+    const tree_t *t = &s_tree[i];
+    if (!t->baked || !s_tree_under[i] || t->rect.w * t->rect.h > TREE_PX) return;
+    tree_look_t l = tree_look(t);
+    tree_compose(t, &l, t->rect);
+    memcpy(s_tshake_px, s_tree_comp, (size_t)t->rect.w * t->rect.h * sizeof(uint16_t));
+    s_tshake = (typeof(s_tshake)){ .on = true, .i = (int8_t)i, .t0 = tree_now_ms(), .r = t->rect };
+}
+
 // ---- the player at a tree ----
 // A few leaves off tree i (n of them; none for a stump), and its hit sound.
 static void tree_hit_fx(int i, int n)
@@ -11198,7 +11379,7 @@ static void tree_hit_fx(int i, int n)
     tree_look_t l = tree_look(t);
     rect_t r = tree_rect_of(t, &l);
     if (t->stage == TREE_GROWN) r.h = (r.h - tree_log_h(&l)) * 2 / 3;   // out of the canopy's top two thirds
-    tree_leaves(tree_art_in(d->leaf, clock_season()), r, n, (t->ty + 1) * TILE_SIZE, false);
+    tree_leaves(tree_art_in(d->leaf, tree_season()), r, n, (t->ty + 1) * TILE_SIZE, false, n > TREE_HIT_LEAVES ? TREE_LEAF_SPREAD_MS : TREE_LEAF_SPREAD_MS / 4);
 }
 
 static void tree_say_growing(const tree_t *t)
@@ -11218,7 +11399,7 @@ static void tree_fell(int i)
     if (s_tfall.on) tree_fall_land(true);   // one at a time: the last one lands now
     int cx = t->tx * TILE_SIZE + TILE_SIZE / 2, pcx = s_player_x + PLAYER_W / 2;
     int8_t dir = s_player_facing == DIR_RIGHT ? 1 : s_player_facing == DIR_LEFT ? -1 : pcx < cx ? 1 : pcx > cx ? -1 : (esp_random() & 1) ? 1 : -1;
-    s_tfall = (tree_fall_t){ .on = true, .art = l.main, .leaf = tree_art_in(d->leaf, clock_season()),
+    s_tfall = (tree_fall_t){ .on = true, .art = l.main, .leaf = tree_art_in(d->leaf, tree_season()),
                              .px = cx, .py = (t->ty + 1) * TILE_SIZE - tree_log_h(&l), .ground = (t->ty + 1) * TILE_SIZE, .dir = dir,
                              .t0 = tree_now_ms(), .wood = d->wood ? item_find(d->wood) : ITEM_NONE, .seed = tree_seed_item(t->def),
                              .wood_n = (uint8_t)tree_roll(d->wood_min, d->wood_max), .seed_n = (uint8_t)(d->fruit ? 0 : tree_roll(0, d->seed_max)),   // (a fruit tree never drops its sapling)
@@ -11265,12 +11446,13 @@ static void tree_shake(int i)
     }
     t->shaken = today;
     mapsave_mark_dirty();
-    if (clock_season() == TREE_WINTER) {
+    if (tree_season() == TREE_WINTER) {
         if (got_fruit) message(2500, "Shook down %d %s", got_fruit, item_name(fruit));
         else           message(2000, "Nothing falls from the %s in winter", tree_name(t));
         return;
     }
     tree_hit_fx(i, TREE_SHAKE_LEAVES);
+    tree_shake_start(i);   // (it sways)
     if (!d->fruit) got_seeds = tree_give(seed, tree_roll(0, d->shake_seed_max), true);   // (a fruit tree never drops its sapling)
     if (got_fruit && got_seeds) message(2500, "Shook down %d %s and %d %s", got_fruit, item_name(fruit), got_seeds, item_name(seed));
     else if (got_fruit)         message(2500, "Shook down %d %s", got_fruit, item_name(fruit));
@@ -11630,6 +11812,373 @@ static void forage_dev_cmd(const char *args)
 #endif
 
 // ============================================================
+//  SPAWNS — rocks that come up again every morning in random places (the
+//  Map Editor's "Random rocks…", exported as <map>.spawn next to the .map).
+//  The rocks ticked there and put on the map are only samples: they're
+//  never shown where they were put (spawn_tpl). Each 6:00 — or the first
+//  visit after it — the rocks left from the day before go, and `count` new
+//  ones come up on random free tiles, each a copy of a sample picked at
+//  random (put down more of the common ones). A copy is a breakable like
+//  the map's own (spawned: BREAKABLE RUNTIME hits it, pays its drops, plays
+//  its sounds, keeps it solid). Free = ground of one of the "on" tile types
+//  (none listed: any ground), with nothing on it: the editor's covered
+//  cells, crops, farmland, grass, trees, props, dropped stacks, other
+//  breakables, animations — not water, nothing solid, not by a teleporter
+//  or the player (spawn_tile_ok()).
+//  File:   count 15
+//          on cave_floor          (any number of these)
+//          rock 32 48             a sample: its footprint's top-left, px (as exported)
+//  A copy stands with its footprint's bottom-left on the tile's. Its gone
+//  look is the map's pixels there (gone_px, kept when it comes up and again
+//  from every night stage's fresh pixels — brk_rebake_all()). Only maps
+//  from MAP10 on (composed breakables). The map's save: "rocks day D" (the
+//  morning they came up for) and "rock N at tile X Y level L hits H" for
+//  each one still standing (N = its sample's breakable number) — regrowth
+//  leaves them (they come and go by themselves anyway).
+//  A mining map (the editor's "Mining map…") also says "mining 1",
+//  "monsters N" and "monster <id> W" lines: MONSTERS + COMBAT's lot.
+//  Dev link: "rocks" (list), "rocks new" (a new lot now).
+// ============================================================
+#include "monsters.h"
+#define SPAWN_MAX     32   // rocks out at once
+#define SPAWN_TPL_MAX 32   // samples
+#define SPAWN_ON_MAX  8    // "on" ground types
+#define SPAWN_TRIES   60   // random tiles tried for each rock
+
+typedef struct { int16_t tpl; int8_t tx, ty; uint8_t level, hits; } spawn_pend_t;
+
+static struct {
+    int          count;                              // rocks each morning; 0 = no spawner on this map
+    int          first;                              // s_brk index of the first rock out (= the map's own breakable count)
+    int16_t      tpl[SPAWN_TPL_MAX];                 // the samples, by s_brk index
+    int          tpl_n;
+    char         on[SPAWN_ON_MAX][TILE_NAME_MAX + 1];
+    int          on_n;
+    int32_t      key;                                // the morning the rocks out now came up for; -1 = none yet
+    int          seen_min;                           // spawn_tick(): the game minute last looked at
+    bool         check_player;                       // the first tick after a load: a rock where the player arrived goes
+    bool         mining;                             // a mining map ("mining 1"): monsters, the health bar (MONSTERS + COMBAT)
+    int          mon_n;                              // monsters each visit ("monsters N")...
+    uint8_t      mon_pool[16], mon_w[16];            // ...of these (s_monsters indices) by weight ("monster <id> W")
+    int          mon_pool_n;
+    bool         mon_due;                            // ...the lot comes up on the next game frame (monster_tick())
+    spawn_pend_t pend[SPAWN_MAX];                    // the save's rocks, until spawn_after_load()
+    int          pend_n;
+    int32_t      pend_key;                           // ...and its "rocks day"
+} s_spawn = { .key = -1, .seen_min = -1, .pend_key = -1 };
+
+static int  brk_own_count(void) { return s_spawn.count ? s_spawn.first : s_brk.count; }   // the map's own breakables
+static bool spawn_any(void)     { return s_spawn.count > 0; }
+
+// The morning whose rocks should be out now (6:00 starts a new one).
+static int32_t spawn_key_now(void)
+{
+    int32_t day = (int32_t)clock_day();
+    return clock_minute_of_day() >= FARM_MORNING_MIN ? day : day - 1;
+}
+
+// load_map(), its breakables installed, before its save: <map>.spawn, and the samples hidden.
+static void spawn_map_loaded(void)
+{
+    static char path[MAP_PATH_MAX];
+    char line[64];
+    memset(&s_spawn, 0, sizeof(s_spawn));
+    s_spawn.key = s_spawn.pend_key = -1;
+    s_spawn.seen_min = -1;
+    s_spawn.first = s_brk.count;
+    if (!map_path_for(current_map_name(), path, sizeof(path))) return;
+    char *dot = strrchr(path, '.');
+    if (!dot || (size_t)(dot - path) + sizeof(".spawn") > sizeof(path)) return;
+    strcpy(dot, ".spawn");
+    FILE *f = fopen(path, "r");
+    if (!f) return;
+    int count = 0;
+    while (fgets(line, sizeof(line), f)) {
+        char *w[4], *save = NULL;
+        int   nw = 0;
+        for (char *t = strtok_r(line, " \t\r\n", &save); t && nw < 4; t = strtok_r(NULL, " \t\r\n", &save)) w[nw++] = t;
+        if (nw == 0 || w[0][0] == '#') continue;
+        if (nw == 2 && strcmp(w[0], "count") == 0) {
+            count = atoi(w[1]);
+        } else if (nw == 2 && strcmp(w[0], "mining") == 0) {   // (MONSTERS + COMBAT)
+            s_spawn.mining = atoi(w[1]) > 0;
+        } else if (nw == 2 && strcmp(w[0], "monsters") == 0) {
+            s_spawn.mon_n = atoi(w[1]) < 0 ? 0 : atoi(w[1]) > 16 ? 16 : atoi(w[1]);
+        } else if (nw >= 2 && strcmp(w[0], "monster") == 0) {
+            int k;
+            for (k = 0; k < monster_count && strcmp(s_monsters[k]->id, w[1]) != 0; k++) {}
+            if (k == monster_count) ESP_LOGW(TAG, "spawn: no monster \"%s\" in this build", w[1]);
+            else if (s_spawn.mon_pool_n < 16) { s_spawn.mon_pool[s_spawn.mon_pool_n] = (uint8_t)k; s_spawn.mon_w[s_spawn.mon_pool_n++] = (uint8_t)(nw > 2 && atoi(w[2]) > 0 ? (atoi(w[2]) > 255 ? 255 : atoi(w[2])) : 1); }
+        } else if (nw == 2 && strcmp(w[0], "on") == 0) {
+            if (s_spawn.on_n < SPAWN_ON_MAX) snprintf(s_spawn.on[s_spawn.on_n++], TILE_NAME_MAX + 1, "%s", w[1]);
+        } else if (nw == 3 && strcmp(w[0], "rock") == 0) {
+            int x = atoi(w[1]), y = atoi(w[2]), n;
+            for (n = 0; n < s_brk.count && !(s_brk.inst[n].x == x && s_brk.inst[n].y == y); n++) {}
+            if (n == s_brk.count) ESP_LOGW(TAG, "spawn: no breakable at %d,%d on %s (export the map again?)", x, y, current_map_name());
+            else if (s_spawn.tpl_n < SPAWN_TPL_MAX && !s_brk.inst[n].spawn_tpl) { s_brk.inst[n].spawn_tpl = true; s_spawn.tpl[s_spawn.tpl_n++] = (int16_t)n; }
+        }
+    }
+    fclose(f);
+    s_spawn.mon_due = s_spawn.mining && s_spawn.mon_n > 0 && s_spawn.mon_pool_n > 0;   // (MONSTERS + COMBAT)
+    if (s_spawn.tpl_n && !s_brk.composed) {   // (a MAP6-9 breakable's art covers its whole rect: it can't go elsewhere)
+        ESP_LOGW(TAG, "spawn: %s is from before MAP10 — export it again for its random rocks", current_map_name());
+        for (int k = 0; k < s_spawn.tpl_n; k++) s_brk.inst[s_spawn.tpl[k]].spawn_tpl = false;
+        s_spawn.tpl_n = 0;
+        return;
+    }
+    for (int k = 0; k < s_spawn.tpl_n; k++) {   // the samples: never shown where they were put
+        brk_inst_t *b = &s_brk.inst[s_spawn.tpl[k]];
+        b->level     = b->level_count;
+        b->hits_done = 0;
+        brk_restore_masks(b);                   // (the pixels follow in mapsave_show())
+    }
+    if (count > SPAWN_MAX) count = SPAWN_MAX;
+    if (count <= 0 || s_spawn.tpl_n == 0) return;
+    brk_inst_t *grown = heap_caps_realloc(s_brk.inst, (size_t)(s_brk.count + count) * sizeof(brk_inst_t), MALLOC_CAP_SPIRAM);
+    if (!grown) { ESP_LOGW(TAG, "spawn: no PSRAM for %d random rocks", count); return; }
+    memset(&grown[s_brk.count], 0, (size_t)count * sizeof(brk_inst_t));
+    s_brk.inst    = grown;
+    s_spawn.count = count;
+    ESP_LOGI(TAG, "spawn: %d random rocks a morning on %s, from %d samples, on %d ground types",
+             count, current_map_name(), s_spawn.tpl_n, s_spawn.on_n);
+}
+
+// Can a random rock cover tile (tx,ty)? base: its bottom row (that ground must be an "on" one).
+// strict: and keep away from the player and the teleporters (a rock coming up; not one the save had).
+static bool spawn_tile_ok(int tx, int ty, bool base, bool strict)
+{
+    if (!tile_on_map(tx, ty) || tile_covered(tx, ty) || tile_fishable(tx, ty)) return false;
+    uint8_t t = read_map_tile(tx, ty);
+    if (t == TILE_NONE) return false;
+    if (base && s_spawn.on_n) {
+        bool ok = false;
+        for (int k = 0; k < s_spawn.on_n && !ok; k++) ok = strcmp(s_tiles->types[t].name, s_spawn.on[k]) == 0;
+        if (!ok) return false;
+    }
+    int x = tx * TILE_SIZE, y = ty * TILE_SIZE;
+    if (s_soil[ty][tx] != SOIL_NONE || s_grass[ty][tx] || farm_covers_tile(tx, ty) || ground_at(tx, ty) >= 0) return false;
+    if (tree_covers_rect(x, y, TILE_SIZE, TILE_SIZE) || place_covers_rect(x, y, TILE_SIZE, TILE_SIZE)) return false;
+    for (int py = y; py < y + TILE_SIZE; py++)
+        for (int px = x; px < x + TILE_SIZE; px++)
+            if (map_pixel_blocked(px, py)) return false;
+    for (int n = 0; n < s_brk.count; n++) {   // every breakable's footprint, a sample's (its gone look is baked there) too
+        const brk_inst_t *b = &s_brk.inst[n];
+        if (anim_rects_overlap(x, y, TILE_SIZE, TILE_SIZE, b->x, b->y, b->w, b->h)) return false;
+    }
+    for (int n = 0; n < s_anim.inst_count; n++) {
+        const anim_instance_t *a = &s_anim.inst[n];
+        if (anim_rects_overlap(x, y, TILE_SIZE, TILE_SIZE, a->x, a->y, a->w, a->h)) return false;
+    }
+    if (anim_rects_overlap(x, y, TILE_SIZE, TILE_SIZE, CLOCK_X, CLOCK_Y, CLOCK_W, CLOCK_H_MAX)) return false;
+    if (anim_rects_overlap(x, y, TILE_SIZE, TILE_SIZE, TOUCH_BTN_X, TOUCH_BTN_Y, TOUCH_BTN_SIZE, TOUCH_BTN_SIZE)) return false;
+    if (!strict) return true;
+    for (int i = 0; i < s_tp.count; i++) {   // a tile or less from a teleporter, or where one lands
+        const tp_t *p = &s_tp.items[i];
+        if (tx >= p->tx - 1 && tx <= p->tx + p->tw && ty >= p->ty - 1 && ty <= p->ty + p->th) return false;
+        if (!p->map[0] && abs(tx - p->dest_tx) <= 1 && abs(ty - p->dest_ty) <= 1) return false;
+    }
+    int fy = s_player_y + PLAYER_H - PLAYER_FEET_H;
+    return !anim_rects_overlap(x - TILE_SIZE, y - TILE_SIZE, 3 * TILE_SIZE, 3 * TILE_SIZE, s_player_x, fy, PLAYER_W, PLAYER_FEET_H);
+}
+
+// Sample tpl's footprint with its bottom-left on tile (tx,ty): is every tile it covers free?
+static bool spawn_fits(int tpl, int tx, int ty, bool strict)
+{
+    const brk_inst_t *t = &s_brk.inst[tpl];
+    int x = tx * TILE_SIZE, y = (ty + 1) * TILE_SIZE - t->h;
+    if (x < 0 || y < 0 || x + t->w > s_map_w || y + t->h > s_map_h) return false;
+    for (int r = y / TILE_SIZE; r <= ty; r++)
+        for (int c = tx; c <= (x + t->w - 1) / TILE_SIZE; c++)
+            if (!spawn_tile_ok(c, r, r == ty, strict)) return false;
+    return true;
+}
+
+// A copy of sample tpl on tile (tx,ty), on `level` with `hits` landed: its state and collision now,
+// its pixels by brk_compose_show() / brk_rebake_all(). false = no room / no PSRAM.
+static bool spawn_add(int tpl, int tx, int ty, int level, int hits)
+{
+    if (s_brk.count >= s_spawn.first + s_spawn.count) return false;
+    const brk_inst_t *t = &s_brk.inst[tpl];
+    size_t px = (size_t)t->w * t->h, mb = (px + 7) / 8;
+    brk_inst_t *b = &s_brk.inst[s_brk.count];
+    memset(b, 0, sizeof(*b));
+    b->spawned    = true;
+    b->spawn_src  = (int16_t)tpl;
+    b->levels     = heap_caps_malloc((size_t)t->level_count * sizeof(brk_level_t), MALLOC_CAP_SPIRAM);
+    b->gone_px    = heap_caps_malloc(px * sizeof(uint16_t), MALLOC_CAP_SPIRAM);
+    b->gone_solid = heap_caps_calloc(mb, 1, MALLOC_CAP_SPIRAM);
+    b->gone_layer = heap_caps_calloc(mb, 1, MALLOC_CAP_SPIRAM);
+    if (!b->levels || !b->gone_px || !b->gone_solid || !b->gone_layer) { brk_inst_free(b); return false; }
+    memcpy(b->levels, t->levels, (size_t)t->level_count * sizeof(brk_level_t));   // (their masks and art stay the sample's)
+    b->x = (int16_t)(tx * TILE_SIZE);
+    b->y = (int16_t)((ty + 1) * TILE_SIZE - t->h);
+    b->w = t->w;
+    b->h = t->h;
+    b->level_count = t->level_count;
+    b->gone_off    = t->gone_off;
+    b->level       = (uint8_t)(level < 0 ? 0 : level > t->level_count ? t->level_count : level);
+    b->hits_done   = (uint8_t)(b->level < b->level_count && hits > 0 ? (hits < b->levels[b->level].hits ? hits : b->levels[b->level].hits - 1) : 0);
+    brk_keep_gone_px(b);
+    for (int row = 0; row < b->h; row++)
+        for (int col = 0; col < b->w; col++) {
+            int mi = (b->y + row) * s_map_w + b->x + col, si = row * b->w + col;
+            bit_put(b->gone_solid, si, bit_get(s_map_hitbox, mi));
+            bit_put(b->gone_layer, si, bit_get(s_map_fgmask, mi));
+        }
+    s_brk.count++;
+    brk_compose(b, false);   // its collision
+    return true;
+}
+
+// The rocks out now all go. show: and their tiles are put back on screen (else they're
+// about to be baked again anyway).
+static void spawn_clear(bool show)
+{
+    for (int n = s_brk.count - 1; n >= s_spawn.first; n--) {
+        brk_inst_t *b = &s_brk.inst[n];
+        if (b->level < b->level_count) {
+            b->level     = b->level_count;
+            b->hits_done = 0;
+            if (show) brk_compose_show(b); else brk_compose(b, true);
+        }
+        brk_inst_free(b);
+    }
+    if (s_brk.count > s_spawn.first) s_brk.count = s_spawn.first;
+}
+
+// A new lot: up to `count` rocks on random free tiles. Returns how many came up.
+static int spawn_roll(void)
+{
+    EXT_RAM_BSS_ATTR static int16_t cand[TILE_ROWS * TILE_COLS];
+    int nc = 0, made = 0;
+    for (int ty = 0; ty < TILE_ROWS; ty++)
+        for (int tx = 0; tx < TILE_COLS; tx++)
+            if (spawn_tile_ok(tx, ty, true, true)) cand[nc++] = (int16_t)(ty * TILE_COLS + tx);
+    for (int k = 0; k < s_spawn.count && nc > 0; k++) {
+        for (int tries = 0; tries < SPAWN_TRIES && nc > 0; tries++) {
+            int ci = (int)(esp_random() % (uint32_t)nc), tx = cand[ci] % TILE_COLS, ty = cand[ci] / TILE_COLS;
+            int tpl = s_spawn.tpl[esp_random() % (uint32_t)s_spawn.tpl_n];
+            if (!spawn_fits(tpl, tx, ty, true)) continue;
+            cand[ci] = cand[--nc];
+            if (spawn_add(tpl, tx, ty, 0, 0)) made++;
+            break;
+        }
+    }
+    return made;
+}
+
+// The save changed by itself (no regrowth timer — MAP SAVES): written soon.
+static void spawn_save_soon(void)
+{
+    s_save_dirty    = true;
+    s_save_dirty_ms = (uint32_t)(esp_timer_get_time() / 1000);
+}
+
+// A "rock" line from the map's save (key = its "rocks day", written before it).
+static void spawn_pend(int32_t key, const int *v)
+{
+    if (s_spawn.pend_n >= SPAWN_MAX) return;
+    s_spawn.pend_key = key;
+    s_spawn.pend[s_spawn.pend_n++] = (spawn_pend_t){ .tpl = (int16_t)v[0], .tx = (int8_t)v[1], .ty = (int8_t)v[2],
+                                                     .level = (uint8_t)(v[3] < 0 ? 0 : v[3] > 255 ? 255 : v[3]), .hits = (uint8_t)(v[4] < 0 ? 0 : v[4] > 255 ? 255 : v[4]) };
+}
+
+// mapsave_load() is done: the save's rocks if they're this morning's, else a new lot.
+static void spawn_after_load(void)
+{
+    if (!spawn_any()) return;
+    int32_t key = spawn_key_now();
+    int     made = 0;
+    if (s_spawn.pend_key == key) {
+        for (int k = 0; k < s_spawn.pend_n; k++) {
+            const spawn_pend_t *p = &s_spawn.pend[k];
+            if (p->tpl < 0 || p->tpl >= s_spawn.first || !s_brk.inst[p->tpl].spawn_tpl || !spawn_fits(p->tpl, p->tx, p->ty, false)) continue;   // (the map changed)
+            made += spawn_add(p->tpl, p->tx, p->ty, p->level, p->hits);
+        }
+    } else {
+        made = spawn_roll();
+        spawn_save_soon();
+        ESP_LOGI(TAG, "spawn: %d random rocks came up on %s", made, current_map_name());
+    }
+    s_spawn.key          = key;
+    s_spawn.pend_n       = 0;
+    s_spawn.check_player = true;
+}
+
+// A rock standing where the player is (they arrived on it, woke up there): it goes.
+static void spawn_unstick(void)
+{
+    int fy = s_player_y + PLAYER_H - PLAYER_FEET_H;
+    for (int n = s_spawn.first; n < s_brk.count; n++) {
+        brk_inst_t *b = &s_brk.inst[n];
+        if (b->level >= b->level_count || b->playing || b->falling) continue;
+        const brk_level_t *L = &b->levels[b->level];
+        if (!anim_rects_overlap(b->x + L->ox, b->y + L->oy, L->w, L->h, s_player_x, fy, PLAYER_W, PLAYER_FEET_H)) continue;
+        b->level     = b->level_count;
+        b->hits_done = 0;
+        brk_compose_show(b);
+        spawn_save_soon();
+    }
+}
+
+// Every rock out now comes up anew (6:00, the dev link). false = not now (one's mid-hit or falling).
+static bool spawn_new_lot(void)
+{
+    for (int n = s_spawn.first; n < s_brk.count; n++)
+        if (s_brk.inst[n].playing || s_brk.inst[n].falling) return false;
+    spawn_clear(true);
+    int made = spawn_roll();
+    for (int n = s_spawn.first; n < s_brk.count; n++) brk_compose_show(&s_brk.inst[n]);
+    s_spawn.key = spawn_key_now();
+    spawn_save_soon();
+    ESP_LOGI(TAG, "spawn: %d random rocks came up on %s", made, current_map_name());
+    return true;
+}
+
+// Once per game frame: a new lot at 6:00 (one look per game minute).
+static void spawn_tick(void)
+{
+    if (!s_map_loaded || !spawn_any()) return;
+    if (s_spawn.check_player) { s_spawn.check_player = false; spawn_unstick(); }
+    int minute = clock_minute_of_day();
+    if (minute == s_spawn.seen_min) return;
+    s_spawn.seen_min = minute;
+    if (spawn_key_now() != s_spawn.key) spawn_new_lot();
+}
+
+static void spawn_write(FILE *f, char *line, size_t n)
+{
+    if (!spawn_any() || s_spawn.key < 0) return;
+    snprintf(line, n, "rocks day %ld\n", (long)s_spawn.key);
+    fputs(line, f);
+    for (int i = s_spawn.first; i < s_brk.count; i++) {
+        const brk_inst_t *b = &s_brk.inst[i];
+        if (b->level >= b->level_count) continue;   // broken: gone until the next lot
+        snprintf(line, n, "rock %d at tile %d %d level %d hits %d\n", b->spawn_src, b->x / TILE_SIZE, (b->y + b->h) / TILE_SIZE - 1, b->level, b->hits_done);
+        fputs(line, f);
+    }
+}
+
+#if DEV_LINK_ENABLED
+// DEV LINK "rocks": the random rocks out now · "rocks new": a new lot now.
+static void spawn_dev_cmd(const char *args)
+{
+    while (*args == ' ') args++;
+    if (!spawn_any()) { dev_out("@@ERR no random rocks on this map (the Map Editor's Random rocks..., export again)"); return; }
+    if (strcmp(args, "new") == 0) {
+        if (spawn_new_lot()) dev_out("@@OK %d came up", s_brk.count - s_spawn.first);
+        else                 dev_out("@@ERR one's being hit - try again");
+        return;
+    }
+    for (int i = s_spawn.first; i < s_brk.count; i++) {
+        const brk_inst_t *b = &s_brk.inst[i];
+        dev_out("@@ROCK sample %d at tile %d %d level %d/%d hits %d", b->spawn_src, b->x / TILE_SIZE, (b->y + b->h) / TILE_SIZE - 1, b->level, b->level_count, b->hits_done);
+    }
+    dev_out("@@OK %d a morning from %d samples, these came up for day %ld", s_spawn.count, s_spawn.tpl_n, (long)s_spawn.key);
+}
+#endif
+
+// ============================================================
 //  PLACEMENT — props (furniture: shelves, crates, rugs) and buildings that
 //  the player puts on the map themselves.
 //
@@ -11709,6 +12258,7 @@ typedef struct {        // one prop / building at one spot
     int8_t   door_tx;   // building: the door's tile column (in the footprint's bottom row); -1 = none
     int8_t   fence;     // a fence, gate or pipe: its s_fences[] index (FENCES); -1 = not one
     bool     bed;       // a walk-in bed (BEDS): its whole art is footprint, only its frame blocks, its sheet goes over the player
+    bool     dock;      // a dock (BOATS + DOCKS): out over the water, its footprint a deck — only its post (door_col) blocks
 } place_geom_t;
 
 #define SHELF_SLOTS_MAX     4      // stacks one shelf holds (items.h ITEM_ATTR_SHELF)
@@ -11830,7 +12380,7 @@ static int place_item_kind(item_id_t item)
 static bool place_geom(int kind, int what, int tx, int ty, place_geom_t *g)
 {
     int aw, ah, rows, door = -1, fence = -1;
-    bool solid = true, bed = false;
+    bool solid = true, bed = false, dock = false;
     if (kind == PLACE_PROP) {
         if (what <= ITEM_NONE || what > ITEM_ID_MAX || !prop_art_ok((item_id_t)what)) return false;
         const item_asset_t *a = item_get((item_id_t)what);
@@ -11869,7 +12419,8 @@ static bool place_geom(int kind, int what, int tx, int ty, place_geom_t *g)
             return false;
         }
         rows = b->foot_rows < 1 ? 1 : b->foot_rows > ah / TILE_SIZE ? ah / TILE_SIZE : b->foot_rows;
-        if (b->interior && b->interior[0] && b->door_col < aw / TILE_SIZE) door = b->door_col;
+        dock = b->dock;   // (BOATS + DOCKS: no inside — door_col is its boat shop's post)
+        if (!dock && b->interior && b->interior[0] && b->door_col < aw / TILE_SIZE) door = b->door_col;
     } else {
         return false;
     }
@@ -11879,7 +12430,7 @@ static bool place_geom(int kind, int what, int tx, int ty, place_geom_t *g)
         .kind = (uint8_t)kind, .what = (uint16_t)what, .tx = (int8_t)tx, .ty = (int8_t)ty, .fw = (uint8_t)fw, .fh = (uint8_t)rows,
         .ax = (int16_t)(tx * TILE_SIZE + (fw * TILE_SIZE - aw) / 2), .ay = (int16_t)((ty + rows) * TILE_SIZE - ah),
         .aw = (int16_t)aw, .ah = (int16_t)ah, .solid = solid, .door_tx = (int8_t)(door >= 0 ? tx + door : -1),
-        .fence = (int8_t)fence, .bed = bed,
+        .fence = (int8_t)fence, .bed = bed, .dock = dock,
     };
     return true;
 }
@@ -11906,9 +12457,19 @@ static bool geom_has_tile(const place_geom_t *g, int tx, int ty)
     return tx >= g->tx && tx < g->tx + g->fw && ty >= g->ty && ty < g->ty + g->fh;
 }
 
-// A footprint tile that blocks the player: all of them, but a walk-on prop's and a building's door.
+// A dock's post (BOATS + DOCKS): the one tile of its deck that's solid — tapped, the boat shop.
+static bool dock_post_tile(const place_geom_t *g, int tx, int ty)
+{
+    if (!g->dock || ty != g->ty + g->fh - 1) return false;
+    int c = s_buildings[g->what]->door_col;
+    return tx == g->tx + (c < g->fw ? c : g->fw - 1);
+}
+
+// A footprint tile that blocks the player: all of them, but a walk-on prop's and a building's door
+// (a dock's: only its post).
 static bool geom_tile_solid(const place_geom_t *g, int tx, int ty)
 {
+    if (g->dock) return dock_post_tile(g, tx, ty);
     return geom_has_tile(g, tx, ty) && g->solid && !(tx == g->door_tx && ty == g->ty + g->fh - 1);
 }
 
@@ -11968,16 +12529,34 @@ static bool place_ok(const place_geom_t *g, bool check_player, const char **why)
     if (r.x < 0 || r.y < 0 || r.x + r.w > s_map_w || r.y + r.h > s_map_h) return false;
     if (g->tx < 0 || g->ty < 0 || g->tx + g->fw > TILE_COLS || g->ty + g->fh > TILE_ROWS) return false;
     if (g->kind == PLACE_BUILDING && s_map_inst) { *why = "Buildings go outside"; return false; }
-    if (g->kind == PLACE_BUILDING) {   // cheapest test that rules out most spots: Buildable ground
+    if (g->kind == PLACE_BUILDING && !g->dock) {   // cheapest test that rules out most spots: Buildable ground
         for (int ty = g->ty; ty < g->ty + g->fh; ty++)
             for (int tx = g->tx; tx < g->tx + g->fw; tx++)
                 if (!tile_buildable(tx, ty)) { *why = "Buildings need Buildable ground"; return false; }
     }
+    if (g->dock) {                     // a dock (BOATS + DOCKS): all of it over the water, and reaching the shore
+        bool shore = false;
+        for (int ty = g->ty; ty < g->ty + g->fh; ty++)
+            for (int tx = g->tx; tx < g->tx + g->fw; tx++) {
+                int kind = tile_water_kind(tx, ty);
+                if (!kind || kind >= 8) { *why = kind == 16 ? "Docks can't go on the ice" : kind == 8 ? "Docks would burn up in lava" : "Docks go out over the water"; return false; }
+                static const int8_t k_n[4][2] = { { 0, -1 }, { 0, 1 }, { -1, 0 }, { 1, 0 } };
+                for (int k = 0; k < 4 && !shore; k++) {
+                    int nx = tx + k_n[k][0], ny = ty + k_n[k][1];
+                    shore = !geom_has_tile(g, nx, ny) && tile_on_map(nx, ny) && !tile_water_kind(nx, ny);
+                }
+            }
+        if (!shore) { *why = "A dock has to reach the shore"; return false; }
+    }
+    for (int ty = g->ty; ty < g->ty + g->fh; ty++)   // nor on a boat (BOATS + DOCKS)
+        for (int tx = g->tx; tx < g->tx + g->fw; tx++)
+            if (boat_deck_at(tx, ty) >= 0) { *why = "A boat is in the way"; return false; }
     bool pot = pot_of(g);              // a crab pot (CRAB POTS): only in the water, whose collision it ignores
     if (pot) {
         for (int ty = g->ty; ty < g->ty + g->fh; ty++)
             for (int tx = g->tx; tx < g->tx + g->fw; tx++)
                 if (!tile_fishable(tx, ty)) { *why = "Crab pots go in the water"; return false; }
+                else if (tile_water_kind(tx, ty) == 16) { *why = "Crab pots can't go in the ice"; return false; }   // (ICE HOLES)
     }
     if (anim_rects_overlap(r.x, r.y, r.w, r.h, CLOCK_X, CLOCK_Y, CLOCK_W, CLOCK_H_MAX)) return false;
     if (anim_rects_overlap(r.x, r.y, r.w, r.h, TOUCH_BTN_X, TOUCH_BTN_Y, TOUCH_BTN_SIZE, TOUCH_BTN_SIZE)) return false;
@@ -12038,7 +12617,7 @@ static bool place_ok(const place_geom_t *g, bool check_player, const char **why)
                 }
                 if (!piece) return false;
             }
-            if (!pot && geom_has_tile(g, x / TILE_SIZE, y / TILE_SIZE) && bit_get(s_map_hitbox, mi)) return false;   // the floor must be clear
+            if (!pot && !g->dock && geom_has_tile(g, x / TILE_SIZE, y / TILE_SIZE) && bit_get(s_map_hitbox, mi)) return false;   // the floor must be clear (a dock's is water)
         }
     }
     if (check_player && (g->solid || g->bed) && !pot) {
@@ -12432,6 +13011,7 @@ static void place_bake(int i)
                 }
             }
             if (geom_tile_solid(g, x / TILE_SIZE, y / TILE_SIZE)) bit_put(s_map_hitbox, mi, true);
+            else if (g->dock && geom_has_tile(g, x / TILE_SIZE, y / TILE_SIZE)) bit_put(s_map_hitbox, mi, false);   // a dock's deck: walked on, over the water (BOATS + DOCKS)
         }
     }
     shelf_bake_stock(i);
@@ -13951,6 +14531,7 @@ static void tp_travel(void)
     static char path[MAP_PATH_MAX];
     t = s_tp.items[s_tp_pending];
     s_tp_pending = -1;
+    int boat = boat_steered();            // at a boat's helm: the boat comes through too (BOATS + DOCKS)
 
     if (strcmp(t.map, TP_RETURN) == 0) {  // a building's exit: out to its door (PLACEMENT)
         ESP_LOGI(TAG, "tp: out of building #%u", s_map_inst);
@@ -13966,6 +14547,7 @@ static void tp_travel(void)
         ESP_LOGI(TAG, "tp: to tile (%d,%d) on this map", t.dest_tx, t.dest_ty);
         nav_cancel();
         tp_place_player(&t);
+        boat_follow_tp(boat);
         player_look_t l = player_look_now();
         player_redraw(&l);
         return;
@@ -13979,6 +14561,7 @@ static void tp_travel(void)
     }
     if (t.inst) place_arrive_inside();    // on the inside's exit, facing in
     else        tp_place_player(&t);
+    if (!t.inst) boat_follow_tp(boat);
     player_draw_fresh();
     draw_touch_menu_button();
     hud_draw_overlay();
@@ -14118,10 +14701,17 @@ static void brk_reach_box(int px, int py, direction_t facing, int *rx0, int *ry0
     *ry1 = fy + PLAYER_FEET_H + (dy > 0 ? BRK_REACH : 0);
 }
 
-static void nav_classify_tiles(void)
+// player: the player's own classes — a boat's deck is walked on too (BOATS + DOCKS); the shoppers' and animals' aren't.
+static bool s_nav_cls_player = false;   // s_nav_cls was made with player == true: only the player's walks use it
+static void nav_classify_tiles(bool player)
 {
+    s_nav_cls_player = player;
     for (int ty = 0; ty < TILE_ROWS; ty++) {
         for (int tx = 0; tx < TILE_COLS; tx++) {
+            if (player && boat_deck_at(tx, ty) >= 0) {
+                s_nav_cls[ty][tx] = NAV_FEET_FREE | NAV_FULL_FREE;
+                continue;
+            }
             bool feet = true, full = true;
             for (int py = 0; py < TILE_SIZE && (feet || full); py++) {
                 for (int px = 0; px < TILE_SIZE; px++) {
@@ -14147,7 +14737,14 @@ static void nav_classify_tiles(void)
 static void npc_nav_tiles(void)
 {
     uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
-    if (!s_nav_cls_ok || now - s_nav_cls_ms >= NPC_NAV_CACHE_MS) nav_classify_tiles();
+    if (!s_nav_cls_ok || s_nav_cls_player || now - s_nav_cls_ms >= NPC_NAV_CACHE_MS) nav_classify_tiles(false);
+}
+
+// The same for the player's own drawn paths: with the boats' decks walkable (BOATS + DOCKS).
+static void player_nav_tiles(void)
+{
+    uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+    if (!s_nav_cls_ok || !s_nav_cls_player || now - s_nav_cls_ms >= NPC_NAV_CACHE_MS) nav_classify_tiles(true);
 }
 
 // Can the player walk from tile (x,y) (already standable) to the neighbouring
@@ -14293,7 +14890,7 @@ static void nav_reset(void)
 // comment for what counts as the goal. Returns false if there's nowhere to go.
 static bool nav_plan(int tap_x, int tap_y)
 {
-    nav_classify_tiles();
+    nav_classify_tiles(true);   // (the boats' decks walkable — BOATS + DOCKS)
     int gx = tap_x / TILE_SIZE, gy = tap_y / TILE_SIZE;
 
     // A breakable is only hit when its "hit tile" is tapped: the bottom row
@@ -14336,11 +14933,17 @@ static bool nav_plan(int tap_x, int tap_y)
     // for it: walk next to that tile and press action there (ANIMALS). gx/gy become the animal's tile.
     bool ranch_target = !target_brk && !on_brk && !target_trig && !place_tap && !bed_walk && ranch_tap_target(tap_x, tap_y, &gx, &gy);
     bool farm_target = !target_brk && !on_brk && !target_trig && !place_tap && !bed_walk && (ranch_target || farm_tap_target(&gx, &gy));
+    // Boats (BOATS + DOCKS): holding one, water — the dock spot whose water is nearest the tap, facing it;
+    // a dock's post — next to it.
+    int  boat_aim = boat_tap_aim(gx, gy, !target_brk && !on_brk && !target_trig && !place_tap && !bed_walk && !farm_target);
+    bool boat_shore = boat_aim == BOAT_AIM_LAUNCH;
+    int  boat_goal = -1, boat_d2 = INT32_MAX;
+    direction_t boat_face = DIR_CENTER;
     // Water, with a fishing rod in hand: the shore spot whose water is nearest the tap, facing it (FISHING).
-    bool fish_target = !target_brk && !on_brk && !target_trig && !place_tap && !bed_walk && !farm_target && fish_tap_target(gx, gy);
+    bool fish_target = !target_brk && !on_brk && !target_trig && !place_tap && !bed_walk && !farm_target && !boat_aim && fish_tap_target(gx, gy);
     int  fish_goal = -1, fish_d2 = INT32_MAX;
     direction_t fish_face = DIR_CENTER;
-    bool walk_onto = !target_brk && !target_trig && !farm_target && !place_tap && !fish_target && (s_nav_cls[gy][gx] & NAV_FEET_FREE);
+    bool walk_onto = !target_brk && !target_trig && !farm_target && !place_tap && !fish_target && !boat_aim && (s_nav_cls[gy][gx] & NAV_FEET_FREE);
 
     // BFS from every standable tile the feet box overlaps right now.
     static int16_t prev[TILE_ROWS * TILE_COLS];
@@ -14373,10 +14976,17 @@ static bool nav_plan(int tap_x, int tap_y)
     while (qh < qt && goal < 0) {
         int i = queue[qh++], x = i % TILE_COLS, y = i / TILE_COLS;
 
-        if (fish_target) {   // every reachable shore spot is looked at; the best is the goal (after the loop)
+        if (boat_shore) {    // every reachable dock (or shore) spot is looked at; the best is the goal (after the loop)
+            for (int k = 0; k < 4; k++) {
+                int nx = x + k_dx[k], ny = y + k_dy[k];
+                if (!boat_shore_ok(boat_aim, x, y, nx, ny)) continue;
+                int d2 = (nx - gx) * (nx - gx) + (ny - gy) * (ny - gy);
+                if (d2 < boat_d2) { boat_d2 = d2; boat_goal = i; boat_face = nav_delta_to_dir(k_dx[k], k_dy[k]); }
+            }
+        } else if (fish_target) {   // every reachable shore spot is looked at; the best is the goal (after the loop)
             for (int k = 0; k < 4; k++) {
                 int wx = x + k_dx[k], wy = y + k_dy[k];
-                if (!tile_fishable(wx, wy)) continue;
+                if (!tile_fishable(wx, wy) || boat_deck_at(wx, wy) >= 0) continue;   // (not onto a boat's deck — BOATS + DOCKS)
                 int d2 = (wx - gx) * (wx - gx) + (wy - gy) * (wy - gy);
                 if (d2 < fish_d2) { fish_d2 = d2; fish_goal = i; fish_face = nav_delta_to_dir(k_dx[k], k_dy[k]); }
             }
@@ -14416,6 +15026,10 @@ static bool nav_plan(int tap_x, int tap_y)
     }
 
     if (fish_target && fish_goal >= 0) { goal = fish_goal; face = fish_face; }
+    if (boat_shore) {
+        if (boat_goal >= 0) { goal = boat_goal; face = boat_face; }
+        else                boat_no_shore(boat_aim);   // (just walks as close as it can)
+    }
     if (bed_walk && goal < 0) {   // can't get into the bed (blocked both sides): next to it, asked from there
         const place_geom_t *bg = &s_place[bed_i].g;
         int bd = INT16_MAX;
@@ -14502,6 +15116,7 @@ static void nav_touch(int tap_x, int tap_y)
 // it walks there (nav_touch()). Either way, dragging it from here draws a path.
 static void nav_tap(int tap_x, int tap_y)
 {
+    if (boat_steer_tap(tap_x, tap_y)) { s_drag = DRAG_NONE; return; }   // at a boat's helm: the boat sails there (BOATS + DOCKS)
     s_drag        = DRAG_PENDING;
     s_drag_down_x = tap_x;
     s_drag_down_y = tap_y;
@@ -14624,7 +15239,7 @@ static void nav_drag_extend(int x, int y)
         s_nav_drawn  = true;
         s_nav_stuck  = 0;
     }
-    npc_nav_tiles();   // the tile classes, at most a moment old (a full rebuild per tile would lag the drag)
+    player_nav_tiles();   // the tile classes, at most a moment old (a full rebuild per tile would lag the drag)
     static nav_tile_t steps[TILE_COLS + TILE_ROWS + NAV_DRAG_DETOUR];
     int n = nav_drag_steps(gx, gy, steps, (int)(sizeof steps / sizeof steps[0]));
     if (n == 0) return;   // a wall, or the finger's on one: wait for it to come out
@@ -15187,6 +15802,8 @@ static void inv_click_slot(int slot)
         s_inv_carry.item  = ITEM_NONE;
         s_inv_carry.count = 0;
     } else if (fish_rig_attach(&s_inv_carry, s->item)) {   // bait or tackle onto a rod: on the line (FISHING)
+        hud_refresh();
+    } else if (sling_attach(&s_inv_carry, s->item)) {      // stones, ore, anything onto a slingshot: its ammo (MONSTERS + COMBAT)
         hud_refresh();
     } else if (s->item == s_inv_carry.item && s->quality == s_inv_carry.quality) {
         int room = item_max_stack(s->item) - s->count;
@@ -15916,10 +16533,12 @@ static bool shop_show(void);
 // GOODS (the General store) sells anything else with a price, and an item's
 // "shop N" (items.h ITEM_ATTR_SHOP) puts it on counter N instead, so any item
 // can be sold anywhere (Game Tools' Item Editor / Shop Editor).
-enum { SHOP_SEEDS = 0, SHOP_BUILD, SHOP_RANCH, SHOP_FISH, SHOP_GENERAL, SHOP_KINDS };
-static const char *const k_shop_title[SHOP_KINDS] = { "SEED SHOP", "BUILD SHOP", "RANCH", "FISH SHOP", "GENERAL STORE" };
-static const char *const k_shop_tab[SHOP_KINDS]   = { "SEEDS", "BUILD", "RANCH", "FISH", "GOODS" };
-static const char *const k_shop_who[SHOP_KINDS]   = { "Seed shop", "Build shop", "Ranch", "Fish shop", "General store" };
+// BOATS (BOATS + DOCKS: a dock's post, or the "boat_shop" action) sells the boats,
+// and is a shop of its own: it shows no other counter, and no other shop shows it.
+enum { SHOP_SEEDS = 0, SHOP_BUILD, SHOP_RANCH, SHOP_FISH, SHOP_GENERAL, SHOP_BOATS, SHOP_KINDS };
+static const char *const k_shop_title[SHOP_KINDS] = { "SEED SHOP", "BUILD SHOP", "RANCH", "FISH SHOP", "GENERAL STORE", "BOAT SHOP" };
+static const char *const k_shop_tab[SHOP_KINDS]   = { "SEEDS", "BUILD", "RANCH", "FISH", "GOODS", "BOATS" };
+static const char *const k_shop_who[SHOP_KINDS]   = { "Seed shop", "Build shop", "Ranch", "Fish shop", "General store", "Boat shop" };
 
 // The fish shop sells it (Stardew's Willy): a rod, bait, tackle or a crab pot (FISHING).
 static bool fish_shop_sells(item_id_t item)
@@ -15939,6 +16558,7 @@ static int shop_kind_of(item_id_t item)
     if (item_buy_price(item) <= 0) return -1;
     int k = (int)item_attr(item, ITEM_ATTR_SHOP, 0);
     if (k >= 1 && k <= SHOP_KINDS) return k - 1;   // put on a counter by hand (Item Editor / Shop Editor)
+    if (item_attr(item, ITEM_ATTR_BOAT, 0) > 0) return SHOP_BOATS;   // (BOATS + DOCKS)
     if (animal_of_item(item) >= 0 || ranch_sells(item)) return SHOP_RANCH;
     if (ITEM_TILLS(item) || ITEM_WATERS(item) || crop_of_seed(item) >= 0) return SHOP_SEEDS;
     if (fish_shop_sells(item)) return SHOP_FISH;
@@ -15980,11 +16600,13 @@ static int shop_stock(int kind, item_id_t *out)
 }
 
 // The counters with something for sale, in tab order, into kinds[]. Returns how many.
+// The boat shop stands alone: it's its own only tab, and no other shop's.
 static int shop_tab_kinds(int kinds[SHOP_KINDS])
 {
     static item_id_t tmp[SHOP_MAX];
     int n = 0;
-    for (int k = 0; k < SHOP_KINDS; k++) if (shop_stock(k, tmp) > 0) kinds[n++] = k;
+    for (int k = 0; k < SHOP_KINDS; k++)
+        if ((k == SHOP_BOATS) == (s_shop_kind == SHOP_BOATS) && shop_stock(k, tmp) > 0) kinds[n++] = k;
     return n;
 }
 
@@ -16017,6 +16639,7 @@ bool build_shop_open(void) { return shop_open_kind(SHOP_BUILD); }
 bool ranch_shop_open(void) { return shop_open_kind(SHOP_RANCH); }
 bool fish_shop_open(void)  { return shop_open_kind(SHOP_FISH); }
 bool general_shop_open(void) { return shop_open_kind(SHOP_GENERAL); }
+bool boat_shop_open(void)    { return shop_open_kind(SHOP_BOATS); }   // (BOATS + DOCKS)
 
 // Opens the shop screen on what shop_switch() stocked.
 static bool shop_show(void)
@@ -16094,6 +16717,11 @@ static void shop_draw_card(void)
                  when, s_crops[c]->grow_days, s_crops[c]->grow_days == 1 ? "" : "s", have);
     else if (s_shop_kind == SHOP_RANCH)
         ranch_shop_card(item, line, sizeof(line));   // what the animal gives, or what the tool is for
+    else if (item_attr(item, ITEM_ATTR_BOAT, 0) > 0) {   // the water it goes on, how fast (BOATS + DOCKS)
+        char b[56];   // (with "  In bag: N" it fits the 80 of line)
+        boat_card_text(item, b, sizeof(b));
+        snprintf(line, sizeof(line), "%s  In bag: %d", b, have);
+    }
     else if (s_shop_kind == SHOP_FISH) {             // what the gear does (FISHING)
         char g[64];
         fish_gear_text(item, g, sizeof(g));
@@ -20302,6 +20930,229 @@ static void ranch_dev_cmd(char *args)
 }
 
 // ============================================================
+//  ICE HOLES — fishing through the ice. Fishable water whose kind is Ice
+//  (the Map Editor's "Water: Ice" — TILE_FLAG_RIVER and TILE_FLAG_OCEAN both
+//  set, TILE_WATER_ICE) is frozen over: a rod isn't cast into it, a watering
+//  can isn't filled from it, no crab pot goes in. Swing a pickaxe (or a tool
+//  that "counts_as:pickaxe") at a frozen tile and it breaks a round hole in
+//  it — assets/ice_hole.png, drawn over the tile (see-through where 0x0000) —
+//  and the rod casts into that. What bites there: fish whose "fish_water"
+//  has 16 (Ice) or 1 (pond / lake), and those with none, as anywhere.
+//  A hole is solid (nobody walks into it) and freezes over again at the
+//  next 6:00 (ice_tick()). Kept in the map's save until then: "icehole at
+//  tile X Y until M" (M = the game minute it freezes: day * 1440 + minute).
+//  Baked into the map pixels like the farmland (ice_bake_all() on fresh
+//  pixels: a map loading, a night stage); what each covered is kept, to
+//  put back. Dev link: "ice" (list), "ice hole" (the faced tile), "ice freeze".
+// ============================================================
+#define ICE_HOLE_MAX 16
+#define ICE_TILE_PX  (TILE_SIZE * TILE_SIZE)
+_Static_assert(ICE_HOLE_W == TILE_SIZE && ICE_HOLE_H == TILE_SIZE, "assets/ice_hole.png must be 16x16");
+
+typedef struct {
+    bool    used;
+    bool    under_ok;                    // under[] holds what this tile's pixels are without it
+    int8_t  tx, ty;
+    int32_t until;                       // the game minute it freezes over (day * 1440 + minute)
+    uint8_t solid[ICE_TILE_PX / 8];      // the tile's collision bits from before (a hole is solid)
+} ice_hole_t;
+
+static ice_hole_t s_ice[ICE_HOLE_MAX];
+EXT_RAM_BSS_ATTR static uint16_t s_ice_under[ICE_HOLE_MAX][ICE_TILE_PX];
+static int s_ice_seen_min = -1;          // ice_tick(): the game minute last looked at
+
+static int32_t ice_now_min(void) { return (int32_t)clock_day() * (24 * 60) + clock_minute_of_day(); }
+
+// The next 6:00, as a game minute: when a hole made now freezes over.
+static int32_t ice_thaw_end(void)
+{
+    int32_t day = (int32_t)clock_day() + (clock_minute_of_day() >= FARM_MORNING_MIN ? 1 : 0);
+    return day * (24 * 60) + FARM_MORNING_MIN;
+}
+
+static int ice_hole_at(int tx, int ty)
+{
+    for (int i = 0; i < ICE_HOLE_MAX; i++)
+        if (s_ice[i].used && s_ice[i].tx == tx && s_ice[i].ty == ty) return i;
+    return -1;
+}
+
+static bool ice_any(void)
+{
+    for (int i = 0; i < ICE_HOLE_MAX; i++) if (s_ice[i].used) return true;
+    return false;
+}
+
+static void ice_clear(void) { memset(s_ice, 0, sizeof(s_ice)); s_ice_seen_min = -1; }
+
+// Water a can fills from and a rod casts into: Fishable, and not frozen over.
+static bool tile_water_open(int tx, int ty)
+{
+    return tile_fishable(tx, ty) && (tile_water_kind(tx, ty) != 16 || ice_hole_at(tx, ty) >= 0);
+}
+
+static bool ice_pick_held(void)
+{
+    static item_id_t pick = ITEM_NONE;
+    if (pick == ITEM_NONE) pick = item_find("pickaxe");
+    return pick != ITEM_NONE && item_counts_as(inv_held_item(), pick);
+}
+
+// nav_plan() (through farm_tap_target()): a tap on frozen water with a pickaxe — walk next to it and swing.
+static bool ice_tap_target(int tx, int ty)
+{
+    return tile_on_map(tx, ty) && tile_water_kind(tx, ty) == 16 && ice_hole_at(tx, ty) < 0 && ice_pick_held();
+}
+
+// Hole i into the map pixels: what's there first kept (once per fresh pixels), then the hole over it. Screen untouched.
+static void ice_bake(int i)
+{
+    ice_hole_t *h = &s_ice[i];
+    int x0 = h->tx * TILE_SIZE, y0 = h->ty * TILE_SIZE;
+    for (int row = 0; row < TILE_SIZE; row++) {
+        uint16_t *p = &s_map_pixels[(y0 + row) * s_map_w + x0];
+        if (!h->under_ok) memcpy(&s_ice_under[i][row * TILE_SIZE], p, TILE_SIZE * sizeof(uint16_t));
+        for (int col = 0; col < TILE_SIZE; col++) {
+            uint16_t c = ice_hole[row * TILE_SIZE + col];
+            if (c != FB_TRANSPARENT_COLOR) p[col] = s_night_shown ? night_px(&s_night_lut, c) : c;
+        }
+    }
+    h->under_ok = true;
+}
+
+// An animation just drew over [x0,x1) x [y0,y1) of the screen (brk_restamp_over_anim()): the holes
+// there go back on top, from the map pixels (they're baked in them). Animated water's waves would cover them.
+static void ice_restamp(int x0, int y0, int x1, int y1)
+{
+    for (int i = 0; i < ICE_HOLE_MAX; i++) {
+        const ice_hole_t *h = &s_ice[i];
+        if (!h->used) continue;
+        int hx = h->tx * TILE_SIZE, hy = h->ty * TILE_SIZE;
+        int ax = hx > x0 ? hx : x0, ay = hy > y0 ? hy : y0, bx = hx + TILE_SIZE < x1 ? hx + TILE_SIZE : x1, by = hy + TILE_SIZE < y1 ? hy + TILE_SIZE : y1;
+        for (int y = ay; y < by; y++)
+            for (int x = ax; x < bx; x++)
+                if (ice_hole[(y - hy) * TILE_SIZE + (x - hx)] != FB_TRANSPARENT_COLOR) s_fb[y * LCD_H_RES + x] = s_map_pixels[y * s_map_w + x];
+    }
+}
+
+// Fresh map pixels (a map loading, a night stage): every hole on them again.
+static void ice_bake_all(void)
+{
+    for (int i = 0; i < ICE_HOLE_MAX; i++) {
+        if (!s_ice[i].used) continue;
+        s_ice[i].under_ok = false;
+        ice_bake(i);
+    }
+}
+
+// A hole on tile (tx,ty) until game minute `until`: solid from now. show = and on screen (else
+// mapsave_show() bakes it). false = no room for another.
+static bool ice_make(int tx, int ty, int32_t until, bool show)
+{
+    int i;
+    for (i = 0; i < ICE_HOLE_MAX && s_ice[i].used; i++) {}
+    if (i == ICE_HOLE_MAX) return false;
+    ice_hole_t *h = &s_ice[i];
+    *h = (ice_hole_t){ .used = true, .tx = (int8_t)tx, .ty = (int8_t)ty, .until = until };
+    for (int k = 0; k < ICE_TILE_PX; k++) {
+        int mi = (ty * TILE_SIZE + k / TILE_SIZE) * s_map_w + tx * TILE_SIZE + k % TILE_SIZE;
+        bit_put(h->solid, k, bit_get(s_map_hitbox, mi));
+        bit_put(s_map_hitbox, mi, true);
+    }
+    if (show) {
+        ice_bake(i);
+        map_repaint_rect(tx * TILE_SIZE, ty * TILE_SIZE, TILE_SIZE, TILE_SIZE, NULL);
+    }
+    return true;
+}
+
+// Hole i freezes over: the ice as it was, and its collision.
+static void ice_freeze(int i)
+{
+    ice_hole_t *h = &s_ice[i];
+    int x0 = h->tx * TILE_SIZE, y0 = h->ty * TILE_SIZE;
+    for (int k = 0; k < ICE_TILE_PX; k++)
+        bit_put(s_map_hitbox, (y0 + k / TILE_SIZE) * s_map_w + x0 + k % TILE_SIZE, bit_get(h->solid, k));
+    if (h->under_ok)
+        for (int row = 0; row < TILE_SIZE; row++)
+            memcpy(&s_map_pixels[(y0 + row) * s_map_w + x0], &s_ice_under[i][row * TILE_SIZE], TILE_SIZE * sizeof(uint16_t));
+    h->used = false;
+    fish_ice_froze(h->tx, h->ty);
+    map_repaint_rect(x0, y0, TILE_SIZE, TILE_SIZE, NULL);
+}
+
+// The tool swing landed (tool_swing_tick()): a pickaxe at frozen water breaks a hole in it.
+static void ice_on_hit(void)
+{
+    int tx = s_selected_tile_x, ty = s_selected_tile_y;
+    if (!s_map_loaded || !tile_on_map(tx, ty) || tile_water_kind(tx, ty) != 16 || ice_hole_at(tx, ty) >= 0 || !ice_pick_held()) return;
+    int x = tx * TILE_SIZE, y = ty * TILE_SIZE, fy = s_player_y + PLAYER_H - PLAYER_FEET_H;
+    if (anim_rects_overlap(x, y, TILE_SIZE, TILE_SIZE, s_player_x, fy, PLAYER_W, PLAYER_FEET_H)) { message(2000, "Step off that ice first"); return; }
+    if (ground_at(tx, ty) >= 0) { message(2000, "Something's lying on the ice there"); return; }
+    if (!ice_make(tx, ty, ice_thaw_end(), true)) { message(2500, "That's plenty of holes - they freeze over in the morning"); return; }
+    sfx_play("ice_break");
+    mapsave_mark_dirty();
+    ESP_LOGI(TAG, "ice: a hole at (%d,%d) on %s", tx, ty, current_map_name());
+}
+
+// Once per game frame: holes freeze over at 6:00. One check per game minute.
+static void ice_tick(void)
+{
+    if (!s_map_loaded) return;
+    int minute = clock_minute_of_day();
+    if (minute == s_ice_seen_min) return;
+    s_ice_seen_min = minute;
+    int32_t now = ice_now_min();
+    bool any = false;
+    for (int i = 0; i < ICE_HOLE_MAX; i++)
+        if (s_ice[i].used && (now >= s_ice[i].until || s_ice[i].until - now > 24 * 60)) { ice_freeze(i); any = true; }   // (or the clock went back)
+    if (any) mapsave_mark_dirty();
+}
+
+static void ice_write(FILE *f, char *line, size_t n)
+{
+    for (int i = 0; i < ICE_HOLE_MAX; i++) {
+        if (!s_ice[i].used) continue;
+        snprintf(line, n, "icehole at tile %d %d until %ld\n", s_ice[i].tx, s_ice[i].ty, (long)s_ice[i].until);
+        fputs(line, f);
+    }
+}
+
+// An "icehole" line from the map's save: frozen over since (true, nothing to do), or the hole again.
+static bool ice_restore(int tx, int ty, int until)
+{
+    int32_t now = ice_now_min();
+    if (now >= until || until - now > 24 * 60) return true;   // froze over while the player was away
+    if (!tile_on_map(tx, ty) || tile_water_kind(tx, ty) != 16) {
+        ESP_LOGW(TAG, "save: tile (%d,%d) isn't ice any more — its hole is skipped", tx, ty);
+        return false;
+    }
+    return ice_hole_at(tx, ty) >= 0 || ice_make(tx, ty, until, false);
+}
+
+#if DEV_LINK_ENABLED
+// DEV LINK "ice": the holes · "ice hole": one in the faced tile · "ice freeze": they all freeze over.
+static void ice_dev_cmd(const char *args)
+{
+    while (*args == ' ') args++;
+    if (strcmp(args, "hole") == 0) {
+        int tx = s_selected_tile_x, ty = s_selected_tile_y;
+        if (!tile_on_map(tx, ty) || tile_water_kind(tx, ty) != 16) { dev_out("@@ERR face ice (Fishable water whose kind is Ice)"); return; }
+        if (ice_hole_at(tx, ty) >= 0 || ice_make(tx, ty, ice_thaw_end(), true)) { mapsave_mark_dirty(); dev_out("@@OK hole at %d %d", tx, ty); }
+        else dev_out("@@ERR no room for another hole");
+    } else if (strcmp(args, "freeze") == 0) {
+        for (int i = 0; i < ICE_HOLE_MAX; i++) if (s_ice[i].used) ice_freeze(i);
+        mapsave_mark_dirty();
+        dev_out("@@OK frozen over");
+    } else {
+        for (int i = 0; i < ICE_HOLE_MAX; i++)
+            if (s_ice[i].used) dev_out("@@ICE %d %d until %ld", s_ice[i].tx, s_ice[i].ty, (long)s_ice[i].until);
+        dev_out("@@OK now %ld", (long)ice_now_min());
+    }
+}
+#endif
+
+// ============================================================
 //  FISHING — Stardew Valley style. Hold a fishing rod (an item with "rod 1")
 //  and tap water: ground ticked "Fishable" in the Map Editor
 //  (TILE_FLAG_FISHABLE; its water kind — pond, River, Ocean — is
@@ -20703,6 +21554,7 @@ static void fish_ctx_now(fish_ctx_t *c, int tx, int ty, bool magic)
     c->season = clock_season();
     c->rain   = tx >= 0 ? rain_now() : rain_outside_now();
     c->water  = tx >= 0 ? tile_water_kind(tx, ty) : 0;
+    if (c->water == 16) c->water = 16 | 1;   // an ice hole (ICE HOLES): ice fish, and the pond's
     c->depth  = tx >= 0 ? fish_depth(tx, ty) : 9;
     c->level  = fish_level();
     c->magic  = magic;
@@ -20991,6 +21843,12 @@ static void fish_stop(const char *why)
     if (why) message(3000, "%s", why);
 }
 
+// An ice hole froze over (ICE HOLES): a line out in it comes in.
+static void fish_ice_froze(int tx, int ty)
+{
+    if (fish_line_out() && s_fish.wx == tx && s_fish.wy == ty) fish_stop("The hole froze over");
+}
+
 // A new map: whatever was out is simply gone (the screen is replaced anyway).
 static void fish_reset(void)
 {
@@ -21010,12 +21868,17 @@ static bool fish_on_action(void)
         message(3000, "%s would burn up in lava - it takes a lava rod", item_name(inv_held_item()));
         return true;
     }
+    if (kind == 16 && ice_hole_at(fx, fy) < 0) {   // ice: only through a hole (ICE HOLES)
+        message(3000, "The water's frozen - break a hole in the ice with a pickaxe");
+        return true;
+    }
     int dx, dy;
     direction_to_delta(s_player_facing, &dx, &dy);
     int want = 1;   // out toward the tapped water, as far as the water and the rod go
     if (dx && !dy) want += (s_fish.aim_x - fx) * dx;
     if (dy && !dx) want += (s_fish.aim_y - fy) * dy;
     if (want > FISH_CAST_TILES) want = FISH_CAST_TILES;
+    if (kind == 16) want = 1;   // into the hole, not out onto the ice
     int n = 1;
     while (n < want && tile_fishable(fx + dx * n, fy + dy * n) && (tile_water_kind(fx + dx * n, fy + dy * n) == 8) == (kind == 8)) n++;   // not from water out into lava
     s_fish.wx = fx + dx * (n - 1);
@@ -21848,6 +22711,645 @@ static void fish_gear_text(item_id_t item, char *out, size_t n)
     }
     if (len && out[len - 1] == ' ') out[len - 1] = '\0';
 }
+
+// ============================================================
+//  BOATS + DOCKS — boats out on the water that the player walks around on
+//  and steers from the helm, over the sea to other islands. A boat is an
+//  item with "boat 1" (items.h; the Item Editor's Boat card), sold at a
+//  dock's boat shop. A dock is a building (buildings.h "dock"; the Farm
+//  tab's kind Dock) bought at the Build shop and put up like any other, but
+//  out over the water from the shore (place_ok()): its footprint is a deck
+//  the player walks out on. One tile of it, its post (door_col on the bottom
+//  row), is solid: tapped, it opens the boat shop (SHOP_BOATS; the
+//  "boat_shop" action opens it too, from any map object).
+//
+//  Launching: hold the boat and tap the water. The player walks to the dock
+//  spot whose water is nearest the tap (boat_dock_spot(): a dock's deck, any
+//  spot they can stand on over Fishable water — a pier drawn over the water
+//  with no collision in the Map Editor — or ground whose tile type's name has
+//  "dock" or "pier" in it) and puts it in: its helm on the water in front of
+//  them, its bow pointing away. It's out of the bag for good — a boat on the
+//  water is never picked up again.
+//
+//  A boat on the water (s_boats[], up to BOAT_MAX in a save) is a deck of
+//  "boat_len" x "boat_wide" tiles, lengthwise the way its bow points. The
+//  player walks on it like on the ground (walk_px_blocked(), and their tile
+//  classes in nav_classify_tiles(true)); the shoppers and animals don't. Its
+//  helm is the tile in the middle of its stern ("boat_helm" tiles forward of
+//  it). Standing still on the helm, the player steers (s_steer): a tap on
+//  the water sails the boat until its deck is over that tile; a tap on land,
+//  a dock or another boat sails it alongside; a tap on its own deck — or on
+//  land beside it — walks there, leaving the helm (the boat stops). Holding
+//  a rod, a tap on the water fishes instead. The route (boat_plan()) is a
+//  search over helm tile + heading: each step turns in place about the helm
+//  if need be, then moves a tile, the whole deck on open water each time
+//  (Fishable tiles of its "boat_water" kinds, never ice, with no dock, crab
+//  pot or other boat on them). It sails at "boat_speed" % of walking, the
+//  player carried along on the helm (boat_steer_tick(), before
+//  update_player()).
+//
+//  Teleporters: one stepped on at the helm (it fires on the helm's tile like
+//  on foot) takes the boat along (boat_follow_tp()): its helm on the arrival
+//  tile, the same way round if it fits there — so the sea goes on, map to
+//  map. An arrival on land leaves the boat where it was.
+//
+//  Drawn by boat_paint_rect() with the shoppers (repainted through
+//  npc_dirty_add() as it moves): its "use" art (a square frame each way,
+//  centred on its deck), or a drawn hull with planks and a wheel at the helm.
+//  Sounds: boat_launch. Saved in world.txt:
+//      boat <id> <quality> <dir> <inst> <helm x> <helm y> <map>
+// ============================================================
+#define BOAT_MAX           8     // boats on the water in a whole save
+#define BOAT_LEN_MAX       6     // a deck is at most this many tiles long...
+#define BOAT_WIDE_MAX      4     // ...and this many across
+#define BOAT_ART_MAX       96    // boat art bigger than this either way isn't drawn (the drawn hull is)
+#define BOAT_WATER_DEFAULT 7     // pond, river, ocean (fish_water bits; 8 = lava)
+
+typedef struct {
+    item_id_t item;                  // ITEM_NONE = a free slot
+    uint8_t   quality, dir;          // dir: the way its bow points (player_dir_t)
+    uint16_t  inst;                  // on the inside of building #inst (0 = an ordinary map)
+    int8_t    hx, hy;                // its helm's tile
+    int8_t    ox, oy;                // sailing: px it has come from there toward the next tile
+    rect_t    drawn;                 // where it's on screen now (w 0 = not)
+    char      map[TP_NAME_MAX + 1];  // current_map_name()
+} boat_t;
+
+static boat_t  s_boats[BOAT_MAX];
+static uint8_t s_boat_aim  = BOAT_AIM_NONE;   // what the walk's action press does (nav_plan() -> boat_on_action())
+static bool    s_boat_show = false;           // a map just loaded: its boats go on screen
+static int     s_steer     = -1;              // the boat whose helm the player stands at, or -1
+static int     s_route_n = 0, s_route_at = 0; // the steered boat's route: s_route[s_route_at .. s_route_n - 1] still to sail
+static int     s_route_acc = 0;               // quarter px toward the next step
+EXT_RAM_BSS_ATTR static uint16_t s_route[TILE_ROWS * TILE_COLS * 4];   // states: (y * TILE_COLS + x) * 4 + heading
+EXT_RAM_BSS_ATTR static int16_t  s_bprev[TILE_ROWS * TILE_COLS * 4];   // boat_plan()'s search
+EXT_RAM_BSS_ATTR static uint16_t s_bqueue[TILE_ROWS * TILE_COLS * 4];
+EXT_RAM_BSS_ATTR static uint8_t  s_bopen[TILE_ROWS][TILE_COLS];
+
+static const int8_t k_boat_d[PDIR_COUNT][2] = { { 0, 1 }, { 0, -1 }, { -1, 0 }, { 1, 0 } };   // down, up, left, right
+static const direction_t k_boat_face[PDIR_COUNT] = { DIR_DOWN, DIR_UP, DIR_LEFT, DIR_RIGHT };
+
+static bool boat_is(item_id_t item) { return item != ITEM_NONE && item_attr(item, ITEM_ATTR_BOAT, 0) > 0; }
+
+// The water kinds it goes on ("boat_water": fish_water bits 1 pond, 2 river, 4 ocean, 8 lava — never ice).
+static int boat_waters(item_id_t boat) { return (int)item_attr(boat, ITEM_ATTR_BOAT_WATER, BOAT_WATER_DEFAULT) & 15; }
+
+static int boat_attr(item_id_t boat, const char *name, int fallback, int lo, int hi)
+{
+    int32_t v = item_attr(boat, name, fallback);
+    return v < lo ? lo : v > hi ? hi : (int)v;
+}
+static int boat_speed_of(item_id_t boat) { return boat_attr(boat, ITEM_ATTR_BOAT_SPEED, 100, 25, 400); }
+static int boat_len(item_id_t boat)      { return boat_attr(boat, ITEM_ATTR_BOAT_LEN, 3, 1, BOAT_LEN_MAX); }
+static int boat_wide(item_id_t boat)     { return boat_attr(boat, ITEM_ATTR_BOAT_WIDE, 2, 1, BOAT_WIDE_MAX); }
+static int boat_helm(item_id_t boat)     { return boat_attr(boat, ITEM_ATTR_BOAT_HELM, 0, 0, boat_len(boat) - 1); }
+
+// Deck tile (a tiles forward of the stern, c across) of a boat of `item` with its helm on (hx,hy), its bow pointing `dir`.
+// Across runs down for a boat pointing left or right, right for one pointing up or down; the helm is in the middle of it.
+static void boat_tile(item_id_t item, int hx, int hy, int dir, int a, int c, int *tx, int *ty)
+{
+    int fx = k_boat_d[dir][0], fy = k_boat_d[dir][1], sx = fx ? 0 : 1, sy = fx ? 1 : 0;
+    int da = a - boat_helm(item), dc = c - (boat_wide(item) - 1) / 2;
+    *tx = hx + da * fx + dc * sx;
+    *ty = hy + da * fy + dc * sy;
+}
+
+// Its deck: a rect of tiles.
+static void boat_deck_rect(item_id_t item, int hx, int hy, int dir, int *x0, int *y0, int *w, int *h)
+{
+    int ax, ay, bx, by;
+    boat_tile(item, hx, hy, dir, 0, 0, &ax, &ay);
+    boat_tile(item, hx, hy, dir, boat_len(item) - 1, boat_wide(item) - 1, &bx, &by);
+    *x0 = ax < bx ? ax : bx;
+    *y0 = ay < by ? ay : by;
+    *w  = abs(bx - ax) + 1;
+    *h  = abs(by - ay) + 1;
+}
+
+static bool boat_here(const boat_t *b)
+{
+    return b->item != ITEM_NONE && b->inst == s_map_inst && strcmp(b->map, current_map_name()) == 0;
+}
+
+static int boat_deck_at(int tx, int ty)
+{
+    if (!s_map_loaded) return -1;
+    for (int i = 0; i < BOAT_MAX; i++) {
+        const boat_t *b = &s_boats[i];
+        if (!boat_here(b)) continue;
+        int x0, y0, w, h;
+        boat_deck_rect(b->item, b->hx, b->hy, b->dir, &x0, &y0, &w, &h);
+        if (tx >= x0 && tx < x0 + w && ty >= y0 && ty < y0 + h) return i;
+    }
+    return -1;
+}
+
+static bool walk_px_blocked(int x, int y)
+{
+    if (x >= 0 && y >= 0 && boat_deck_at(x / TILE_SIZE, y / TILE_SIZE) >= 0) return false;
+    return map_pixel_blocked(x, y);
+}
+
+// The placed thing whose footprint (not just its art) is on tile (tx,ty), or -1.
+static int place_foot_at(int tx, int ty)
+{
+    for (int i = 0; i < PLACE_MAX; i++)
+        if (s_place[i].g.kind != PLACE_NONE && geom_has_tile(&s_place[i].g, tx, ty)) return i;
+    return -1;
+}
+
+// A built dock's post on tile (tx,ty) — its boat shop — or -1.
+static int dock_post_at(int tx, int ty)
+{
+    int i = place_foot_at(tx, ty);
+    return i >= 0 && dock_post_tile(&s_place[i].g, tx, ty) ? i : -1;
+}
+
+// Can a boat of `item` have deck on tile (tx,ty)? Water of a kind it goes on, with nothing on it (a dock's deck,
+// a crab pot, another boat — boat `self` itself doesn't count).
+static bool boat_water_ok(int tx, int ty, item_id_t item, int self)
+{
+    if (!s_map_loaded || !tile_on_map(tx, ty)) return false;
+    int kind = tile_water_kind(tx, ty);
+    if (!kind || kind == 16 || !(kind & boat_waters(item)) || place_foot_at(tx, ty) >= 0) return false;
+    int d = boat_deck_at(tx, ty);
+    return d < 0 || d == self;
+}
+
+// Would the whole deck be on such water, its helm on (hx,hy), pointing `dir`?
+static bool boat_fits(item_id_t item, int hx, int hy, int dir, int self)
+{
+    for (int a = 0; a < boat_len(item); a++)
+        for (int c = 0; c < boat_wide(item); c++) {
+            int tx, ty;
+            boat_tile(item, hx, hy, dir, a, c, &tx, &ty);
+            if (!boat_water_ok(tx, ty, item, self)) return false;
+        }
+    return true;
+}
+
+// Could the player stand on tile (tx,ty) on the ground: its feet rows free of collision (TAP-TO-WALK's NAV_FEET_FREE)?
+static bool boat_tile_standable(int tx, int ty)
+{
+    if (!tile_on_map(tx, ty)) return false;
+    for (int py = TILE_SIZE - PLAYER_FEET_H; py < TILE_SIZE; py++)
+        for (int px = 0; px < TILE_SIZE; px++)
+            if (map_pixel_blocked(tx * TILE_SIZE + px, ty * TILE_SIZE + py)) return false;
+    return true;
+}
+
+// A spot (that the player stands on) boats are put in from: over the water — a dock's deck, a pier drawn over
+// Fishable water with no collision (not the ice, not a boat) — or ground whose tile type's name has "dock" or "pier" in it.
+static bool boat_dock_spot(int tx, int ty)
+{
+    if (boat_deck_at(tx, ty) >= 0) return false;
+    int kind = tile_water_kind(tx, ty);
+    if (kind && kind != 16) return true;
+    const char *n = read_tile_name(tx, ty);
+    return strstr(n, "dock") || strstr(n, "pier");
+}
+
+// ---- the look: its "use" art, or a drawn hull ----
+static const frame_bundle_t *boat_art(item_id_t boat)
+{
+    const item_asset_t *a = item_get(boat);
+    if (!a || !a->use.frame_count || !a->use.pixels || a->use.w > BOAT_ART_MAX || a->use.h > BOAT_ART_MAX) return NULL;
+    return &a->use;
+}
+
+// Where boat b is drawn: its art centred on its deck (as far as it has sailed), or the deck itself (the drawn hull).
+static rect_t boat_view(const boat_t *b)
+{
+    int x0, y0, w, h;
+    boat_deck_rect(b->item, b->hx, b->hy, b->dir, &x0, &y0, &w, &h);
+    rect_t r = { x0 * TILE_SIZE + b->ox, y0 * TILE_SIZE + b->oy, w * TILE_SIZE, h * TILE_SIZE };
+    const frame_bundle_t *a = boat_art(b->item);
+    if (a) r = (rect_t){ r.x + (r.w - a->w) / 2, r.y + (r.h - a->h) / 2, a->w, a->h };
+    return r;
+}
+
+// Pixel (x,y) of b's drawn hull over its w x h px deck: a pointed bow, a rim lit on one side, planks, the helm's wheel.
+static uint16_t boat_hull_px(const boat_t *b, int x, int y, int w, int h)
+{
+    bool along_x = b->dir == PDIR_LEFT || b->dir == PDIR_RIGHT;
+    int  len = along_x ? w : h, wide = along_x ? h : w;
+    int  a = along_x ? x : y, c = along_x ? y : x;                    // px forward of the stern, across
+    if (b->dir == PDIR_LEFT || b->dir == PDIR_UP) a = len - 1 - a;
+    float v = (c + 0.5f) / wide * 2.0f - 1.0f, half = 1.0f;           // -1 .. 1 across
+    int   taper = len / 2 < 22 ? len / 2 : 22;                        // the bow narrows over this many px
+    if (a >= len - taper) { float t = (a + 0.5f - (len - taper)) / taper; half = sqrtf(1.0f - t * t); }
+    if (fabsf(v) > half || (a < 2 && fabsf(v) > 0.8f)) return FB_TRANSPARENT_COLOR;
+    float ha = boat_helm(b->item) * TILE_SIZE + TILE_SIZE / 2.0f, hc = (boat_wide(b->item) - 1) / 2 * TILE_SIZE + TILE_SIZE / 2.0f;
+    float da = a + 0.5f - ha, dc = c + 0.5f - hc, r = sqrtf(da * da + dc * dc);
+    if (r < 6.2f) {                                                   // the wheel
+        if (r > 4.6f) return COLOR_RGB565(110, 70, 36);
+        if (r < 1.6f) return COLOR_RGB565(210, 170, 96);
+        if (fabsf(da) < 0.8f || fabsf(dc) < 0.8f) return COLOR_RGB565(150, 100, 55);
+    }
+    if (fabsf(v) > half - 6.0f / wide || a < 3) return v < 0 ? COLOR_RGB565(176, 120, 66) : COLOR_RGB565(92, 56, 30);   // the rim
+    return c % 4 == 0 ? COLOR_RGB565(118, 76, 42) : COLOR_RGB565(150, 102, 58);                                         // the planks
+}
+
+// Pixel (x,y) of b's look, drawn as `v` (boat_view()). Art frames as TOOL SWING's: 1 = every way,
+// 2 = up/down and sideways, 3 = down, up, sideways, 4 = down, up, left, right; sideways art points right.
+static uint16_t boat_px(const boat_t *b, rect_t v, int x, int y)
+{
+    const frame_bundle_t *a = boat_art(b->item);
+    if (!a) return boat_hull_px(b, x, y, v.w, v.h);
+    static const uint8_t k_pick[4][PDIR_COUNT] = { { 0, 0, 0, 0 }, { 0, 0, 1, 1 }, { 0, 1, 2, 2 }, { 0, 1, 2, 3 } };   // [frames - 1][direction]
+    int n = a->frame_count < 4 ? a->frame_count : 4;
+    if (b->dir == PDIR_LEFT && n < 4) x = v.w - 1 - x;
+    return a->pixels[(size_t)k_pick[n - 1][b->dir] * v.w * v.h + (size_t)y * v.w + x];
+}
+
+// The boats here inside (x,y,w,h), over what's there (map_repaint_rect()); foreground scenery stays in front.
+static void boat_paint_rect(int x, int y, int w, int h)
+{
+    for (int i = 0; i < BOAT_MAX; i++) {
+        const boat_t *b = &s_boats[i];
+        if (!boat_here(b)) continue;
+        rect_t v = boat_view(b);
+        if (!anim_rects_overlap(x, y, w, h, v.x, v.y, v.w, v.h)) continue;
+        int x0 = v.x > x ? v.x : x, x1 = v.x + v.w < x + w ? v.x + v.w : x + w;
+        int y0 = v.y > y ? v.y : y, y1 = v.y + v.h < y + h ? v.y + v.h : y + h;
+        for (int py = y0; py < y1; py++)
+            for (int px = x0; px < x1; px++) {
+                if (map_pixel_layer(px, py)) continue;
+                uint16_t c = boat_px(b, v, px - v.x, py - v.y);
+                if (c != FB_TRANSPARENT_COLOR) draw_pixel(px, py, s_night_shown ? night_px(&s_night_lut, c) : c);
+            }
+    }
+}
+
+// Boat i on screen where it is now (and off where it was), at the end of this frame.
+static void boat_show(int i)
+{
+    boat_t *b = &s_boats[i];
+    rect_t now = boat_here(b) ? boat_view(b) : (rect_t){ 0, 0, 0, 0 };
+    if (b->drawn.w) npc_dirty_add(b->drawn);
+    if (now.w) npc_dirty_add(now);
+    b->drawn = now;
+}
+
+// The shop card: "3x2 deck. Sails ponds, rivers, the sea. Speed 150%."
+static void boat_card_text(item_id_t item, char *out, size_t n)
+{
+    static const char *const k_water[4] = { "ponds", "rivers", "the sea", "lava" };
+    int w = boat_waters(item), len = snprintf(out, n, "%dx%d deck. Sails", boat_len(item), boat_wide(item));
+    for (int k = 0, first = 1; k < 4; k++) {
+        if (!(w & (1 << k)) || len >= (int)n) continue;
+        len += snprintf(out + len, n - len, "%s %s", first ? "" : ",", k_water[k]);
+        first = 0;
+    }
+    if (len < (int)n) snprintf(out + len, n - len, "%s. Speed %d%%.", w ? "" : " nowhere", boat_speed_of(item));
+}
+
+// ---- putting one in the water: taps (nav_plan()) and the arrival (boat_on_action()) ----
+static int boat_tap_aim(int gx, int gy, bool allowed)
+{
+    s_boat_aim = BOAT_AIM_NONE;
+    if (!allowed || !s_map_loaded || !tile_on_map(gx, gy)) return BOAT_AIM_NONE;
+    item_id_t held = inv_held_item();
+    if (dock_post_at(gx, gy) >= 0)                              s_boat_aim = BOAT_AIM_SHOP;   // the boat shop: from its deck, or from a boat
+    else if (boat_is(held) && boat_water_ok(gx, gy, held, -1)) s_boat_aim = BOAT_AIM_LAUNCH;
+    else if (boat_is(held) && tile_water_kind(gx, gy) && boat_deck_at(gx, gy) < 0 && !boat_tile_standable(gx, gy))
+        message(2500, "The %s can't go on that water", item_name(held));
+    return s_boat_aim;
+}
+
+// Standing on reachable tile (x,y): is its neighbour (nx,ny) water the held boat goes in, from a dock spot?
+static bool boat_shore_ok(int aim, int x, int y, int nx, int ny)
+{
+    return aim == BOAT_AIM_LAUNCH && boat_dock_spot(x, y) && boat_water_ok(nx, ny, inv_held_item(), -1);
+}
+
+static void boat_no_shore(int aim)
+{
+    if (aim == BOAT_AIM_LAUNCH) message(2500, "Boats go in the water from a dock");
+    s_boat_aim = BOAT_AIM_NONE;
+}
+
+// A boat of `item` on the water here, its helm on (hx,hy), pointing `dir` (or another way that fits). The index, or -1 (said why).
+static int boat_put_in(item_id_t item, uint8_t quality, int hx, int hy, int dir)
+{
+    int d = -1;
+    for (int k = 0; k < PDIR_COUNT && d < 0; k++) {
+        int dd = k == 0 ? dir : (dir + k) % PDIR_COUNT;
+        if (boat_fits(item, hx, hy, dd, -1)) d = dd;
+    }
+    if (d < 0) { message(2500, "Not enough open water here for the %s", item_name(item)); return -1; }
+    for (int i = 0; i < BOAT_MAX; i++) {
+        boat_t *b = &s_boats[i];
+        if (b->item != ITEM_NONE) continue;
+        *b = (boat_t){ .item = item, .quality = quality, .dir = (uint8_t)d, .inst = s_map_inst, .hx = (int8_t)hx, .hy = (int8_t)hy };
+        snprintf(b->map, sizeof(b->map), "%s", current_map_name());
+        boat_show(i);
+        return i;
+    }
+    message(2500, "There are %d boats on the water already", BOAT_MAX);
+    return -1;
+}
+
+// update_player(): the walk nav_plan() planned arrived — the faced tile is what it was for.
+static bool boat_on_action(void)
+{
+    int aim = s_boat_aim;
+    s_boat_aim = BOAT_AIM_NONE;
+    if (aim == BOAT_AIM_NONE || !s_map_loaded) return false;
+    int tx = s_selected_tile_x, ty = s_selected_tile_y;
+    if (aim == BOAT_AIM_SHOP) {
+        if (dock_post_at(tx, ty) < 0) return false;
+        boat_shop_open();
+        return true;
+    }
+    item_id_t held = inv_held_item();   // BOAT_AIM_LAUNCH: its helm on the faced water, its bow pointing away
+    if (!boat_is(held) || !boat_water_ok(tx, ty, held, -1)) return false;
+    inv_slot_t *s = &s_inv[s_inv_held];
+    if (boat_put_in(held, s->quality, tx, ty, player_dir_from_facing(s_player_facing)) < 0) return true;
+    if (--s->count == 0) *s = (inv_slot_t){ ITEM_NONE, 0, QUALITY_STANDARD };   // (on the water for good)
+    hud_refresh();
+    sfx_play("boat_launch");
+    message(3500, "The %s is in the water - stand at its helm to steer", item_name(held));
+    world_save();
+    return true;
+}
+
+// ---- steering ----
+static int boat_steered(void) { return s_steer; }
+
+static void boat_route_clear(void) { s_route_n = s_route_at = 0; s_route_acc = 0; }
+
+// The player stands on b's helm (as far as it has sailed), facing forward.
+static void boat_put_player(const boat_t *b)
+{
+    int y = b->hy * TILE_SIZE + b->oy + TILE_SIZE - PLAYER_H;
+    s_player_x = b->hx * TILE_SIZE + b->ox;
+    s_player_y = y < PLAYER_MIN_Y ? PLAYER_MIN_Y : y;
+    s_player_facing = k_boat_face[b->dir];
+}
+
+// The steered boat, part way to its next tile, finishes that step at once (the player with it).
+static void boat_snap(void)
+{
+    if (s_steer < 0) return;
+    boat_t *b = &s_boats[s_steer];
+    if ((b->ox || b->oy) && s_route_at < s_route_n) {
+        int st = s_route[s_route_at++];
+        b->hx = (int8_t)((st / 4) % TILE_COLS);
+        b->hy = (int8_t)((st / 4) / TILE_COLS);
+        b->dir = (uint8_t)(st % 4);
+    }
+    b->ox = b->oy = 0;
+    boat_put_player(b);
+    boat_show(s_steer);
+}
+
+// The player leaves the helm: the boat stops where it is (a step under way finished first).
+static void boat_stop(void)
+{
+    boat_snap();
+    boat_route_clear();
+    s_steer = -1;
+}
+
+// Is the steered boat's deck 4-next to tile (tx,ty) (not on it)?
+static bool boat_beside(const boat_t *b, int tx, int ty)
+{
+    int x0, y0, w, h;
+    boat_deck_rect(b->item, b->hx, b->hy, b->dir, &x0, &y0, &w, &h);
+    bool in_x = tx >= x0 && tx < x0 + w, in_y = ty >= y0 && ty < y0 + h;
+    return (in_x && (ty == y0 - 1 || ty == y0 + h)) || (in_y && (tx == x0 - 1 || tx == x0 + w));
+}
+
+// Its whole deck on open water (s_bopen) with its helm on (hx,hy), pointing dir?
+static bool boat_fits_open(item_id_t item, int hx, int hy, int dir)
+{
+    for (int a = 0; a < boat_len(item); a++)
+        for (int c = 0; c < boat_wide(item); c++) {
+            int tx, ty;
+            boat_tile(item, hx, hy, dir, a, c, &tx, &ty);
+            if (!tile_on_map(tx, ty) || !s_bopen[ty][tx]) return false;
+        }
+    return true;
+}
+
+// Plans the steered boat's route: until its deck is over tile (gx,gy) (onto), or right beside it (alongside).
+// A search over its helm tile and heading: each step turns in place about the helm if it has to, then moves a
+// tile ahead — the deck on open water both times. false = it can't get there.
+static bool boat_plan(int gx, int gy, bool onto)
+{
+    boat_snap();
+    boat_t *b = &s_boats[s_steer];
+    for (int ty = 0; ty < TILE_ROWS; ty++)
+        for (int tx = 0; tx < TILE_COLS; tx++) s_bopen[ty][tx] = boat_water_ok(tx, ty, b->item, s_steer);
+    const int n = TILE_ROWS * TILE_COLS * 4;
+    for (int i = 0; i < n; i++) s_bprev[i] = -2;
+    int start = (b->hy * TILE_COLS + b->hx) * 4 + b->dir, qh = 0, qt = 0, goal = -1;
+    s_bprev[start] = -1;
+    s_bqueue[qt++] = (uint16_t)start;
+    while (qh < qt && goal < 0) {
+        int st = s_bqueue[qh++], x = (st / 4) % TILE_COLS, y = (st / 4) / TILE_COLS, d = st % 4;
+        int x0, y0, w, h;
+        boat_deck_rect(b->item, x, y, d, &x0, &y0, &w, &h);
+        bool on = gx >= x0 && gx < x0 + w && gy >= y0 && gy < y0 + h;
+        boat_t at = *b;
+        at.hx = (int8_t)x; at.hy = (int8_t)y; at.dir = (uint8_t)d;
+        if (onto ? on : (!on && boat_beside(&at, gx, gy))) { goal = st; break; }
+        for (int nd = 0; nd < PDIR_COUNT; nd++) {
+            if (nd != d && !boat_fits_open(b->item, x, y, nd)) continue;   // the turn in place
+            int nx = x + k_boat_d[nd][0], ny = y + k_boat_d[nd][1];
+            if (!tile_on_map(nx, ny)) continue;
+            int ns = (ny * TILE_COLS + nx) * 4 + nd;
+            if (s_bprev[ns] != -2 || !boat_fits_open(b->item, nx, ny, nd)) continue;
+            s_bprev[ns] = (int16_t)st;
+            s_bqueue[qt++] = (uint16_t)ns;
+        }
+    }
+    if (goal < 0) return false;
+    int len = 0;
+    for (int st = goal; st != start; st = s_bprev[st]) len++;
+    s_route_n = len; s_route_at = 0; s_route_acc = 0;
+    for (int st = goal, k = len - 1; st != start; st = s_bprev[st], k--) s_route[k] = (uint16_t)st;
+    return true;
+}
+
+// A tap while at a helm (TAP-TO-WALK's nav_tap(), first): the boat sails there — true — or the player walks: false.
+static bool boat_steer_tap(int tap_x, int tap_y)
+{
+    if (s_steer < 0 || !s_map_loaded) return false;
+    boat_t *b = &s_boats[s_steer];
+    int gx = tap_x / TILE_SIZE, gy = tap_y / TILE_SIZE, d = boat_deck_at(gx, gy), kind = tile_water_kind(gx, gy);
+    if (!tile_on_map(gx, gy)) return false;
+    bool water = kind && kind != 16 && d < 0 && place_foot_at(gx, gy) < 0;
+    if (d == s_steer || (!water && boat_beside(b, gx, gy)) || (water && fish_rod_held())) {   // its deck, land beside it, a cast
+        boat_stop();
+        return false;
+    }
+    if (!boat_plan(gx, gy, water)) message(2000, "The %s can't get there", item_name(b->item));
+    return true;
+}
+
+// Once a frame before update_player(): standing still on a helm takes it; at it, the boat sails its route, the player along.
+static void boat_steer_tick(void)
+{
+    if (!s_map_loaded) return;
+    if (s_steer >= 0 && (!boat_here(&s_boats[s_steer]) || s_nav_active)) {   // walked off (a walk began some other way), or it's gone
+        boat_route_clear();
+        s_steer = -1;
+    }
+    if (s_steer < 0) {
+        if (s_nav_active) return;
+        int ptx = (s_player_x + PLAYER_W / 2) / TILE_SIZE, pty = (s_player_y + PLAYER_H - 1) / TILE_SIZE;
+        for (int i = 0; i < BOAT_MAX; i++) {
+            const boat_t *b = &s_boats[i];
+            int sy = pty * TILE_SIZE + TILE_SIZE - PLAYER_H;   // standing right on the tile, not passing over it
+            if (!boat_here(b) || b->hx != ptx || b->hy != pty || s_player_x != ptx * TILE_SIZE || s_player_y != (sy < PLAYER_MIN_Y ? PLAYER_MIN_Y : sy)) continue;
+            s_steer = i;
+            boat_route_clear();
+            s_player_facing = k_boat_face[b->dir];
+            message(2500, "At the %s's helm - tap the water to sail", item_name(b->item));
+            break;
+        }
+        return;
+    }
+    if (s_route_at >= s_route_n) return;
+    boat_t *b = &s_boats[s_steer];
+    s_route_acc += PLAYER_SPEED_Q * s_dev_speed * s_game_ticks * boat_speed_of(b->item) / 100;
+    int px = s_route_acc / 4;
+    s_route_acc %= 4;
+    while (px > 0 && s_route_at < s_route_n) {
+        int st = s_route[s_route_at], nx = (st / 4) % TILE_COLS, ny = (st / 4) / TILE_COLS, nd = st % 4;
+        if (!b->ox && !b->oy && nd != b->dir) b->dir = (uint8_t)nd;   // the turn, in place about the helm
+        int ex = (nx - b->hx) * TILE_SIZE, ey = (ny - b->hy) * TILE_SIZE;
+        int left = abs(ex - b->ox) + abs(ey - b->oy), take = px < left ? px : left;
+        b->ox = (int8_t)(b->ox + (ex > b->ox ? take : ex < b->ox ? -take : 0));
+        b->oy = (int8_t)(b->oy + (ey > b->oy ? take : ey < b->oy ? -take : 0));
+        px -= take;
+        if (b->ox == ex && b->oy == ey) {   // on the next tile
+            b->hx = (int8_t)nx; b->hy = (int8_t)ny; b->ox = b->oy = 0;
+            s_route_at++;
+        }
+    }
+    boat_put_player(b);
+    boat_show(s_steer);
+    if (s_route_at >= s_route_n) { boat_route_clear(); world_save(); }   // there: where it stopped is kept
+}
+
+// tp_travel(): the player came through a teleporter at boat b's helm (b < 0: not at one) and stands on its arrival
+// tile. On the water there, the boat comes along — its helm on it, the same way round if that fits (else another way).
+static void boat_follow_tp(int i)
+{
+    if (i < 0 || i >= BOAT_MAX || s_boats[i].item == ITEM_NONE) return;
+    boat_t *b = &s_boats[i];
+    boat_route_clear();
+    b->ox = b->oy = 0;
+    int tx = (s_player_x + PLAYER_W / 2) / TILE_SIZE, ty = (s_player_y + PLAYER_H - 1) / TILE_SIZE, kind = tile_water_kind(tx, ty);
+    if (!kind || kind == 16) { s_steer = -1; return; }   // landed on the ground: the boat stays where it was
+    if (b->drawn.w && boat_here(b)) npc_dirty_add(b->drawn);   // (the same map: off where it was)
+    b->drawn = (rect_t){ 0, 0, 0, 0 };
+    snprintf(b->map, sizeof(b->map), "%s", current_map_name());
+    b->inst = s_map_inst;
+    b->hx = (int8_t)tx;
+    b->hy = (int8_t)ty;
+    for (int k = 0; k < PDIR_COUNT; k++) {
+        int d = (b->dir + k) % PDIR_COUNT;
+        if (boat_fits(b->item, tx, ty, d, i)) { b->dir = (uint8_t)d; break; }
+    }
+    s_steer = i;
+    boat_put_player(b);
+    boat_show(i);
+}
+
+// A map loaded (load_map()): its boats go on screen on the next frame; nobody's at a helm until they stand at one.
+static void boat_map_loaded(void)
+{
+    s_boat_aim  = BOAT_AIM_NONE;
+    s_boat_show = true;
+    s_steer     = -1;
+    boat_route_clear();
+    for (int i = 0; i < BOAT_MAX; i++) s_boats[i].drawn = (rect_t){ 0, 0, 0, 0 };
+}
+
+// Once a game frame (before the shoppers' repaints): a map that just loaded shows its boats.
+static void boat_tick(void)
+{
+    if (!s_map_loaded || !s_boat_show) return;
+    s_boat_show = false;
+    for (int i = 0; i < BOAT_MAX; i++)
+        if (boat_here(&s_boats[i])) boat_show(i);
+}
+
+// ---- the save (world.txt) ----
+static void boat_reset(void)
+{
+    memset(s_boats, 0, sizeof(s_boats));
+    s_boat_aim = BOAT_AIM_NONE;
+    s_steer    = -1;
+    boat_route_clear();
+}
+
+static void boat_write(FILE *f, char *line, size_t n)
+{
+    for (int i = 0; i < BOAT_MAX; i++) {
+        const boat_t *b = &s_boats[i];
+        if (b->item == ITEM_NONE || b->item >= item_count) continue;
+        snprintf(line, n, "boat %s %d %d %u %d %d %s\n", item_get(b->item)->id, b->quality, b->dir, b->inst, b->hx, b->hy, b->map);
+        fputs(line, f);
+    }
+}
+
+// A "boat" line back. false = not one.
+static bool boat_read_line(char *const *w, int nw)
+{
+    if (nw != 8 || strcmp(w[0], "boat") != 0) return false;
+    item_id_t it = item_find(w[1]);
+    int q = atoi(w[2]), dir = atoi(w[3]), inst = atoi(w[4]), tx = atoi(w[5]), ty = atoi(w[6]);
+    if (!boat_is(it) || dir < 0 || dir >= PDIR_COUNT || inst < 0 || inst > 65535 || !tile_on_map(tx, ty) || strlen(w[7]) > TP_NAME_MAX) {
+        ESP_LOGW(TAG, "save: the boat \"%s\" can't come back — skipped", w[1]);
+        return true;
+    }
+    for (int i = 0; i < BOAT_MAX; i++) {
+        boat_t *b = &s_boats[i];
+        if (b->item != ITEM_NONE) continue;
+        *b = (boat_t){ .item = it, .quality = (uint8_t)(q > 0 && q <= 255 && item_quality_ok((uint8_t)q) ? q : QUALITY_STANDARD),
+                       .dir = (uint8_t)dir, .inst = (uint16_t)inst, .hx = (int8_t)tx, .hy = (int8_t)ty };
+        snprintf(b->map, sizeof(b->map), "%s", w[7]);
+        return true;
+    }
+    ESP_LOGW(TAG, "save: more than %d boats — \"%s\" skipped", BOAT_MAX, w[1]);
+    return true;
+}
+
+#if DEV_LINK_ENABLED
+// DEV LINK "boat": the boats · "boat put ID": one on the faced water (its helm there) · "boat go X Y": at a helm,
+// sail there · "boat shop": the boat shop.
+static void boat_dev_cmd(int nw, char **w)
+{
+    if (nw >= 3 && strcmp(w[1], "put") == 0) {
+        item_id_t it = item_find(w[2]);
+        if (!boat_is(it)) { dev_out("@@ERR %s isn't a boat", w[2]); return; }
+        int i = boat_put_in(it, QUALITY_STANDARD, s_selected_tile_x, s_selected_tile_y, player_dir_from_facing(s_player_facing));
+        if (i < 0) dev_out("@@ERR no room for it on the faced water");
+        else       dev_out("@@OK %s helm at %d %d dir %d", w[2], s_boats[i].hx, s_boats[i].hy, s_boats[i].dir);
+    } else if (nw >= 4 && strcmp(w[1], "go") == 0) {
+        int gx = atoi(w[2]), gy = atoi(w[3]);
+        if (s_steer < 0) { dev_out("@@ERR stand at a helm first"); return; }
+        if (!tile_on_map(gx, gy)) { dev_out("@@ERR off the map"); return; }
+        if (boat_steer_tap(gx * TILE_SIZE + TILE_SIZE / 2, gy * TILE_SIZE + TILE_SIZE / 2)) dev_out("@@OK %d steps", s_route_n);
+        else dev_out("@@OK that's a walk, not a sail");
+    } else if (nw >= 2 && strcmp(w[1], "shop") == 0) {
+        dev_out(boat_shop_open() ? "@@OK boat shop" : "@@ERR no boats for sale");
+    } else {
+        for (int i = 0; i < BOAT_MAX; i++) {
+            const boat_t *b = &s_boats[i];
+            if (b->item == ITEM_NONE) continue;
+            dev_out("@@BOAT %d %s on %s inst %u helm %d %d dir %d%s%s", i, item_get(b->item)->id, b->map, b->inst, b->hx, b->hy, b->dir,
+                    boat_here(b) ? " (here)" : "", i == s_steer ? " (steering)" : "");
+        }
+        dev_out("@@OK %s", s_steer >= 0 ? "at a helm" : "not steering");
+    }
+}
+#endif
 
 // ============================================================
 //  FISH BOOK — the inventory's book button (UI_FISHBOOK): every fish in the
@@ -23876,7 +25378,7 @@ static void craft_dev_cmd(char *args)
 //  (%) — a full set is 100. Against Hot / Cold it slows heating up / cooling
 //  down by that much (all four: you can stay); against Volcanic / Glacial it
 //  stretches the time from TEMP_EXTREME_MIN (15 min) to GEAR_EXTREME_MIN (7 h)
-//  — temp_push() in ENERGY. tools/make_gear.py made the Thermal (heat) and
+//  — temp_push() in ENERGY; half that while it snows on Glacial. tools/make_gear.py made the Thermal (heat) and
 //  Arctic (cold) sets; the General store sells them.
 //  The screen: the four slots down the left (tap one to take it off), the
 //  player as they look in the middle (tap to turn them round), the gear in
@@ -24095,15 +25597,16 @@ static void gear_dev_cmd(int nw, char **w)
 //  Dev link: "skill" (all), "skill NAME XP" (set).
 // ============================================================
 #define SKILL_LEVEL_MAX FISH_LEVEL_MAX
-static const char *const k_skill_name[SKILL_COUNT] = { "Farming", "Foraging", "Mining", "Fishing" };
-static const char *const k_skill_word[SKILL_COUNT] = { "farming", "foraging", "mining", "fishing" };
+static const char *const k_skill_name[SKILL_COUNT] = { "Farming", "Foraging", "Mining", "Combat", "Fishing" };
+static const char *const k_skill_word[SKILL_COUNT] = { "farming", "foraging", "mining", "combat", "fishing" };
 static const char *const k_skill_perk[SKILL_COUNT] = {
     "Crops, fruit and animal goods: better quality",
     "Forage: better quality; trees: more wood",
     "Rocks: a chance of one more of each drop",
+    "More health, harder hits",
     "A bigger catch bar, rarer fish",
 };
-static int32_t s_skill_xp[SKILL_FISHING];   // farming, foraging, mining (fishing: s_fish_xp)
+static int32_t s_skill_xp[SKILL_FISHING];   // farming, foraging, mining, combat (fishing: s_fish_xp)
 
 static int32_t skill_xp_of(int k) { return k == SKILL_FISHING ? s_fish_xp : s_skill_xp[k]; }
 
@@ -24171,8 +25674,8 @@ static bool skills_open(void)
 
 static void skills_draw(void)
 {
-    static const char *const k_icon[SKILL_COUNT] = { "hoe", "daffodil", "pickaxe", "fishing_rod" };
-    const int px = INV_PANEL_X, py = INV_PANEL_Y, pw = INV_PANEL_W, row_h = 42;
+    static const char *const k_icon[SKILL_COUNT] = { "hoe", "daffodil", "pickaxe", "rusty_sword", "fishing_rod" };
+    const int px = INV_PANEL_X, py = INV_PANEL_Y, pw = INV_PANEL_W, row_h = SKILL_COUNT > 4 ? 34 : 42, cs = row_h - 6 < INV_CELL ? row_h - 6 : INV_CELL;
     inv_draw_tabs(py, INV_TAB_SKILLS, false);
     draw_leather_panel(px, py, pw, INV_PANEL_H);
     inv_draw_tabs(py, INV_TAB_SKILLS, true);
@@ -24181,15 +25684,15 @@ static void skills_draw(void)
     for (int k = 0; k < SKILL_COUNT; k++) {
         int x = INV_GRID_X, y = INV_GRID_Y + k * row_h, lvl = skill_level(k);
         int32_t xp = skill_xp_of(k), lo = lvl ? k_fish_level_xp[lvl - 1] : 0, hi = lvl < SKILL_LEVEL_MAX ? k_fish_level_xp[lvl] : lo;
-        fill_round_rect(x, y, INV_CELL, INV_CELL, 5, INV_COL_SLOT, 255);
-        draw_round_rect(x, y, INV_CELL, INV_CELL, 5, 1, INV_COL_EDGE);
+        fill_round_rect(x, y, cs, cs, 5, INV_COL_SLOT, 255);
+        draw_round_rect(x, y, cs, cs, 5, 1, INV_COL_EDGE);
         item_id_t ic = item_find(k_icon[k]);
-        if (ic != ITEM_NONE) draw_item_icon(x + INV_CELL / 2, y + INV_CELL / 2, ic);
+        if (ic != ITEM_NONE) draw_item_icon(x + cs / 2, y + cs / 2, ic);
         char t[40];
-        draw_text(x + INV_CELL + 8, y + 1, k_skill_name[k], 2, INV_COL_TEXT);
+        draw_text(x + cs + 8, y + 1, k_skill_name[k], 2, INV_COL_TEXT);
         snprintf(t, sizeof(t), "LEVEL %d", lvl);
         draw_text(x + INV_GRID_W - text_width(t, 2), y + 1, t, 2, INV_COL_GOLD);
-        const int bx = x + INV_CELL + 8, bw = INV_GRID_W - INV_CELL - 8, by = y + 18;   // the bar to the next level
+        const int bx = x + cs + 8, bw = INV_GRID_W - cs - 8, by = y + 18;   // the bar to the next level
         fill_rect(bx, by, bw, 7, INV_COL_SLOT_DK);
         int fill = hi > lo ? (int)((int64_t)(bw - 2) * (xp - lo) / (hi - lo)) : bw - 2;
         if (fill > 0) fill_rect(bx + 1, by + 1, fill, 5, COLOR_RGB565(96, 184, 72));
@@ -25589,6 +27092,7 @@ static void restore_scene(void)
         anim_draw_all_current();
         nav_trail_paint_rect(0, 0, LCD_H_RES, LCD_V_RES);
         trough_paint_rect(0, 0, LCD_H_RES, LCD_V_RES);
+        boat_paint_rect(0, 0, LCD_H_RES, LCD_V_RES);
         ranch_paint_rect(0, 0, LCD_H_RES, LCD_V_RES);
         machine_paint_rect(0, 0, LCD_H_RES, LCD_V_RES);
         farmfx_paint_rect(0, 0, LCD_H_RES, LCD_V_RES);
@@ -27504,6 +29008,7 @@ static bool world_save(void)
         }
         fish_rig_write(f, line, sizeof(line));   // the fishing line's bait and tackle, the fishing xp (FISHING)
         req_write(f, line, sizeof(line));        // which of today's photo requests are done (MARKET BOARD)
+        boat_write(f, line, sizeof(line));       // the boat being sailed, the moored ones (BOATS + DOCKS)
         ok = !ferror(f);
         if (fclose(f) != 0) ok = false;
     }
@@ -27554,6 +29059,7 @@ static bool world_read(int slot, bool apply, world_info_t *info)
         energy_reset();                  // ...or from before energy: full, no home yet (ENERGY)
         memset(s_gear, 0, sizeof(s_gear));   // ...or from before gear: none worn (GEAR)
         skills_reset();                  // ...or from before skills: all level 0 (SKILLS)
+        boat_reset();                    // ...or from before boats: on foot, none moored (BOATS + DOCKS)
     }
     int day = -1, minute = -1;
     while (fgets(line, sizeof(line), f)) {
@@ -27576,6 +29082,10 @@ static bool world_read(int slot, bool apply, world_info_t *info)
             if (v[2] >= DIR_CENTER && v[2] <= DIR_DOWN_RIGHT && v[2] != DIR_CENTER) s_player_facing = (direction_t)v[2];
         } else if (mapsave_match(word, nw, "energy #", v, &any)) {   // ENERGY
             s_energy = v[0] < ENERGY_PASSOUT + 1 ? ENERGY_PASSOUT + 1 : v[0] > ENERGY_MAX ? ENERGY_MAX : v[0];
+        } else if (mapsave_match(word, nw, "health #", v, &any)) {   // (MONSTERS + COMBAT)
+            hp_load(v[0]);
+        } else if (mapsave_match(word, nw, "sling * # #", v, &any)) {   // ...what's in the slingshot
+            sling_load(any, v[0], v[1]);
         } else if (mapsave_match(word, nw, "skill * #", v, &any)) {   // (SKILLS)
             skills_load(any, v[0]);
         } else if (mapsave_match(word, nw, "gear # * #", v, &any)) {   // (GEAR)
@@ -27594,6 +29104,7 @@ static bool world_read(int slot, bool apply, world_info_t *info)
             if (v[0] > 0 && v[0] < 65535) s_load_inst_next = (uint16_t)v[0];   // the map below is that building's inside
         } else if (mapsave_match(word, nw, "requests # #", v, &any)) {   // MARKET BOARD
             req_load(v[0], v[1]);
+        } else if (boat_read_line(word, nw)) {   // "sailing" / "moored" (BOATS + DOCKS)
         } else if (mapsave_match(word, nw, "fishxp #", v, &any)) {   // FISHING
             fish_rig_load_xp(v[0]);
         } else if (mapsave_match(word, nw, "rig bait * # #", v, &any)) {
@@ -27656,6 +29167,7 @@ static void world_new(void)
     energy_reset();                     // full energy, no home yet (ENERGY)
     memset(s_gear, 0, sizeof(s_gear));  // no gear on (GEAR)
     skills_reset();                     // every skill at level 0 (SKILLS)
+    boat_reset();                       // on foot, no boats moored (BOATS + DOCKS)
     museum_reset();                     // nothing donated (MUSEUM)
     memset(s_inv, 0, sizeof(s_inv));
     item_custom_reset();                // no photo items from another game
@@ -27727,15 +29239,16 @@ static int64_t clock_key(void)
     int64_t key = ((int64_t)clock_weekday() * MIN_PER_DAY + shown) * (NIGHT_STAGES + 1) + s_night_shown;
     key = key * (SEASON_DAYS * 4) + clock_season() * SEASON_DAYS + clock_season_day() - 1;   // (SEASONS)
     key = key * 1024 + (s_energy - ENERGY_PASSOUT);                                      // (ENERGY: 0..ENERGY_MAX + 10)
-    key = key * 2 + (s_clock_h == CLOCK_H_MAX);                                           // (TEMPERATURE: the bar, and how full)
-    return key * 202 + temp_pct() + 101;
+    key = key * 4 + s_clock_bars;                                                         // (TEMPERATURE, MONSTERS + COMBAT: the bars, and how full)
+    key = key * 202 + temp_pct() + 101;
+    return key * 1000 + (s_hp < 0 ? 0 : s_hp > 999 ? 999 : s_hp);
 }
 
 // TEMPERATURE: the bar under the energy — from the middle, red to the right as the player
 // heats up, blue to the left as they cool down; on it "HOT 45%" / "COLD 30%", or the climate.
-static void clock_draw_temp(void)
+static void clock_draw_temp(int y)
 {
-    const int y = CLOCK_H - 5, bx = 20, bw = CLOCK_W - bx - 9, bh = 11, mid = bx + bw / 2;
+    const int bx = 20, bw = CLOCK_W - bx - 9, bh = 11, mid = bx + bw / 2;
     int pct = temp_pct();
     uint16_t hot = COLOR_RGB565(222, 70, 40), cold = COLOR_RGB565(70, 150, 236);
     uint16_t bulb = pct > 0 ? hot : pct < 0 ? cold : INV_COL_TEXT_DIM;
@@ -27752,6 +29265,31 @@ static void clock_draw_temp(void)
     if (pct > 0)      snprintf(t, sizeof(t), "HOT %d%%", pct);
     else if (pct < 0) snprintf(t, sizeof(t), "COLD %d%%", -pct);
     else              snprintf(t, sizeof(t), "%s", s_climate < CLIMATE_COUNT ? k_climate_name[s_climate] : "Indoors");
+    int tx = bx + (bw - text_width(t, 1)) / 2;
+    draw_text(tx + 1, y + 3, t, 1, INV_COL_EDGE);
+    draw_text(tx, y + 2, t, 1, COLOR_WHITE);
+}
+
+// MONSTERS + COMBAT: the health bar at y — a heart, red filling, "now/max" on it.
+static void clock_draw_hp(int y)
+{
+    const int bx = 20, bw = CLOCK_W - bx - 9, bh = 11, mx = hp_max();
+    uint16_t red = COLOR_RGB565(214, 48, 56);
+    fill_circle(11, y + 4, 2, red);   // a little heart
+    fill_circle(15, y + 4, 2, red);
+    fill_rect(10, y + 5, 7, 2, red);
+    fill_rect(11, y + 7, 5, 1, red);
+    fill_rect(12, y + 8, 3, 1, red);
+    draw_pixel(13, y + 9, red);
+    fill_rect(bx, y, bw, bh, INV_COL_SLOT_DK);
+    int fill = s_hp <= 0 ? 0 : (bw - 2) * s_hp / (mx ? mx : 1);
+    if (fill > 0) {
+        fill_rect(bx + 1, y + 1, fill, bh - 2, red);
+        fill_rect(bx + 1, y + 1, fill, 2, rgb565_blend(red, COLOR_WHITE, 90));
+    }
+    draw_rect(bx, y, bw, bh, INV_COL_EDGE);
+    char t[16];
+    snprintf(t, sizeof(t), "%d/%d", s_hp, mx);
     int tx = bx + (bw - text_width(t, 1)) / 2;
     draw_text(tx + 1, y + 3, t, 1, INV_COL_EDGE);
     draw_text(tx, y + 2, t, 1, COLOR_WHITE);
@@ -27866,7 +29404,9 @@ static bool clock_render(void)
     draw_text(35, 28, t, 2, INV_COL_TEXT);
     draw_text(35 + tw + 3, 35, ampm, 1, INV_COL_TEXT_DIM);
     clock_draw_energy();   // (ENERGY)
-    if (H == CLOCK_H_MAX) clock_draw_temp();   // (TEMPERATURE)
+    int bar_y = CLOCK_H - 5;
+    if (s_clock_bars & 1) { clock_draw_temp(bar_y); bar_y += CLOCK_TEMP_H; }   // (TEMPERATURE)
+    if (s_clock_bars & 2) clock_draw_hp(bar_y);                                // (MONSTERS + COMBAT)
 
     s_fb = prev_fb; s_fb_w = prev_w; s_fb_h = prev_h;
     s_clock_img_key = key;
@@ -27904,7 +29444,9 @@ static void clock_invalidate(void)
 static void clock_world_tick(void)
 {
     if (!s_map_loaded) return;   // the boot diagnostics screen is written where the panel would go
-    int h = temp_bar_wanted() ? CLOCK_H_MAX : CLOCK_H;   // (TEMPERATURE: the bar comes and goes)
+    uint8_t bars = (uint8_t)((temp_bar_wanted() ? 1 : 0) | (hp_bar_wanted() ? 2 : 0));   // (the bars come and go)
+    int h = CLOCK_H + CLOCK_TEMP_H * ((bars & 1) + (bars >> 1));
+    if (bars != s_clock_bars) { s_clock_bars = bars; s_clock_img_key = -1; }
     if (h != s_clock_h) {
         int old = s_clock_h;
         s_clock_h       = h;
@@ -27947,6 +29489,25 @@ static void clock_world_tick(void)
 //  to 7:00 each sprinkler that watered this morning throws drops in an arc
 //  from its nozzle to random spots in its square — a 3x3 blob in the air —
 //  and each lands with the rain's splash (cells 1-3).
+//
+//  Snow: on a Glacial map (CLIMATE) the same spells come down as snow
+//  (snow_now(); rain_now() is false there). The same drops, drawn instead
+//  as white flakes (FX_CELL_SNOW..): falling slowly, swaying side to side,
+//  lying a moment where they land, then gone. It darkens the world like
+//  rain, but waters nothing and wets nothing; the cold comes twice as fast
+//  in it (TEMPERATURE: temp_push()). The Dev Tools switch makes it snow there.
+//
+//  Storms and blizzards: STORM_PCT % of rain spells are thunderstorms (all
+//  the drops, the world one stage darker again, and every FLASH_MIN_MS ..
+//  FLASH_MAX_MS a lightning flash — the whole screen half white for a
+//  moment, world_repaint_all() — with "thunder" a little after);
+//  BLIZZARD_PCT % of a Glacial map's snow spells are blizzards (every
+//  flake, fast and blown sideways; the cold comes TEMP_BLIZZARD_X times as
+//  fast). Which spell is which is the same weather hash (spell_heavy()).
+//  Fog: FOG_DAY_CHANCE % of mornings (FOG_FROM_MIN .. FOG_TO_MIN), outdoors,
+//  not Dry or Volcanic, when nothing falls: soft wisps (FX_CELL_FOG) drift
+//  across in the same drop pool, fading in and out.
+//  Dev link: "weather auto|clear|rain|storm|snow|blizzard|fog" (s_wx_force).
 // ============================================================
 #define RAIN_DAY_CHANCE 25       // % of game days with a rain spell
 #define RAIN_DROPS      64       // drops in the air at once in full rain (each costs a small repaint per frame)
@@ -27958,6 +29519,33 @@ static void clock_world_tick(void)
 #define RAIN_SPLASH_MS  70       // each of the 3 splash frames
 #define RAIN_RAMP_MS    2500     // how long the rain takes to build up / die away
 #define RAIN_CELL       16
+#define FX_CELL_SNOW    5        // s_rain_at[].cell of a big snowflake...
+#define FX_CELL_SNOW_SM 6        // ...a small one...
+#define FX_CELL_SNOW_DOT 7       // ...and one melting where it lay
+#define SNOW_FALL_PX_S  55       // snow's fall speed, px per second
+#define SNOW_SWAY_PX    4        // how far a flake sways either side
+#define SNOW_SWAY_FALL  90       // px it falls in one sway there and back
+#define SNOW_LIE_MS     450      // each of the 2 frames a flake lies where it landed
+#define WX_RAIN         0        // rain_drop_t.kind / s_wx_kind: rain...
+#define WX_SNOW         1        // ...snow...
+#define WX_FOG          2        // ...a fog wisp
+#define STORM_PCT       30       // % of rain spells that are thunderstorms
+#define BLIZZARD_PCT    35       // % of a Glacial map's snow spells that are blizzards
+#define RAIN_DROPS_LIGHT 44      // ordinary rain's drops (a storm: all RAIN_DROPS)
+#define SNOW_FLAKES     40       // ordinary snow's flakes (a blizzard: all)
+#define FLASH_MIN_MS    5000     // a storm's lightning: every this long...
+#define FLASH_MAX_MS    16000    // ...to this long
+#define FLASH_SHOW_MS   90       // ...shows this long; the thunder comes 0.4 .. 2 s after
+#define FOG_DAY_CHANCE  15       // % of mornings with fog...
+#define FOG_FROM_MIN    (6 * 60) // ...from 6:00...
+#define FOG_TO_MIN      (10 * 60) // ...to 10:00
+#define FOG_WISPS       44       // wisps drifting at once
+#define FOG_W           64       // a wisp's size, px
+#define FOG_H           20
+#define FOG_ALPHA       175      // ...how thick its middle is (255 = solid)
+#define FOG_DRIFT_PX_S  7        // ...how fast it drifts right
+#define FX_CELL_FOG     8        // s_rain_at[].cell of a fog wisp (its alpha in .a)
+enum { WXF_CLEAR, WXF_RAIN, WXF_STORM, WXF_SNOW, WXF_BLIZZARD, WXF_FOG };   // s_wx_force
 
 // Maps it never rains on, by current_map_name() (e.g. "cave" for cave.map).
 static const char *const s_map_dry[] = {
@@ -27966,9 +29554,10 @@ static const char *const s_map_dry[] = {
 
 typedef struct {
     bool     live;
-    int8_t   splash;            // -1 = falling, else the splash frame (0..2) on screen
-    int16_t  land_x, land_y;    // where it hits the ground
-    int16_t  fall;              // px it falls from where it appears
+    uint8_t  kind;              // WX_RAIN, WX_SNOW, WX_FOG (s_wx_kind when it started)
+    int8_t   splash;            // -1 = falling, else the splash frame (0..2) on screen (snow: lying, 0..1)
+    int16_t  land_x, land_y;    // where it hits the ground (a wisp: where it starts)
+    int16_t  fall;              // px it falls from where it appears (a wisp: how long it lasts, ms)
     uint32_t t_ms;              // when it appeared (falling) / landed (splashing)
 } rain_drop_t;
 
@@ -27983,12 +29572,19 @@ typedef struct {                // a sprinkler's drop
 static rain_drop_t  s_rain[RAIN_DROPS];
 static spray_drop_t s_spray[SPRAY_DROPS];
 static rect_t      s_rain_drawn[FX_DROPS];   // where each is drawn (w == 0: nowhere), on screen and clipped to it — the rain's, then the spray's
-static struct { int16_t ox, oy; int8_t cell; } s_rain_at[FX_DROPS];   // ...and its cell's top-left and sheet cell (FX_CELL_SPRAY: a spray drop)
+static struct { int16_t ox, oy; int8_t cell; uint8_t a; } s_rain_at[FX_DROPS];   // ...and its cell's top-left and sheet cell (FX_CELL_SPRAY: a spray drop; a: a fog wisp's alpha)
 static int16_t     s_spray_src[PLACE_MAX];    // the sprinklers spraying this frame (spray_begin())...
 static int         s_spray_src_n, s_spray_weight;   // ...how many, and the drops they want together
 static int         s_rain_force   = -1;        // Dev Tools: -1 auto, 0 never, 1 always (not saved)
 static int         s_rain_was_on  = -1;        // last frame's rain_now(); -1 = not known yet (no message for it)
 static int32_t     s_rain_level   = 0;         // 0..RAIN_RAMP_MS: how much of the rain is falling
+static uint8_t     s_wx_kind      = WX_RAIN;   // ...and what: rain, snow or fog (this frame; kept while it dies away)
+static bool        s_wx_heavy     = false;     // ...a storm or a blizzard (spell_heavy())
+static int         s_wx_force     = -1;        // dev link "weather": -1 auto, else WXF_* (not saved)
+static uint32_t    s_flash_next   = 0;         // a storm's next lightning (esp ms; 0 = not set)...
+static uint32_t    s_flash_until  = 0;         // ...the one on screen till then...
+static uint32_t    s_thunder_at   = 0;         // ...and its thunder
+static void world_repaint_all(void);           // DAY / NIGHT: the whole screen again (after a flash)
 static uint32_t    s_rain_last_ms = 0;
 
 static uint32_t weather_hash(uint32_t day)
@@ -28056,7 +29652,7 @@ static bool rain_outside_now(void)
 // Is it raining on the loaded map right now?
 static bool rain_now(void)
 {
-    if (s_rain_force >= 0) return s_rain_force;
+    if (s_rain_force >= 0) return s_rain_force && s_climate != CLIMATE_GLACIAL;   // (there it snows instead)
     if (!map_gets_rain() || !climate_rains()) return false;   // (CLIMATE: Dry, Volcanic, Glacial)
     int32_t day = (int32_t)s_clock_day;
     int     min = (int)s_clock_min, start, len;
@@ -28064,16 +29660,63 @@ static bool rain_now(void)
     return rain_spell(day - 1, &start, &len) && min + MIN_PER_DAY < start + len;   // yesterday's, past midnight
 }
 
+// The day whose rain spell is falling now (one can run past midnight); -1 = none.
+static int32_t spell_day_now(void)
+{
+    int32_t day = (int32_t)s_clock_day;
+    int     min = (int)s_clock_min, start, len;
+    if (rain_spell(day, &start, &len) && min >= start && min < start + len) return day;
+    if (rain_spell(day - 1, &start, &len) && min + MIN_PER_DAY < start + len) return day - 1;
+    return -1;
+}
+
+// Is the spell falling now a heavy one — a thunderstorm (rain), a blizzard (snow)?
+static bool spell_heavy(void)
+{
+    if (s_wx_force >= 0) return s_wx_force == WXF_STORM || s_wx_force == WXF_BLIZZARD;
+    int32_t d = spell_day_now();
+    return d >= 0 && (weather_hash((uint32_t)d) >> 24) % 100 < (uint32_t)(s_climate == CLIMATE_GLACIAL ? BLIZZARD_PCT : STORM_PCT);
+}
+
+// Is it snowing on the loaded map right now? Only on a Glacial one (CLIMATE), in the rain's spells.
+static bool snow_now(void)
+{
+    if (s_climate != CLIMATE_GLACIAL || !map_gets_rain()) return false;
+    return rain_outside_now();   // (the spells, or the Dev Tools switch)
+}
+
+static bool storm_now(void)    { return rain_now() && spell_heavy(); }
+static bool blizzard_now(void) { return snow_now() && spell_heavy(); }
+
+// Is there morning fog on the loaded map now?
+static bool fog_now(void)
+{
+    if (!map_gets_rain()) return false;
+    if (s_wx_force >= 0) return s_wx_force == WXF_FOG;
+    if (s_climate == CLIMATE_DRY || s_climate == CLIMATE_VOLCANIC) return false;
+    int m = (int)s_clock_min;
+    if (m < FOG_FROM_MIN || m >= FOG_TO_MIN || rain_now() || snow_now()) return false;
+    return weather_hash((uint32_t)s_clock_day ^ 0x5BD1E995u) % 100 < FOG_DAY_CHANCE;
+}
+
 // A drop starts falling (somewhere above where it will land). `midair`: as if
 // it had been falling a while already — rain that's already going doesn't all start at the top.
 static void rain_spawn(rain_drop_t *d, uint32_t now, bool midair)
 {
     d->live   = true;
+    d->kind   = s_wx_kind;
     d->splash = -1;
+    if (d->kind == WX_FOG) {   // a wisp: somewhere on (or just left of) the screen, for 4..8 s
+        d->land_x = (int16_t)((int)(esp_random() % (LCD_H_RES + FOG_W)) - FOG_W);
+        d->land_y = (int16_t)(esp_random() % (LCD_V_RES - FOG_H));
+        d->fall   = (int16_t)(4000 + esp_random() % 4000);
+        d->t_ms   = now - (midair ? esp_random() % (uint32_t)d->fall : 0);
+        return;
+    }
     d->land_x = (int16_t)(esp_random() % LCD_H_RES);
     d->land_y = (int16_t)(esp_random() % LCD_V_RES);
     d->fall   = (int16_t)(80 + esp_random() % 320);
-    uint32_t fall_ms = (uint32_t)d->fall * 1000 / RAIN_FALL_PX_S;
+    uint32_t fall_ms = (uint32_t)d->fall * 1000 / (d->kind == WX_SNOW ? SNOW_FALL_PX_S * (s_wx_heavy ? 5 : 2) / 2 : RAIN_FALL_PX_S);
     d->t_ms   = now - (midair ? esp_random() % fall_ms : 0);
 }
 
@@ -28101,16 +29744,70 @@ static void rain_draw_cell(int cell, int ox, int oy, rect_t clip)
     }
 }
 
+// A fog wisp's move (rain_move()): drifting right, fading in over its first quarter and out over its last.
+static void fog_move(int i, rain_drop_t *d, uint32_t now, int want)
+{
+    uint32_t t = now - d->t_ms, life = (uint32_t)d->fall;
+    if (t >= life) {
+        d->live = false;
+        if (i < want) rain_spawn(d, now, false);
+        return;
+    }
+    uint32_t edge = life / 4, in = t < life - t ? t : life - t;
+    int x = d->land_x + (int)(t * FOG_DRIFT_PX_S / 1000), y = d->land_y;
+    s_rain_drawn[i]   = rect_clip_screen((rect_t){ x, y, FOG_W, FOG_H });
+    s_rain_at[i].ox   = (int16_t)x;
+    s_rain_at[i].oy   = (int16_t)y;
+    s_rain_at[i].cell = FX_CELL_FOG;
+    s_rain_at[i].a    = (uint8_t)((FOG_ALPHA * (in < edge ? in : edge) / (edge ? edge : 1)) & 0xF0);   // (in 16 steps: it repaints when one changes)
+}
+
+// A snowflake's move (rain_move()): where its 3x3 goes and which look.
+static void snow_move(int i, rain_drop_t *d, uint32_t now, int want)
+{
+    int x = d->land_x, y = d->land_y, cell;
+    if (d->splash < 0) {
+        int fallen = (int)((now - d->t_ms) * (SNOW_FALL_PX_S * (s_wx_heavy ? 5 : 2) / 2) / 1000);   // (a blizzard: 2.5x as fast)
+        if (fallen >= d->fall) { d->splash = 0; d->t_ms = now; }
+        else {
+            int   rem = d->fall - fallen;   // px still to fall: the sway is 0 where it lands
+            float ph  = (float)((d->land_x * 7 + d->land_y * 3) % 64) * (6.2831853f / 64);
+            x += (s_wx_heavy ? rem * 3 / 4 : rem / 6) + (int)lroundf(SNOW_SWAY_PX * (sinf(rem * (6.2831853f / SNOW_SWAY_FALL) + ph) - sinf(ph)));   // (a blizzard: blown sideways)
+            y -= rem;
+        }
+    }
+    if (d->splash >= 0) {
+        int frame = (int)((now - d->t_ms) / SNOW_LIE_MS);
+        if (frame >= 2) {                          // melted: a new flake, if the snow still wants one
+            d->live = false;
+            if (i >= want) return;
+            rain_spawn(d, now, false);
+            return;
+        }
+        d->splash = (int8_t)frame;
+        cell = frame ? FX_CELL_SNOW_DOT : FX_CELL_SNOW_SM;
+    } else {
+        cell = i % 3 ? FX_CELL_SNOW_SM : FX_CELL_SNOW;
+    }
+    s_rain_drawn[i]   = rect_clip_screen((rect_t){ x - 1, y - 1, 3, 3 });
+    s_rain_at[i].ox   = (int16_t)(x - 1);
+    s_rain_at[i].oy   = (int16_t)(y - 1);
+    s_rain_at[i].cell = (int8_t)cell;
+}
+
 // Moves drop i on (or ends it, or starts it): where it's drawn now goes in
 // s_rain_drawn[i] / s_rain_at[i] (w == 0: nowhere this frame).
 static void rain_move(int i, uint32_t now, int want)
 {
     rain_drop_t *d = &s_rain[i];
     s_rain_drawn[i].w = 0;
+    if (d->live && d->kind != s_wx_kind) d->live = false;   // rain to snow to fog (another map, the morning): it starts again
     if (!d->live) {
         if (i >= want) return;
         rain_spawn(d, now, s_rain_level >= RAIN_RAMP_MS / 2);
     }
+    if (d->kind == WX_SNOW) { snow_move(i, d, now, want); return; }
+    if (d->kind == WX_FOG)  { fog_move(i, d, now, want); return; }
     int ox = 0, oy = 0, cell = 0;
     if (d->splash < 0) {
         int fallen = (int)((now - d->t_ms) * RAIN_FALL_PX_S / 1000);
@@ -28236,11 +29933,109 @@ static void spray_draw_drop(int ox, int oy, rect_t clip)
     }
 }
 
-// Draws drop j (the rain's or a sprinkler's) where it is now, inside `clip`.
+// A snowflake: a 3x3 with its top-left at (ox,oy) — `cell` FX_CELL_SNOW / _SM / _DOT — only inside `clip`, skipping the HUD.
+static void snow_draw_flake(int cell, int ox, int oy, rect_t clip)
+{
+    static const uint8_t k_a[3][9] = {
+        {  90, 200,  90, 200, 255, 200,  90, 200,  90 },   // big
+        {   0, 120,   0, 120, 240, 120,   0, 120,   0 },   // small
+        {   0,   0,   0,   0, 150,   0,   0,   0,   0 },   // melting
+    };
+    const uint8_t *a = k_a[cell - FX_CELL_SNOW];
+    uint16_t c = COLOR_RGB565(250, 252, 255);
+    if (s_night_shown) c = night_px(&s_night_lut, c);
+    for (int k = 0; k < 9; k++) {
+        int x = ox + k % 3, y = oy + k / 3;
+        if (!a[k] || x < clip.x || y < clip.y || x >= clip.x + clip.w || y >= clip.y + clip.h || ui_overlay_covers(x, y)) continue;
+        uint16_t *p = &s_fb[y * LCD_H_RES + x];
+        *p = rgb565_blend(*p, c, a[k]);
+    }
+}
+
+// ---- Thick fog over the whole map: every repaint of the world gets it (fog_apply(), from map_repaint_rect_ex(),
+// anim_paint_instance() and world_repaint_all()), clear in a circle round the player — FOG_CLEAR_R px, thickening
+// to FOG_FULL_A at FOG_EDGE_R and beyond. As they walk, the ring round them is repainted (weather_tick()); the fog
+// coming or going repaints everything. The wisps still drift over it.
+#define FOG_CLEAR_R  36
+#define FOG_EDGE_R   96
+#define FOG_FULL_A   205   // how thick it is away from the player (255 = nothing to see)
+static bool s_fog_full = false;           // fog_apply() fogs (fog is falling here now)
+static int  s_fog_cx = -1, s_fog_cy = -1; // the clear circle's middle, as last drawn
+
+static void fog_apply(int x, int y, int w, int h)
+{
+    if (!s_fog_full) return;
+    int x0 = x < 0 ? 0 : x, y0 = y < 0 ? 0 : y, x1 = x + w > s_fb_w ? s_fb_w : x + w, y1 = y + h > s_fb_h ? s_fb_h : y + h;
+    uint16_t c = COLOR_RGB565(214, 220, 226);
+    if (s_night_shown) c = night_px(&s_night_lut, c);
+    const int32_t r0 = FOG_CLEAR_R * FOG_CLEAR_R, r1 = FOG_EDGE_R * FOG_EDGE_R;
+    const uint32_t kmul = (uint32_t)FOG_FULL_A * 65536u / (uint32_t)(r1 - r0);
+    uint32_t cr = c >> 11, cg = (c >> 5) & 63, cb = c & 31;
+    for (int yy = y0; yy < y1; yy++) {
+        int32_t dy = yy - s_fog_cy, dy2 = dy * dy;
+        uint16_t *row = &s_fb[yy * s_fb_w];
+        for (int xx = x0; xx < x1; xx++) {
+            int32_t dx = xx - s_fog_cx, d2 = dx * dx + dy2;
+            if (d2 <= r0) continue;
+            uint32_t k = d2 >= r1 ? FOG_FULL_A : (uint32_t)(d2 - r0) * kmul >> 16, ik = 256 - k, d = row[xx];
+            row[xx] = (uint16_t)(((((d >> 11) * ik + cr * k) >> 8) << 11) | (((((d >> 5) & 63) * ik + cg * k) >> 8) << 5) | (((d & 31) * ik + cb * k) >> 8));
+        }
+    }
+}
+
+// Once a game frame (weather_tick()): the fog coming / going repaints the world; the player moving, the ring round them.
+static void fog_tick(bool on)
+{
+    int cx = s_player_x + PLAYER_W / 2, cy = s_player_y + PLAYER_H - 12;
+    if (on != s_fog_full) {
+        s_fog_full = on;
+        s_fog_cx = cx; s_fog_cy = cy;
+        world_repaint_all();
+        return;
+    }
+    if (!on || (cx == s_fog_cx && cy == s_fog_cy)) return;
+    rect_t was = { s_fog_cx - FOG_EDGE_R, s_fog_cy - FOG_EDGE_R, 2 * FOG_EDGE_R, 2 * FOG_EDGE_R };
+    s_fog_cx = cx; s_fog_cy = cy;
+    rect_t now = { cx - FOG_EDGE_R, cy - FOG_EDGE_R, 2 * FOG_EDGE_R, 2 * FOG_EDGE_R };
+    rect_t u = rect_clip_screen(rect_union(was, now));
+    if (u.w > 0) map_redraw_over(u.x, u.y, u.w, u.h);
+}
+
+// A fog wisp: a soft white oval, FOG_W x FOG_H with its top-left at (ox,oy), thickest (alpha a) in the middle.
+static void fog_draw_wisp(int ox, int oy, uint8_t a, rect_t clip)
+{
+    if (!a) return;
+    uint16_t c = COLOR_RGB565(226, 232, 238);
+    if (s_night_shown) c = night_px(&s_night_lut, c);
+    int y0 = oy > clip.y ? oy : clip.y, y1 = oy + FOG_H < clip.y + clip.h ? oy + FOG_H : clip.y + clip.h;
+    int x0 = ox > clip.x ? ox : clip.x, x1 = ox + FOG_W < clip.x + clip.w ? ox + FOG_W : clip.x + clip.w;
+    if (x0 >= x1 || y0 >= y1) return;
+    // the HUD test per pixel only if this bit touches one of its pieces at all (as rain_draw_cell())
+    bool hud = (x0 < HOTBAR_X + HOTBAR_W && HOTBAR_X < x1 && y0 < s_hotbar_y + HOTBAR_H && s_hotbar_y < y1) ||
+               (x0 < TOUCH_BTN_X + TOUCH_BTN_SIZE && TOUCH_BTN_X < x1 && y0 < TOUCH_BTN_Y + TOUCH_BTN_SIZE && TOUCH_BTN_Y < y1) ||
+               (s_clock_on_screen && x0 < CLOCK_X + CLOCK_W && CLOCK_X < x1 && y0 < CLOCK_Y + s_clock_h && CLOCK_Y < y1) ||
+               (s_msg_on_screen && x0 < s_msg_rect.x + s_msg_rect.w && s_msg_rect.x < x1 && y0 < s_msg_rect.y + s_msg_rect.h && s_msg_rect.y < y1);
+    for (int y = y0; y < y1; y++) {
+        int dy = (2 * (y - oy) + 1 - FOG_H) * FOG_W / FOG_H;   // (scaled so the oval is a circle)
+        for (int x = x0; x < x1; x++) {
+            int dx = 2 * (x - ox) + 1 - FOG_W, r2 = dx * dx + dy * dy;
+            if (r2 >= FOG_W * FOG_W || (hud && ui_overlay_covers(x, y))) continue;
+            uint16_t *p = &s_fb[y * LCD_H_RES + x], d = *p;
+            uint32_t k = (uint32_t)a * (uint32_t)(FOG_W * FOG_W - r2) / (FOG_W * FOG_W), ik = 256 - k;   // (a quick blend: no divisions)
+            *p = (uint16_t)(((((d >> 11) * ik + (c >> 11) * k) >> 8) << 11) | (((((d >> 5) & 63) * ik + ((c >> 5) & 63) * k) >> 8) << 5) |
+                            (((d & 31) * ik + (c & 31) * k) >> 8));
+        }
+    }
+}
+
+// Draws drop j (the rain's, the snow's, the fog's or a sprinkler's) where it is now, inside `clip`.
 static void fx_draw(int j, rect_t clip)
 {
-    if (s_rain_at[j].cell == FX_CELL_SPRAY) spray_draw_drop(s_rain_at[j].ox, s_rain_at[j].oy, clip);
-    else                                    rain_draw_cell(s_rain_at[j].cell, s_rain_at[j].ox, s_rain_at[j].oy, clip);
+    int cell = s_rain_at[j].cell;
+    if (cell == FX_CELL_SPRAY)     spray_draw_drop(s_rain_at[j].ox, s_rain_at[j].oy, clip);
+    else if (cell == FX_CELL_FOG)  fog_draw_wisp(s_rain_at[j].ox, s_rain_at[j].oy, s_rain_at[j].a, clip);
+    else if (cell >= FX_CELL_SNOW) snow_draw_flake(cell, s_rain_at[j].ox, s_rain_at[j].oy, clip);
+    else                           rain_draw_cell(cell, s_rain_at[j].ox, s_rain_at[j].oy, clip);
 }
 
 // Once per game frame, LAST (after everything else in the world is drawn):
@@ -28259,21 +30054,32 @@ static void weather_tick(void)
     if (dt > 100) dt = 100;                    // back from a menu / map load: don't jump
     s_rain_last_ms = now;
 
-    bool on = rain_now();
-    if (s_rain_was_on >= 0 && on != s_rain_was_on) message(2500, on ? "It's starting to rain" : "The rain has stopped");
-    s_rain_was_on = on;
-    s_rain_level += on ? (int32_t)dt : -(int32_t)dt;
+    bool snow = snow_now(), on = snow || rain_now(), fog = !on && fog_now(), heavy = on && spell_heavy();
+    int  what = on ? (snow ? 3 : 1) + heavy : fog ? 5 : 0;   // 0 nothing, 1 rain, 2 a storm, 3 snow, 4 a blizzard, 5 fog
+    static const char *const k_start[6] = { "", "It's starting to rain", "A thunderstorm is rolling in!", "It's starting to snow", "A blizzard is blowing in!", "Fog has rolled in" };
+    static const char *const k_stop[6]  = { "", "The rain has stopped", "The storm has passed", "The snow has stopped", "The blizzard has died down", "The fog has lifted" };
+    if (s_rain_was_on >= 0 && what != s_rain_was_on) message(2500, "%s", what ? k_start[what] : k_stop[s_rain_was_on]);
+    s_rain_was_on = what;
+    if (what) { s_wx_kind = snow ? WX_SNOW : on ? WX_RAIN : WX_FOG; s_wx_heavy = heavy; }   // (kept as it was while it dies away)
+    s_rain_level += what ? (int32_t)dt : -(int32_t)dt;
     if (s_rain_level < 0) s_rain_level = 0;
     if (s_rain_level > RAIN_RAMP_MS) s_rain_level = RAIN_RAMP_MS;
-    int want = (int)((int64_t)s_rain_level * RAIN_DROPS / RAIN_RAMP_MS);   // drops allowed in the air
+    int most = s_wx_kind == WX_FOG ? FOG_WISPS : s_wx_heavy ? RAIN_DROPS : s_wx_kind == WX_SNOW ? SNOW_FLAKES : RAIN_DROPS_LIGHT;
+    int want = (int)((int64_t)s_rain_level * most / RAIN_RAMP_MS);   // drops allowed in the air
     int spray_want = spray_begin();                                        // ...and sprinkler drops (SPRINKLERS + SCARECROWS)
 
     rect_t marker = { s_marker_x, s_marker_y, NAV_MARKER_SIZE, NAV_MARKER_SIZE };
     bool   marker_up = s_marker_on && s_marker_frame >= 0;
     for (int i = 0; i < FX_DROPS; i++) {
         rect_t was = s_rain_drawn[i];
+        typeof(s_rain_at[0]) at_was = s_rain_at[i];
         if (i < RAIN_DROPS) rain_move(i, now, want);
         else                spray_move(i - RAIN_DROPS, now, spray_want);
+        rect_t now_r = s_rain_drawn[i];
+        if (now_r.w && now_r.x == was.x && now_r.y == was.y && now_r.w == was.w && now_r.h == was.h && s_rain_at[i].cell == at_was.cell &&
+            s_rain_at[i].a == at_was.a && s_rain_at[i].ox == at_was.ox && s_rain_at[i].oy == at_was.oy &&
+            !(s_player_bg_valid && anim_rects_overlap(now_r.x, now_r.y, now_r.w, now_r.h, s_player_bg_rect.x, s_player_bg_rect.y, s_player_bg_rect.w, s_player_bg_rect.h)))
+            continue;   // just as it was (a slow fog wisp, most frames): nothing to repaint
         rect_t u = rect_union(was, s_rain_drawn[i]);
         if (u.w <= 0) continue;
         bool with_marker = false;
@@ -28289,12 +30095,29 @@ static void weather_tick(void)
         // map_changed = false: rain moves over the map, so the hotbar keeps its image (re-rendering it
         // for every drop that touched it was a third of the rain's time)
         PROF(PROF_RAIN_REPAINT, map_repaint_rect_ex(u.x, u.y, u.w, u.h, with_marker ? nav_marker_paint : NULL, false));
-        for (int j = 0; j <= i; j++) {
+        for (int j = 0; j < FX_DROPS; j++) {   // every drop in it (one not moved yet this frame: where it was — its own repaint follows)
             rect_t r = s_rain_drawn[j];
             if (r.w && anim_rects_overlap(r.x, r.y, r.w, r.h, u.x, u.y, u.w, u.h))
                 PROF(PROF_RAIN_DRAW, fx_draw(j, u));
         }
         PROF(PROF_RAIN_COMPOSE, compose_end());
+    }
+
+    fog_tick(what == 5);   // thick fog over the map, clear round the player
+
+    // a storm's lightning: the whole screen half white a moment, then the thunder
+    if (s_flash_until && (int32_t)(now - s_flash_until) >= 0) { s_flash_until = 0; world_repaint_all(); }
+    if (s_thunder_at && (int32_t)(now - s_thunder_at) >= 0) { s_thunder_at = 0; sfx_play("thunder"); }
+    if (what == 2 && s_rain_level >= RAIN_RAMP_MS && !s_flash_until) {
+        if (!s_flash_next) s_flash_next = now + FLASH_MIN_MS + esp_random() % (FLASH_MAX_MS - FLASH_MIN_MS);
+        else if ((int32_t)(now - s_flash_next) >= 0) {
+            s_flash_next = 0;
+            for (int k = 0; k < LCD_H_RES * LCD_V_RES; k++) s_fb[k] = (uint16_t)(((s_fb[k] >> 1) & 0x7BEF) + 0x7BEF);   // half way to white
+            s_flash_until = now + FLASH_SHOW_MS;
+            s_thunder_at  = now + 400 + esp_random() % 1600;
+        }
+    } else if (what != 2) {
+        s_flash_next = 0;
     }
 }
 
@@ -28302,7 +30125,7 @@ static void weather_tick(void)
 static void rain_dev_label_update(void)
 {
     snprintf(s_rain_dev_label, sizeof(s_rain_dev_label), "Rain: %s (tap to change)",
-             s_rain_force < 0 ? (rain_now() ? "auto - raining now" : "auto - dry now") : s_rain_force ? "always" : "never");
+             s_rain_force < 0 ? (snow_now() ? "auto - snowing now" : rain_now() ? "auto - raining now" : "auto - dry now") : s_rain_force ? "always" : "never");
 }
 static void menu_action_rain_toggle(void)
 {
@@ -28365,11 +30188,12 @@ static int night_stage_for(int minute_of_day)
 }
 
 // The stage the world should be in now: the clock's, one darker while it
-// rains (WEATHER) — but never past the darkest, which rain leaves as it is.
+// rains or snows (WEATHER) — but never past the darkest, which rain leaves as it is.
 static int night_stage_wanted(void)
 {
     int stage = night_stage_for((int)s_clock_min);
-    if (rain_now() && stage < NIGHT_STAGES) stage++;
+    if ((rain_now() || snow_now()) && stage < NIGHT_STAGES) stage++;
+    if (spell_heavy() && (rain_now() || snow_now()) && stage < NIGHT_STAGES) stage++;   // (a storm, a blizzard: darker again)
     return stage;
 }
 
@@ -28461,6 +30285,7 @@ static void night_copy_arena(int stage)
     farm_unbake_masks();           // the crops' art went with the old pixels
     place_unbake_masks();          // so did the props' and buildings'
     soil_bake_all();               // the farmland, under everything on it
+    ice_bake_all();                // the holes in the ice (ICE HOLES)
     grass_bake_all();              // the grass, the same (ANIMALS eat it)
     ground_rebake_all();           // and dropped items stay where they lie
     museum_rebake_all();           // and the museum's donations on their shelves
@@ -28480,10 +30305,13 @@ static void world_repaint_all(void)
     anim_draw_all_current();
     nav_trail_paint_rect(0, 0, LCD_H_RES, LCD_V_RES);
     trough_paint_rect(0, 0, LCD_H_RES, LCD_V_RES); // hay in the troughs...
+    boat_paint_rect(0, 0, LCD_H_RES, LCD_V_RES);   // boats moored on the water...
     ranch_paint_rect(0, 0, LCD_H_RES, LCD_V_RES);  // the farm animals...
     machine_paint_rect(0, 0, LCD_H_RES, LCD_V_RES); // ready machines' icons...
     farmfx_paint_rect(0, 0, LCD_H_RES, LCD_V_RES);  // crows...
     npc_paint_rect(0, 0, LCD_H_RES, LCD_V_RES);   // the shoppers, in the new tint
+    monster_paint_rect(0, 0, LCD_H_RES, LCD_V_RES); // the monsters (MONSTERS + COMBAT)
+    fog_apply(0, 0, LCD_H_RES, LCD_V_RES);          // the fog over everything but round the player (WEATHER)
     player_draw_fresh();           // in the new stage's tint
     hud_draw_overlay();
     draw_touch_menu_button();
@@ -28653,9 +30481,11 @@ void update_input(void)
     if (in.touch_tap && fish_tap()) {}                                 // a fishing line is out: hook / reel in (FISHING)
     else if (fish_line_out()) {}                                       // ...and the player stays put meanwhile
     else if (in.touch_tap && npc_tap(in.touch_x, in.touch_y)) {}       // a shopper: they talk (NPC SHOPPERS)
+    else if (in.touch_tap && combat_tap(in.touch_x, in.touch_y)) {}    // a weapon in hand, a monster near: swing at it (MONSTERS + COMBAT)
     else if (in.touch_tap)  nav_tap(in.touch_x, in.touch_y);          // walk to the tapped spot (or stop a drawn path)
     else if (in.touch_hold) nav_touch_held(in.touch_x, in.touch_y);   // still held: dragging draws a path
     if (!in.touch_tap && !in.touch_hold) s_drag = DRAG_NONE;           // no finger on the game: not drawing
+    boat_steer_tick();        // at a boat's helm: the boat sails on, the player with it (BOATS + DOCKS)
     PROF(PROF_PLAYER, update_player());   // redraws the player too if the held item changed
     place_holo_tick();        // holding a prop or building: its hologram in front of the player
     shelf_tick();             // a restocked shelf shows its stock; customers buy from shelves
@@ -28664,7 +30494,11 @@ void update_input(void)
     crow_tick();              // crows peck where they ate a crop, and fly off (SPRINKLERS + SCARECROWS)
     bat_tick();               // now and then at night, a bat flies over (BATS)
     temp_tick();              // a hot or cold climate heats or cools the player (TEMPERATURE)
+    ice_tick();               // holes in the ice freeze over at 6:00 (ICE HOLES)
+    spawn_tick();             // ...and the random rocks come up again (SPAWNS)
     tree_fx_tick();           // leaves drifting down, a felled tree coming down (TREES)
+    boat_tick();              // a map that just loaded: its boats come on screen (BOATS + DOCKS)
+    monster_tick();          // the monsters move, hunt, hit and die (MONSTERS + COMBAT) — repainted with the shoppers below
     PROF(PROF_MARKET,
          ranch_tick();        // farm animals wander, graze, lay, sleep (ANIMALS) — repainted with the shoppers below
          market_tick());      // shoppers and bidders (MARKET), here and on every other map
@@ -28816,7 +30650,7 @@ static int      s_sleep_prop = -1;      // UI_SLEEP: the bed prop tapped (s_plac
 static bool     s_sleep_note = false;   // UI_SLEEP is the pass-out note instead (ENERGY): just an OK button
 static uint32_t s_sleep_lost = 0;       // ...the money they lost
 static void passout_note_open(uint32_t lost);
-enum { PASSOUT_TIRED, PASSOUT_HEAT, PASSOUT_COLD };   // ENERGY: why they passed out
+enum { PASSOUT_TIRED, PASSOUT_HEAT, PASSOUT_COLD, PASSOUT_HURT };   // ENERGY: why they passed out (HURT: MONSTERS + COMBAT)
 static uint8_t  s_passout_why    = PASSOUT_TIRED;     // ...(the note says; HEAT / COLD: a BACKPACK, not money)
 static int      s_passout_packed = 0;                 // ...the stacks left in the backpack (-1: nowhere to leave it)
 static bool     s_passout_hospital = false;           // ...they woke in the hospital (else at home)
@@ -28882,7 +30716,7 @@ static void passout_note_draw(void)
     draw_text_centered(SLEEP_X + INV_BTN + 16, SLEEP_Y + 17, SLEEP_W - 2 * (INV_BTN + 16), "YOU PASSED OUT", INV_COL_TEXT, INV_COL_SHINE);
     char t[64];
     const int x = SLEEP_X + 16, w = SLEEP_W - 32;
-    if (s_passout_why != PASSOUT_TIRED) {   // the heat or the cold (TEMPERATURE): a backpack
+    if (s_passout_why == PASSOUT_HEAT || s_passout_why == PASSOUT_COLD) {   // the heat or the cold (TEMPERATURE): a backpack
         draw_text_clip(x, SLEEP_Y + 50, s_passout_why == PASSOUT_HEAT ? "The heat was too much and you collapsed." : "The cold was too much and you collapsed.", 1, INV_COL_TEXT, w);
         draw_text_clip(x, SLEEP_Y + 64, s_passout_hospital ? "A local got you to the hospital," : "A local found you and carried you home,", 1, INV_COL_TEXT, w);
         if (s_passout_packed > 0) {
@@ -28898,7 +30732,7 @@ static void passout_note_draw(void)
         sleep_button(0, "OK", COLOR_RGB565(70, 160, 80));
         return;
     }
-    draw_text_clip(x, SLEEP_Y + 50, "You worked until you collapsed.", 1, INV_COL_TEXT, w);
+    draw_text_clip(x, SLEEP_Y + 50, s_passout_why == PASSOUT_HURT ? "The monsters got the better of you." : "You worked until you collapsed.", 1, INV_COL_TEXT, w);
     draw_text_clip(x, SLEEP_Y + 64, "A local found you lying there and", 1, INV_COL_TEXT, w);
     draw_text_clip(x, SLEEP_Y + 78, s_passout_hospital ? "brought you to the hospital." : "carried you home to bed.", 1, INV_COL_TEXT, w);
     if (s_sleep_lost) {
@@ -28973,6 +30807,8 @@ static void sleep_through(bool passed_out, uint32_t lost)
     for (int i = 0; i < GROUND_MAX; i++)                                 // ...baked now, so it fades in with the rest
         if (s_ground[i].count > 0 && !s_ground[i].baked) ground_bake(i);
     energy_wake(tired, lost);                                            // (ENERGY)
+    mon_clear();                                                         // waking on a mining map: a fresh lot of monsters (MONSTERS + COMBAT)
+    s_spawn.mon_due = s_spawn.mining && s_spawn.mon_n > 0 && s_spawn.mon_pool_n > 0;
     mapsave_flush();
     world_save();
 
@@ -29046,6 +30882,7 @@ static void energy_reset(void)
 {
     s_energy          = ENERGY_MAX;
     s_temp            = 0;
+    combat_reset();                      // (MONSTERS + COMBAT)
     s_passout_pending = false;
     s_home_map[0]     = '\0';
     s_home_inst       = 0;
@@ -29055,6 +30892,7 @@ static void energy_write(FILE *f, char *line, size_t n)
 {
     snprintf(line, n, "energy %d\ntemp %d\n", s_energy, s_temp);
     fputs(line, f);
+    hp_write(f, line, n);   // (MONSTERS + COMBAT)
     if (!s_home_map[0]) return;
     snprintf(line, n, "home %s %u %d %d\n", s_home_map, s_home_inst, s_home_x, s_home_y);
     fputs(line, f);
@@ -29147,7 +30985,9 @@ static bool energy_home_spot(int *x, int *y)
 //  comfortable in TEMP_EASE_MIN; the other extreme pulls it back at least as
 //  fast. GEAR cuts it: against Hot / Cold by the worn pieces' share
 //  (all four: never), against Volcanic / Glacial it stretches the time up to
-//  GEAR_EXTREME_MIN (7 hours) with all four (gear_protect_pct()).
+//  GEAR_EXTREME_MIN (7 hours) with all four (gear_protect_pct()). In the
+//  snow on Glacial (WEATHER: snow_now()) it all goes TEMP_SNOW_X times as fast:
+//  7.5 minutes bare, 3.5 hours in a full set.
 //  Shown as a bar under the energy (CLOCK: clock_draw_temp()) whenever the
 //  climate heats or cools, or the player isn't comfortable yet. From
 //  TEMP_SWEAT_PCT the player sweats (beads running down the face), from
@@ -29161,6 +31001,8 @@ static bool energy_home_spot(int *x, int *y)
 #define TEMP_EASE_MIN    60         // back to comfortable from the edge, elsewhere
 
 #define GEAR_EXTREME_MIN (7 * 60)   // Volcanic / Glacial in a full set of the right gear
+#define TEMP_SNOW_X      2          // Glacial while it snows (WEATHER): this many times as fast (7.5 min .. 3.5 h)
+#define TEMP_BLIZZARD_X  3          // ...in a blizzard (5 min .. 2 h 20)
 
 static int32_t s_temp_at    = -1;   // the game minute (day * MIN_PER_DAY + minute) temp_tick() last counted
 static uint8_t s_temp_warned = 0;   // 0, 1 (50 %), 2 (80 %): the warnings given since it was last under 40 %
@@ -29178,7 +31020,7 @@ static int temp_push(void)
     }
     case CLIMATE_VOLCANIC:
     case CLIMATE_GLACIAL: {
-        int v = TEMP_MAX / (TEMP_EXTREME_MIN + (GEAR_EXTREME_MIN - TEMP_EXTREME_MIN) * p / 100);
+        int v = TEMP_MAX * (blizzard_now() ? TEMP_BLIZZARD_X : snow_now() ? TEMP_SNOW_X : 1) / (TEMP_EXTREME_MIN + (GEAR_EXTREME_MIN - TEMP_EXTREME_MIN) * p / 100);
         return heat ? v : -v;
     }
     default:
@@ -29260,6 +31102,7 @@ static void energy_wake(bool tired, uint32_t lost)
 {
     s_energy = tired ? ENERGY_MAX / 2 : ENERGY_MAX;
     s_temp   = 0;   // (TEMPERATURE: a night at home)
+    s_hp     = (int16_t)hp_max();   // (MONSTERS + COMBAT)
     s_temp_at = -1;
     if (lost) ESP_LOGI(TAG, "energy: passed out — lost $%lu", (unsigned long)lost);
 }
@@ -29288,7 +31131,7 @@ static void passout_travel(void)
     if (!s_passout_pending || ui_screen_open() || tool_swinging()) return;   // (the swing that did it lands first)
     s_passout_pending = false;
     uint32_t lost = 0;
-    if (s_passout_why == PASSOUT_TIRED) {      // worn out: someone went through their pockets
+    if (s_passout_why == PASSOUT_TIRED || s_passout_why == PASSOUT_HURT) {   // worn out / knocked out: someone went through their pockets
         lost = money_get() * PASSOUT_LOSS_PCT / 100;   // (MONEY_MAX * 10 fits)
         if (lost > PASSOUT_LOSS_MAX) lost = PASSOUT_LOSS_MAX;
         money_add(-(int32_t)lost);
@@ -29342,6 +31185,1109 @@ static void energy_dev_cmd(int nw, char **w)
         s_energy = v <= ENERGY_PASSOUT ? ENERGY_PASSOUT + 1 : v > ENERGY_MAX ? ENERGY_MAX : v;
     }
     dev_out("@@OK energy %d/%d home %s %u %d %d", s_energy, ENERGY_MAX, s_home_map[0] ? s_home_map : "-", s_home_inst, s_home_x, s_home_y);
+}
+#endif
+
+// ============================================================
+//  MONSTERS + COMBAT — Stardew Valley style fighting on the mining maps.
+//
+//  Health: the player has up to hp_max() (HP_BASE, + HP_PER_LEVEL a combat
+//  level — SKILLS), shown as a red bar in the clock panel on a mining map or
+//  while hurt (CLOCK: clock_draw_hp()). A monster touching them takes its
+//  damage off, knocks them back and leaves them unhittable for
+//  PLAYER_HIT_MS. At 0 they pass out (PASSOUT_HURT, ENERGY: the hospital,
+//  money gone like being worn out). Off the mining maps it comes back, 1 hp
+//  every HP_REGEN_MIN game minutes; a night's sleep fills it. world.txt
+//  "health N".
+//
+//  Monsters (monsters.h, assets/monsters/): on a mining map (SPAWNS' file:
+//  "monsters N", "monster <id> W") a fresh lot of N comes up every time the
+//  player arrives — the first game frame after the map loads, on free tiles
+//  (spawn_tile_ok()) at least MON_SPAWN_AWAY tiles from them. Not saved.
+//  Each one: IDLE (wanders), REST (a hider: its disguise), WAKE (pops out),
+//  CHASE (comes at the player — or keeps off, flies in straight lines,
+//  hops, darts, charges, as its abilities say), DYING (its death frames),
+//  DOWN (a reviver lying there), PARTS (its bits flying out, then gone).
+//  Drawn into map_repaint_rect() like the shoppers (monster_paint_rect()),
+//  behind foreground scenery unless it flies; moving ones repaint through
+//  npc_dirty_add() (flushed by market_tick()).
+//
+//  Fighting: hold a weapon (an item with "weapon N" and "tool 1" — tools/
+//  slice_monsters.py made Stardew's) and tap near the player or on a monster
+//  close by: they turn that way and swing (TOOL SWING); mid-swing every
+//  monster in reach (WEAPON_REACH px in front) takes N +-20% (+2% a combat
+//  level, 1 in 20 a double), less its defense, at least 1, and is knocked
+//  back (a club: further). Any other tool's swing does 1. At 0 hp: its
+//  drops on the ground around it, combat xp, its death.
+//  Weapons are Stardew's (tools/slice_monsters.py): "weapon_min" .. "weapon_max"
+//  damage, "weapon_speed" (each point: the swing 8 % quicker / slower — a
+//  dagger's is quicker, a club's slower: weapon_swipe_ms()), "weapon_crit"
+//  (tenths of a %: the chance of a hit doing 3x, more with
+//  "weapon_crit_power" %), "weapon_defense" (taken off what the player is
+//  hit for while it's held), "weapon_weight" (knocks further).
+//  Shots (PROJECTILES below): a monster with MON_SHOOTS shoots its proj
+//  pictures at the player; a slingshot ("slingshot" N = its multiplier)
+//  shoots what's in it (s_sling — drop anything on it in the bag: stones,
+//  ore... "ammo" N or k_ammo[] says how hard, anything else 1): Stardew's
+//  ammo x 1/2 .. 2 x ammo + 1, times N. World.txt "sling <id> N Q".
+//  Every monster has its own sounds (mon_sfx()): "<id>_hit", "_die",
+//  "_wake" (popping out / noticing the player), "_attack" — or the names
+//  its file gives (the Monsters tab).
+//  Dev link: "mon [list|spawn ID|clear|kill]", "hp [N]".
+// ============================================================
+#define MON_MAX            16
+#define MON_SPAWN_AWAY     6      // tiles from the player, at least, where monsters come up
+#define MON_HURT_MS        160    // the white flash after a hit
+#define MON_KNOCK_PX       14     // how far a hit knocks a monster back...
+#define MON_KNOCK_MS       160    // ...over this long
+#define MON_PART_MS        650    // its bits flying out after it dies
+#define MON_REVIVE_MS      10000  // a collapsed reviver gets up after this
+#define MON_HEAL_MS        6000   // a healer heals this often...
+#define MON_HEAL_PCT       25     // ...this much of everyone's hp near it (within 4 tiles)
+#define MON_CHARGE_WAIT_MS 500    // a charger winds up...
+#define MON_CHARGE_MS      450    // ...and dashes this long, at 3x its speed
+#define MON_CHARGE_GAP_MS  2200   // ...at most this often
+#define MON_HOP_MS         380    // a hopper moves this long, then rests this long
+#define MON_LOSE_MS        4000   // out of 2x its wake range this long: it gives up (a hider hides again)
+#define MON_ATTACK_SHOW_MS 300    // its attack frames show this long when it hurts the player
+#define HP_BASE            100
+#define HP_PER_LEVEL       5
+#define HP_REGEN_MIN       2      // off a mining map: 1 hp back every this many game minutes
+#define PLAYER_HIT_MS      1200   // unhittable after a hit
+#define PLAYER_KNOCK_PX    14
+#define WEAPON_REACH       26     // px in front of the player a swing reaches
+#define COMBAT_TAP_PX      56     // a tap this near the player swings (with a monster awake near)
+
+enum { MS_IDLE, MS_REST, MS_WAKE, MS_CHASE, MS_WAIT, MS_DASH, MS_DYING, MS_DOWN, MS_PARTS };
+
+typedef struct {
+    bool     on, moving, revived;
+    uint8_t  def;                    // s_monsters index
+    uint8_t  state, dir;             // dir: 0 down, 1 right, 2 up, 3 left (MON_SEQ_* order)
+    int16_t  hp;
+    int32_t  xq, yq;                 // its feet (bottom middle), quarter pixels
+    int16_t  vx, vy;                 // quarter px a tick: a straight flier's way, a dash's
+    int8_t   jx, jy;                 // an erratic one's dart
+    int16_t  kx, ky;                 // a knockback: px over MON_KNOCK_MS
+    uint32_t t_ms, anim_ms;          // its state started / its animation's clock
+    uint32_t hurt_until, knock_from, think_ms, lost_ms, heal_ms, attack_until, wander_ms, shot_ms;
+    rect_t   drawn;
+    struct { int16_t x, y, vx, vy; uint8_t k; } part[MON_PARTICLES];   // PARTS: top-left px, px/s
+    uint8_t  part_n;
+} monster_t;
+
+static monster_t s_mon[MON_MAX];
+static int16_t   s_hp            = HP_BASE;
+static uint32_t  s_player_hit_until = 0;
+static bool      s_dev_god = false;     // dev link "god on": nothing hurts the player
+static int       s_hp_seen_min   = -1;
+
+static int  hp_max(void)          { return HP_BASE + HP_PER_LEVEL * skill_level(SKILL_COMBAT); }
+static bool mining_map(void)      { return s_spawn.mining; }
+static bool hp_bar_wanted(void)   { return s_map_loaded && (mining_map() || s_hp < hp_max()); }
+static uint32_t mon_now(void)     { return (uint32_t)(esp_timer_get_time() / 1000); }
+static bool mon_alive(const monster_t *m) { return m->on && m->state != MS_DYING && m->state != MS_DOWN && m->state != MS_PARTS; }
+
+// ---- where it is, what it shows ----
+static int mon_fx(const monster_t *m) { return m->xq >> 2; }
+static int mon_fy(const monster_t *m) { return m->yq >> 2; }
+
+static rect_t mon_view_rect(const monster_t *m)
+{
+    const monster_def_t *d = s_monsters[m->def];
+    if (m->state == MS_PARTS) {
+        rect_t r = { 0, 0, 0, 0 };
+        for (int i = 0; i < m->part_n; i++) {
+            rect_t p = { m->part[i].x, m->part[i].y, MON_PARTICLE, MON_PARTICLE };
+            r = r.w ? rect_union(r, p) : p;
+        }
+        return rect_clip_screen(r);
+    }
+    return rect_clip_screen((rect_t){ mon_fx(m) - d->fw / 2, mon_fy(m) - d->fh + 1, d->fw, d->fh });
+}
+
+// Its body, for hits both ways: the middle two thirds across, the lower three quarters.
+static rect_t mon_body_rect(const monster_t *m)
+{
+    const monster_def_t *d = s_monsters[m->def];
+    int w = d->fw * 2 / 3, h = d->fh * 3 / 4;
+    return (rect_t){ mon_fx(m) - w / 2, mon_fy(m) - h + 1, w, h };
+}
+
+// The walk (base MON_SEQ_DOWN) or attack (MON_SEQ_ATTACK_DOWN) animation that way: no
+// left = right mirrored; nothing that way = down. -1 = none at all.
+static int mon_seq_for(const monster_def_t *d, int base, int dir, bool *mirror)
+{
+    *mirror = false;
+    if (d->seq_len[base + dir]) return base + dir;
+    if (dir == 3 && d->seq_len[base + 1]) { *mirror = true; return base + 1; }
+    return d->seq_len[base] ? base : -1;
+}
+
+// The frame it shows now (-1 = none), and whether it's drawn mirrored.
+static int mon_frame(const monster_t *m, uint32_t now, bool *mirror)
+{
+    const monster_def_t *d = s_monsters[m->def];
+    uint32_t fm = d->frame_ms ? d->frame_ms : 150, t = now - m->anim_ms;
+    bool once = false, still = false;
+    int s = -1;
+    *mirror = false;
+    switch (m->state) {
+    case MS_REST:  s = d->seq_len[MON_SEQ_REST] ? MON_SEQ_REST : -1; still = s < 0; break;
+    case MS_WAKE:  s = d->seq_len[MON_SEQ_WAKE] ? MON_SEQ_WAKE : -1; once = true; break;
+    case MS_DYING:
+    case MS_DOWN:  s = d->seq_len[MON_SEQ_DEATH] ? MON_SEQ_DEATH : -1; once = true; break;
+    case MS_WAIT:
+    case MS_DASH:  s = mon_seq_for(d, MON_SEQ_ATTACK_DOWN, m->dir, mirror); break;
+    default:
+        if ((int32_t)(m->attack_until - now) > 0) s = mon_seq_for(d, MON_SEQ_ATTACK_DOWN, m->dir, mirror);
+        still = !m->moving && !(d->abilities & MON_FLIES);   // standing about: its first walking frame (a flier keeps flapping)
+        break;
+    }
+    if (s < 0) { s = mon_seq_for(d, MON_SEQ_DOWN, m->dir, mirror); once = false; }
+    if (s < 0) return d->frame_count ? 0 : -1;
+    int n = d->seq_len[s], k = (int)(t / fm);
+    k = still ? 0 : once ? (k >= n ? n - 1 : k) : k % n;
+    return d->seq[s][k] < d->frame_count ? d->seq[s][k] : 0;
+}
+
+// ---- drawing: into map_repaint_rect()'s repaints, like the shoppers ----
+// Is screen pixel (x,y), of a monster whose feet are at row feet_y, behind scenery? Only if it's
+// foreground scenery whose foot (the bottom of that foreground column) is below the monster's feet:
+// a fence it stands in front of doesn't hide it, one it stands behind does.
+static bool mon_behind(int x, int y, int feet_y)
+{
+    if (!map_pixel_layer(x, y)) return false;
+    int b = y;
+    while (b + 1 < s_map_h && b - y < 64 && map_pixel_layer(x, b + 1)) b++;
+    return b > feet_y;
+}
+
+static void mon_paint_one(const monster_t *m, int x, int y, int w, int h, uint32_t now)
+{
+    const monster_def_t *d = s_monsters[m->def];
+    if (m->state == MS_PARTS) {
+        bool fading = now - m->t_ms > MON_PART_MS * 2 / 3;
+        for (int i = 0; i < m->part_n; i++) {
+            const uint16_t *pp = d->particles + (size_t)m->part[i].k * MON_PARTICLE * MON_PARTICLE;
+            int sx = m->part[i].x, sy = m->part[i].y;
+            for (int yy = sy > y ? sy : y; yy < sy + MON_PARTICLE && yy < y + h && yy < s_fb_h; yy++)
+                for (int xx = sx > x ? sx : x; xx < sx + MON_PARTICLE && xx < x + w && xx < s_fb_w; xx++) {
+                    if (xx < 0 || yy < 0) continue;
+                    uint16_t c = pp[(yy - sy) * MON_PARTICLE + (xx - sx)];
+                    if (c == FB_TRANSPARENT_COLOR || (fading && ((xx + yy) & 1))) continue;
+                    s_fb[yy * s_fb_w + xx] = s_night_shown ? night_px(&s_night_lut, c) : c;
+                }
+        }
+        return;
+    }
+    bool mirror;
+    int  f = mon_frame(m, now, &mirror);
+    if (f < 0) return;
+    const uint16_t *px = d->frames + (size_t)f * d->fw * d->fh;
+    int sx = mon_fx(m) - d->fw / 2, sy = mon_fy(m) - d->fh + 1;
+    int x0 = sx > x ? sx : x, y0 = sy > y ? sy : y;
+    int x1 = sx + d->fw < x + w ? sx + d->fw : x + w, y1 = sy + d->fh < y + h ? sy + d->fh : y + h;
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > s_fb_w) x1 = s_fb_w;
+    if (y1 > s_fb_h) y1 = s_fb_h;
+    bool flash = (int32_t)(m->hurt_until - now) > 0, fly = (d->abilities & MON_FLIES) != 0;
+    bool ghost = (d->abilities & MON_GHOSTLY) != 0;
+    int  odd   = (int)((now / 90) & 1);
+    for (int yy = y0; yy < y1; yy++)
+        for (int xx = x0; xx < x1; xx++) {
+            int col = mirror ? d->fw - 1 - (xx - sx) : xx - sx;
+            uint16_t c = px[(yy - sy) * d->fw + col];
+            if (c == FB_TRANSPARENT_COLOR || (!fly && mon_behind(xx, yy, mon_fy(m)))) continue;
+            if (ghost && ((xx + yy + odd) & 3) == 0) continue;   // a little see-through, shimmering
+            if (flash) c = rgb565_blend(c, COLOR_WHITE, 170);
+            s_fb[yy * s_fb_w + xx] = s_night_shown ? night_px(&s_night_lut, c) : c;
+        }
+}
+
+static void monster_paint_rect(int x, int y, int w, int h)
+{
+    int order[MON_MAX], n = 0;
+    for (int i = 0; i < MON_MAX; i++) {   // the ones this rect touches, back (top) to front
+        if (!s_mon[i].on) continue;
+        rect_t v = mon_view_rect(&s_mon[i]);
+        if (!v.w || !anim_rects_overlap(x, y, w, h, v.x, v.y, v.w, v.h)) continue;
+        int k = n++;
+        while (k > 0 && s_mon[order[k - 1]].yq > s_mon[i].yq) { order[k] = order[k - 1]; k--; }
+        order[k] = i;
+    }
+    uint32_t now = mon_now();
+    for (int o = 0; o < n; o++) mon_paint_one(&s_mon[order[o]], x, y, w, h, now);
+    proj_paint_rect(x, y, w, h, now);   // the shots, over them
+}
+
+// Puts monster m on screen where it is now (and takes it off where it was), at the end of this frame.
+static void mon_show(monster_t *m)
+{
+    rect_t now = m->on ? mon_view_rect(m) : (rect_t){ 0, 0, 0, 0 };
+    rect_t r = m->drawn.w ? (now.w ? rect_union(m->drawn, now) : m->drawn) : now;
+    m->drawn = now;
+    npc_dirty_add(r);
+}
+
+// ---- moving ----
+// Could its feet be at (fx,fy)? A flier: anywhere on the map; else no solid pixel under its feet.
+static bool mon_spot_free(const monster_def_t *d, int fx, int fy)
+{
+    int w = d->fw - 4;
+    if (w > 12) w = 12;
+    if (w < 6) w = 6;
+    int x0 = fx - w / 2, x1 = x0 + w - 1, y0 = fy - 5;
+    if (x0 < 0 || x1 >= s_map_w || fy >= s_map_h || fy - d->fh < -8) return false;
+    if (d->abilities & MON_FLIES) return true;
+    for (int y = y0; y <= fy; y++)   // every row of the feet: a thin fence rail sits between the top and the bottom one
+        for (int x = x0; x <= x1; x++)
+            if (map_pixel_blocked(x, y)) return false;
+    return true;
+}
+
+// Moves it by (dxq,dyq) quarter px, a wall stopping each way on its own. Returns which ways it was stopped (1 x, 2 y).
+static int mon_step(monster_t *m, int dxq, int dyq)
+{
+    const monster_def_t *d = s_monsters[m->def];
+    int stop = 0;
+    if (dxq) { int nx = m->xq + dxq; if (mon_spot_free(d, nx >> 2, m->yq >> 2)) m->xq = nx; else stop |= 1; }
+    if (dyq) { int ny = m->yq + dyq; if (mon_spot_free(d, m->xq >> 2, ny >> 2)) m->yq = ny; else stop |= 2; }
+    if (dxq || dyq) {
+        int ax = abs(dxq), ay = abs(dyq);
+        m->dir = ax > ay ? (dxq > 0 ? 1 : 3) : (dyq > 0 ? 0 : 2);
+    }
+    return stop;
+}
+
+// Toward (or with sign -1, away from) point (tx,ty) at `speed` quarter px a tick for `ticks` ticks.
+static int mon_go(monster_t *m, int tx, int ty, int speed, int ticks, int sign)
+{
+    float dx = (float)(tx - mon_fx(m)), dy = (float)(ty - mon_fy(m)), l = sqrtf(dx * dx + dy * dy);
+    if (l < 1.0f) return 0;
+    dx /= l; dy /= l;
+    if (m->jx || m->jy) { dx += m->jx * 0.6f; dy += m->jy * 0.6f; l = sqrtf(dx * dx + dy * dy); if (l > 0.01f) { dx /= l; dy /= l; } }
+    int sp = speed * ticks * sign;
+    return mon_step(m, (int)lroundf(dx * sp), (int)lroundf(dy * sp));
+}
+
+// ---- the way round: a walking monster follows the tiles toward the player ----
+// Every tile's steps to the player's tile (255: no way there), redone when they move to another tile
+// or every MON_FLOW_MS. TAP-TO-WALK's tile classes (npc_nav_tiles(): the shoppers' cache).
+#define MON_FLOW_MS 600
+static uint8_t  s_mon_flow[TILE_ROWS][TILE_COLS];
+static int      s_mon_flow_tx = -1, s_mon_flow_ty = -1;
+static uint32_t s_mon_flow_ms = 0;
+
+static void mon_flow_update(uint32_t now, int ptx, int pty)
+{
+    if (ptx == s_mon_flow_tx && pty == s_mon_flow_ty && now - s_mon_flow_ms < MON_FLOW_MS) return;
+    if (ptx < 0 || pty < 0 || ptx >= TILE_COLS || pty >= TILE_ROWS) return;
+    s_mon_flow_tx = ptx; s_mon_flow_ty = pty; s_mon_flow_ms = now;
+    npc_nav_tiles();
+    memset(s_mon_flow, 255, sizeof(s_mon_flow));
+    EXT_RAM_BSS_ATTR static int16_t q[TILE_ROWS * TILE_COLS];
+    static const int8_t k_dx[4] = { 0, 0, -1, 1 }, k_dy[4] = { -1, 1, 0, 0 };
+    int qh = 0, qt = 0;
+    s_mon_flow[pty][ptx] = 0;
+    q[qt++] = (int16_t)(pty * TILE_COLS + ptx);
+    while (qh < qt) {
+        int c = q[qh++], x = c % TILE_COLS, y = c / TILE_COLS;
+        for (int k = 0; k < 4; k++) {
+            int nx = x + k_dx[k], ny = y + k_dy[k];
+            if (nx < 0 || ny < 0 || nx >= TILE_COLS || ny >= TILE_ROWS || s_mon_flow[ny][nx] != 255) continue;
+            if (!nav_can_step(nx, ny, x, y)) continue;   // (a step from there toward here)
+            s_mon_flow[ny][nx] = (uint8_t)(s_mon_flow[y][x] < 254 ? s_mon_flow[y][x] + 1 : 254);
+            q[qt++] = (int16_t)(ny * TILE_COLS + nx);
+        }
+    }
+}
+
+// Where a walking monster heads for the player at (px,py): the middle of the next tile on the way, or
+// straight at them (near, or no way known).
+static void mon_way(const monster_t *m, int px, int py, int *tx, int *ty)
+{
+    *tx = px; *ty = py;
+    int mx = mon_fx(m) / TILE_SIZE, my = mon_fy(m) / TILE_SIZE;
+    if (mx < 0 || my < 0 || mx >= TILE_COLS || my >= TILE_ROWS) return;
+    int here = s_mon_flow[my][mx];
+    if (here == 255 || here <= 1) return;   // off the way (or next to them): straight on
+    static const int8_t k_dx[4] = { 0, 0, -1, 1 }, k_dy[4] = { -1, 1, 0, 0 };
+    int best = here, bx = -1, by = -1;
+    for (int k = 0; k < 4; k++) {
+        int nx = mx + k_dx[k], ny = my + k_dy[k];
+        if (nx < 0 || ny < 0 || nx >= TILE_COLS || ny >= TILE_ROWS || s_mon_flow[ny][nx] >= best) continue;
+        best = s_mon_flow[ny][nx]; bx = nx; by = ny;
+    }
+    if (bx < 0) return;
+    *tx = bx * TILE_SIZE + TILE_SIZE / 2;
+    *ty = by * TILE_SIZE + TILE_SIZE - 3;   // (feet in the tile's bottom band, as the player's)
+}
+
+// The player's middle (their body, roughly) and their body box.
+static int    player_mid_x(void) { return s_player_x + PLAYER_W / 2; }
+static int    player_mid_y(void) { return s_player_y + PLAYER_H - 8; }
+static rect_t player_body_rect(void) { return (rect_t){ s_player_x + 3, s_player_y + PLAYER_H - 18, PLAYER_W - 6, 18 }; }
+
+// Monster d's own sound for `what` ("hit", "die", "wake", "attack"): its file's name, or "<id>_<what>".
+static void mon_sfx(const monster_def_t *d, const char *what)
+{
+    const char *own = what[0] == 'h' ? d->sound : what[0] == 'd' ? d->sound_die : what[0] == 'w' ? d->sound_wake : d->sound_attack;
+    if (own && own[0]) { sfx_play(own); return; }
+    char name[SFX_NAME_MAX + 1];
+    snprintf(name, sizeof(name), "%s_%s", d->id, what);
+    sfx_play(name);
+}
+
+static void mon_set_state(monster_t *m, uint8_t st, uint32_t now)
+{
+    m->state   = st;
+    m->t_ms    = now;
+    m->anim_ms = now;
+}
+
+// ---- coming up ----
+static bool mon_spawn(int def, int tx, int ty)
+{
+    int i;
+    for (i = 0; i < MON_MAX && s_mon[i].on; i++) {}
+    if (i == MON_MAX || def < 0 || def >= monster_count) return false;
+    const monster_def_t *d = s_monsters[def];
+    uint32_t now = mon_now();
+    monster_t *m = &s_mon[i];
+    *m = (monster_t){ .on = true, .def = (uint8_t)def, .hp = (int16_t)(d->hp ? d->hp : 1),
+                      .xq = (tx * TILE_SIZE + TILE_SIZE / 2) << 2, .yq = (ty * TILE_SIZE + TILE_SIZE - 1) << 2,
+                      .think_ms = now, .heal_ms = now, .wander_ms = now, .shot_ms = now };
+    mon_set_state(m, (d->abilities & MON_HIDES) ? MS_REST : MS_IDLE, now);
+    m->anim_ms = now - (esp_random() % 1000);   // not all flapping in step
+    if (d->abilities & MON_STRAIGHT) {
+        float a = (float)(esp_random() % 8) * 0.7853982f;
+        m->vx = (int16_t)lroundf(cosf(a) * d->speed_q);
+        m->vy = (int16_t)lroundf(sinf(a) * d->speed_q);
+    }
+    mon_show(m);
+    return true;
+}
+
+// A mining map's lot: s_spawn.mon_n of its monsters, picked by weight, on free tiles away from the player.
+static void mon_spawn_lot(void)
+{
+    if (!s_spawn.mon_n || !s_spawn.mon_pool_n) return;
+    int total = 0;
+    for (int k = 0; k < s_spawn.mon_pool_n; k++) total += s_spawn.mon_w[k];
+    if (total <= 0) return;
+    int ptx = player_mid_x() / TILE_SIZE, pty = player_mid_y() / TILE_SIZE, made = 0;
+    for (int n = 0; n < s_spawn.mon_n; n++) {
+        int pick = (int)(esp_random() % (uint32_t)total), k = 0;
+        while (k < s_spawn.mon_pool_n - 1 && pick >= s_spawn.mon_w[k]) pick -= s_spawn.mon_w[k++];
+        for (int tries = 0; tries < 80; tries++) {
+            int tx = (int)(esp_random() % TILE_COLS), ty = (int)(esp_random() % TILE_ROWS);
+            if (abs(tx - ptx) < MON_SPAWN_AWAY && abs(ty - pty) < MON_SPAWN_AWAY) continue;
+            if (!spawn_tile_ok(tx, ty, false, true)) continue;
+            if (mon_spawn(s_spawn.mon_pool[k], tx, ty)) made++;
+            break;
+        }
+    }
+    ESP_LOGI(TAG, "monsters: %d came up on %s", made, current_map_name());
+}
+
+// A new map is loading: the old one's monsters are gone (its repaint covers them).
+static int s_combat_target;   // (below: a monster tapped out of reach)
+static void mon_clear(void)
+{
+    memset(s_mon, 0, sizeof(s_mon));
+    s_combat_target = -1;
+    s_mon_flow_tx = -1;   // (another map: the way round is worked out again)
+    proj_clear();
+}
+
+// ---- the player getting hurt ----
+static void player_knock(int from_x, int from_y)
+{
+    float dx = (float)(player_mid_x() - from_x), dy = (float)(player_mid_y() - from_y), l = sqrtf(dx * dx + dy * dy);
+    if (l < 1.0f) { dx = 0; dy = 1; l = 1; }
+    dx /= l; dy /= l;
+    int moved = 0, x = s_player_x, y = s_player_y;
+    for (int s = 1; s <= PLAYER_KNOCK_PX; s++) {
+        int nx = s_player_x + (int)lroundf(dx * s), ny = s_player_y + (int)lroundf(dy * s);
+        if (nx < 0 || nx > LCD_H_RES - PLAYER_W || ny < PLAYER_MIN_Y || ny > LCD_V_RES - PLAYER_H || player_feet_blocked(nx, ny)) break;
+        x = nx; y = ny; moved = s;
+    }
+    if (!moved) return;
+    nav_cancel();
+    s_player_x = x;
+    s_player_y = y;
+    player_look_t l2 = player_look_now();
+    player_redraw(&l2);
+}
+
+static void player_hurt(int dmg, int from_x, int from_y)
+{
+    uint32_t now = mon_now();
+    if (dmg <= 0 || s_passout_pending || s_dev_god || (int32_t)(s_player_hit_until - now) > 0) return;
+    dmg -= (int)item_attr(inv_held_item(), "weapon_defense", 0);   // the weapon in hand's defense
+    if (dmg < 1) dmg = 1;
+    s_player_hit_until = now + PLAYER_HIT_MS;
+    s_hp = (int16_t)(s_hp - dmg < 0 ? 0 : s_hp - dmg);
+    sfx_play("ouch");
+    player_knock(from_x, from_y);
+    if (s_hp == 0) {
+        s_passout_pending = true;
+        s_passout_why     = PASSOUT_HURT;
+        ESP_LOGI(TAG, "combat: knocked out on %s", current_map_name());
+    }
+}
+
+// ---- dying ----
+static void mon_drops(const monster_t *m)
+{
+    const monster_def_t *d = s_monsters[m->def];
+    int tx = mon_fx(m) / TILE_SIZE, ty = mon_fy(m) / TILE_SIZE;
+    for (int k = 0; k < d->drop_count; k++) {
+        const mon_drop_t *dr = &d->drops[k];
+        item_id_t it = item_find(dr->item);
+        if (it == ITEM_NONE || (int)(esp_random() % 100) >= dr->chance) continue;
+        int n = dr->min + (dr->max > dr->min ? (int)(esp_random() % (uint32_t)(dr->max - dr->min + 1)) : 0);
+        if (n > 0) ground_drop_near(it, QUALITY_STANDARD, n, tx, ty, 0, 0, true, false);
+    }
+    skill_xp(SKILL_COMBAT, d->xp);
+}
+
+// Its bits fly out from where it fell; it's gone once they have.
+static void mon_burst(monster_t *m, uint32_t now)
+{
+    const monster_def_t *d = s_monsters[m->def];
+    m->part_n = 0;
+    for (int i = 0; i < d->particle_count && i < MON_PARTICLES; i++) {
+        float a = (float)(esp_random() % 628) / 100.0f;
+        int sp = 30 + (int)(esp_random() % 50);
+        m->part[i] = (typeof(m->part[0])){ .x = (int16_t)(mon_fx(m) - MON_PARTICLE / 2), .y = (int16_t)(mon_fy(m) - d->fh / 2 - MON_PARTICLE / 2),
+                                           .vx = (int16_t)(cosf(a) * sp), .vy = (int16_t)(sinf(a) * sp), .k = (uint8_t)i };
+        m->part_n++;
+    }
+    mon_set_state(m, MS_PARTS, now);
+}
+
+static void mon_die(monster_t *m, uint32_t now)
+{
+    const monster_def_t *d = s_monsters[m->def];
+    mon_sfx(d, "die");
+    if ((d->abilities & MON_REVIVES) && !m->revived && m->state != MS_DOWN) {   // it'll get up again unless hit while it's down
+        mon_set_state(m, MS_DOWN, now);
+        return;
+    }
+    mon_drops(m);
+    if (d->seq_len[MON_SEQ_DEATH] && m->state != MS_DOWN) mon_set_state(m, MS_DYING, now);
+    else                                                  mon_burst(m, now);
+}
+
+// ---- getting hit ----
+// Monster m takes `hit` (defense already off), knocked away from (from_x,from_y) by knock_pct % of the usual.
+static void mon_hurt(monster_t *m, int hit, int from_x, int from_y, int knock_pct, uint32_t now)
+{
+    const monster_def_t *d = s_monsters[m->def];
+    m->hurt_until = now + MON_HURT_MS;
+    if (m->state == MS_DOWN) { mon_die(m, now); mon_show(m); return; }   // hit while it's down: that's it
+    m->hp = (int16_t)(m->hp - hit);
+    float dx = (float)(mon_fx(m) - from_x), dy = (float)(mon_fy(m) - from_y), l = sqrtf(dx * dx + dy * dy);
+    if (l < 1.0f) { dx = 0; dy = 1; l = 1; }
+    int kp = MON_KNOCK_PX * knock_pct / 100;
+    m->kx = (int16_t)(dx / l * kp);
+    m->ky = (int16_t)(dy / l * kp);
+    m->knock_from = now;
+    if (m->state == MS_REST || m->state == MS_IDLE) mon_set_state(m, (d->abilities & MON_HIDES) && d->seq_len[MON_SEQ_WAKE] && m->state == MS_REST ? MS_WAKE : MS_CHASE, now);
+    if (m->hp <= 0) mon_die(m, now);
+    else mon_sfx(d, "hit");
+    mon_show(m);
+}
+
+// A swing landed (tool_swing_tick()), `held` in hand: every monster in reach in front takes it.
+static void monster_on_swing(item_id_t held)
+{
+    if (!s_map_loaded) return;
+    int dmg = (int)item_attr(held, ITEM_ATTR_WEAPON, 0), kind = (int)item_attr(held, ITEM_ATTR_WEAPON_KIND, 0);
+    bool weapon = dmg > 0;
+    if (!weapon) dmg = 1;   // a tool: a tap
+    int lo = (int)item_attr(held, "weapon_min", dmg), hi = (int)item_attr(held, "weapon_max", dmg);
+    if (hi < lo) hi = lo;
+    int crit = (int)item_attr(held, "weapon_crit", 20), crit_pow = (int)item_attr(held, "weapon_crit_power", 0);   // (tenths of a %; %)
+    int knock = 100 + 15 * (int)item_attr(held, "weapon_weight", 0) + (kind == 2 ? 30 : 0);
+    int cx = player_mid_x(), fy = s_player_y + PLAYER_H - 1;
+    rect_t r;
+    switch (s_player_facing) {
+    case DIR_UP:    r = (rect_t){ cx - 16, fy - 18 - WEAPON_REACH, 32, WEAPON_REACH + 10 }; break;
+    case DIR_LEFT:  r = (rect_t){ cx - 8 - WEAPON_REACH, fy - 26, WEAPON_REACH + 8, 32 }; break;
+    case DIR_RIGHT: r = (rect_t){ cx, fy - 26, WEAPON_REACH + 8, 32 }; break;
+    default:        r = (rect_t){ cx - 16, fy - 12, 32, WEAPON_REACH + 10 }; break;
+    }
+    uint32_t now = mon_now();
+    int hits = 0;
+    for (int i = 0; i < MON_MAX; i++) {
+        monster_t *m = &s_mon[i];
+        if (!m->on || m->state == MS_DYING || m->state == MS_PARTS) continue;
+        rect_t b = mon_body_rect(m);
+        if (!anim_rects_overlap(r.x, r.y, r.w, r.h, b.x, b.y, b.w, b.h)) continue;
+        const monster_def_t *d = s_monsters[m->def];
+        int hit = dmg;
+        if (weapon) {
+            hit = lo + (int)(esp_random() % (uint32_t)(hi - lo + 1));      // Stardew's min .. max
+            hit = hit * (100 + 2 * skill_level(SKILL_COMBAT)) / 100;      // (SKILLS: combat)
+            if ((int)(esp_random() % 1000) < crit) hit = hit * 3 * (100 + crit_pow) / 100;   // a critical hit
+            hit -= d->defense;
+            if (hit < 1) hit = 1;
+        }
+        hits++;
+        mon_hurt(m, hit, cx, fy - 6, knock, now);
+    }
+    if (hits) ESP_LOGD(TAG, "combat: a swing hit %d", hits);
+}
+
+// ---- PROJECTILES: a monster's shots and the slingshot's ----
+#define PROJ_MAX       24
+#define PROJ_LIFE_MS   2500   // a monster's shot flies this long at most
+#define PROJ_CLEAR_TICKS 3    // ...walls don't stop it for its first ticks (where it starts can be solid)
+#define SLING_SHOT_Q   28     // the slingshot's shot flies this fast (quarter px a tick)...
+#define SLING_RANGE_PX 176    // ...this far (11 tiles)
+#define SLING_AMMO_PX  8      // ...drawn this big: what was shot, its icon shrunk
+#define ITEM_ATTR_SLINGSHOT "slingshot"   // a slingshot: its damage multiplier (Slingshot 1, Master 2, Galaxy 4)
+#define ITEM_ATTR_AMMO      "ammo"        // how hard an item hits shot from one (none: k_ammo[], else 1)
+
+typedef struct {
+    bool      on, mine, over_walls;   // mine: the player's (it hits monsters), else a monster's (it hits the player)
+    uint8_t   def;                    // a monster's: whose pictures
+    item_id_t ammo;                   // the player's: what was shot (its icon)
+    int16_t   dmg;
+    int32_t   xq, yq;                 // its middle, quarter px
+    int16_t   vx, vy;                 // quarter px a tick
+    uint32_t  t_ms, until;
+    uint8_t   age;                    // ticks flown: walls count once it's PROJ_CLEAR_TICKS out
+    rect_t    drawn;
+} proj_t;
+
+static proj_t s_proj[PROJ_MAX];
+
+static void proj_clear(void) { memset(s_proj, 0, sizeof(s_proj)); }
+
+static rect_t proj_rect(const proj_t *p)
+{
+    int sz = p->mine ? SLING_AMMO_PX : MON_PROJECTILE;
+    return rect_clip_screen((rect_t){ (p->xq >> 2) - sz / 2, (p->yq >> 2) - sz / 2, sz, sz });
+}
+
+static void proj_show(proj_t *p)
+{
+    rect_t now = p->on ? proj_rect(p) : (rect_t){ 0, 0, 0, 0 };
+    rect_t r = p->drawn.w ? (now.w ? rect_union(p->drawn, now) : p->drawn) : now;
+    p->drawn = now;
+    npc_dirty_add(r);
+}
+
+// A shot from (sx,sy) at (tx,ty), `speed` quarter px a tick, for life_ms at most.
+static void proj_fire(bool mine, int def, item_id_t ammo, int dmg, int sx, int sy, int tx, int ty, int speed, bool over_walls, uint32_t life_ms)
+{
+    int i;
+    for (i = 0; i < PROJ_MAX && s_proj[i].on; i++) {}
+    if (i == PROJ_MAX) return;
+    float dx = (float)(tx - sx), dy = (float)(ty - sy), l = sqrtf(dx * dx + dy * dy);
+    if (l < 1.0f) { dx = 0; dy = 1; l = 1; }
+    uint32_t now = mon_now();
+    s_proj[i] = (proj_t){ .on = true, .mine = mine, .over_walls = over_walls, .def = (uint8_t)def, .ammo = ammo, .dmg = (int16_t)(dmg > 32000 ? 32000 : dmg),
+                          .xq = sx << 2, .yq = sy << 2, .vx = (int16_t)lroundf(dx / l * speed), .vy = (int16_t)lroundf(dy / l * speed),
+                          .t_ms = now, .until = now + life_ms };
+    proj_show(&s_proj[i]);
+}
+
+// Drawn with the monsters (monster_paint_rect()): a monster's shot's pictures in turn, or the ammo's icon shrunk.
+static void proj_paint_rect(int x, int y, int w, int h, uint32_t now)
+{
+    for (int i = 0; i < PROJ_MAX; i++) {
+        const proj_t *p = &s_proj[i];
+        if (!p->on) continue;
+        rect_t r = proj_rect(p);
+        if (!r.w || !anim_rects_overlap(x, y, w, h, r.x, r.y, r.w, r.h)) continue;
+        int sz = p->mine ? SLING_AMMO_PX : MON_PROJECTILE, ox = (p->xq >> 2) - sz / 2, oy = (p->yq >> 2) - sz / 2;
+        const uint16_t *px = NULL;
+        int pw = 0, ph = 0;
+        if (p->mine) {
+            const item_asset_t *a = item_get(p->ammo);
+            if (!a || !a->passive.pixels || !a->passive.w) continue;
+            px = a->passive.pixels; pw = a->passive.w; ph = a->passive.h;
+        } else {
+            const monster_def_t *d = s_monsters[p->def];
+            if (!d->proj_count || !d->proj) continue;
+            px = d->proj + (size_t)((now - p->t_ms) / 80 % d->proj_count) * MON_PROJECTILE * MON_PROJECTILE;
+            pw = ph = MON_PROJECTILE;
+        }
+        for (int yy = r.y > y ? r.y : y; yy < r.y + r.h && yy < y + h && yy < s_fb_h; yy++)
+            for (int xx = r.x > x ? r.x : x; xx < r.x + r.w && xx < x + w && xx < s_fb_w; xx++) {
+                int sxp = (xx - ox) * pw / sz, syp = (yy - oy) * ph / sz;   // (the ammo: shrunk to SLING_AMMO_PX)
+                uint16_t c = px[syp * pw + sxp];
+                if (c == FB_TRANSPARENT_COLOR) continue;
+                s_fb[yy * s_fb_w + xx] = s_night_shown ? night_px(&s_night_lut, c) : c;
+            }
+    }
+}
+
+// Once a game frame: the shots fly, hit or fall.
+static void proj_tick(uint32_t now, int ticks)
+{
+    for (int i = 0; i < PROJ_MAX; i++) {
+        proj_t *p = &s_proj[i];
+        if (!p->on) continue;
+        p->xq += p->vx * ticks;
+        p->yq += p->vy * ticks;
+        p->age = (uint8_t)(p->age + ticks > 255 ? 255 : p->age + ticks);
+        int x = p->xq >> 2, y = p->yq >> 2;
+        bool end = (int32_t)(now - p->until) >= 0 || x < 0 || y < 0 || x >= s_map_w || y >= s_map_h ||
+                   (!p->over_walls && p->age > PROJ_CLEAR_TICKS && map_pixel_blocked(x, y));
+        if (!end && p->mine) {
+            for (int k = 0; k < MON_MAX && !end; k++) {
+                monster_t *m = &s_mon[k];
+                if (!m->on || m->state == MS_DYING || m->state == MS_PARTS) continue;
+                rect_t b = mon_body_rect(m);
+                if (x < b.x - 3 || x >= b.x + b.w + 3 || y < b.y - 3 || y >= b.y + b.h + 3) continue;
+                int hit = p->dmg - s_monsters[m->def]->defense;
+                mon_hurt(m, hit < 1 ? 1 : hit, x - (p->vx > 0 ? 8 : p->vx < 0 ? -8 : 0), y - (p->vy > 0 ? 8 : p->vy < 0 ? -8 : 0), 60, now);
+                end = true;
+            }
+        } else if (!end) {
+            rect_t b = player_body_rect();
+            if (x >= b.x && x < b.x + b.w && y >= b.y - 4 && y < b.y + b.h) { player_hurt(p->dmg, x - p->vx, y - p->vy); end = true; }
+        }
+        if (end) p->on = false;
+        proj_show(p);
+    }
+}
+
+// ---- the slingshot ----
+static inv_slot_t s_sling = { ITEM_NONE, 0, QUALITY_STANDARD };   // what's in it (one stack, for any slingshot)
+static uint32_t   s_sling_last = 0;
+
+static const struct { const char *id; uint8_t v; } k_ammo[] = {   // Stardew's ammo (anything else: 1)
+    { "wood", 2 }, { "stone", 5 }, { "copper_ore", 10 }, { "coal", 15 }, { "iron_ore", 20 }, { "gold_ore", 30 }, { "iridium_ore", 50 }, { "cherry_bomb", 20 },
+};
+
+static int ammo_value(item_id_t it)
+{
+    int32_t v = item_attr(it, ITEM_ATTR_AMMO, -1);
+    if (v > 0) return (int)v;
+    const item_asset_t *a = item_get(it);
+    for (size_t k = 0; a && k < sizeof(k_ammo) / sizeof(k_ammo[0]); k++) if (strcmp(a->id, k_ammo[k].id) == 0) return k_ammo[k].v;
+    return 1;
+}
+
+// The bag (inv_click_slot()): `carry` dropped on slingshot `sling` goes in it — what was in it comes back into carry.
+static bool sling_attach(inv_slot_t *carry, item_id_t sling)
+{
+    if (!carry->count || item_attr(sling, ITEM_ATTR_SLINGSHOT, 0) <= 0) return false;
+    if (item_attr(carry->item, ITEM_ATTR_SLINGSHOT, 0) > 0 || tool_is(carry->item)) { message(2000, "That won't go in a slingshot"); return true; }
+    if (s_sling.count && s_sling.item == carry->item && s_sling.quality == carry->quality) {
+        int room = item_max_stack(carry->item) - s_sling.count, put = room < carry->count ? room : carry->count;
+        if (put <= 0) { message(2000, "The %s is full", item_name(sling)); return true; }
+        s_sling.count = (uint8_t)(s_sling.count + put);
+        carry->count  = (uint8_t)(carry->count - put);
+        if (!carry->count) carry->item = ITEM_NONE;
+    } else {
+        inv_slot_t old = s_sling;
+        s_sling = *carry;
+        *carry  = old.count ? old : (inv_slot_t){ ITEM_NONE, 0, QUALITY_STANDARD };
+    }
+    message(2500, "%s x%d in the %s (%d a shot)", item_name(s_sling.item), s_sling.count, item_name(sling), ammo_value(s_sling.item) * (int)item_attr(sling, ITEM_ATTR_SLINGSHOT, 1));
+    return true;
+}
+
+// combat_tap(): a slingshot in hand — a tap on a monster in range shoots what's in it at it. true = taken.
+static bool sling_tap(int tx, int ty)
+{
+    item_id_t held = inv_held_item();
+    int mult = (int)item_attr(held, ITEM_ATTR_SLINGSHOT, 0);
+    if (mult <= 0) return false;
+    int pcx = player_mid_x(), pcy = player_mid_y() - 8, dx = tx - pcx, dy = ty - pcy;
+    bool aim = false, awake = false;
+    for (int i = 0; i < MON_MAX; i++) {
+        const monster_t *m = &s_mon[i];
+        if (!mon_alive(m)) continue;
+        int ex = mon_fx(m) - pcx, ey = mon_fy(m) - pcy;
+        if (ex * ex + ey * ey > SLING_RANGE_PX * SLING_RANGE_PX) continue;
+        if (m->state != MS_REST) awake = true;
+        rect_t v = mon_view_rect(m);
+        if (tx >= v.x - 6 && tx < v.x + v.w + 6 && ty >= v.y - 6 && ty < v.y + v.h + 6) aim = true;
+    }
+    (void)awake;
+    if (!aim) return false;   // (a tap anywhere else: they walk)
+    uint32_t now = mon_now();
+    if (now - s_sling_last < (uint32_t)(560 - 40 * mult)) return true;   // (pulling it back: the better ones are quicker)
+    if (!s_sling.count) { message(3000, "The %s is empty - drop stones or ore on it in your bag", item_name(held)); return true; }
+    s_sling_last    = now;
+    s_player_facing = abs(dx) > abs(dy) ? (dx < 0 ? DIR_LEFT : DIR_RIGHT) : (dy < 0 ? DIR_UP : DIR_DOWN);
+    nav_cancel();
+    player_look_t l = player_look_now();
+    player_redraw(&l);
+    int a = ammo_value(s_sling.item), lo = (a + 1) / 2, hi = 2 * a + 1;   // Stardew's: half .. twice + 1, times the slingshot's
+    int dmg = (lo + (int)(esp_random() % (uint32_t)(hi - lo + 1))) * mult;
+    dmg = dmg * (100 + 2 * skill_level(SKILL_COMBAT)) / 100;
+    proj_fire(true, 0, s_sling.item, dmg, pcx, pcy, tx, ty, SLING_SHOT_Q, false, SLING_RANGE_PX * 4 * (GAME_TICK_US / 1000) / SLING_SHOT_Q);
+    if (--s_sling.count == 0) s_sling.item = ITEM_NONE;
+    sfx_play("slingshot");
+    return true;
+}
+
+static void sling_load(const char *id, int n, int q)
+{
+    item_id_t it = item_find(id);
+    if (it == ITEM_NONE || n < 1 || n > 255) return;
+    s_sling = (inv_slot_t){ it, (uint8_t)n, (uint8_t)(q >= 0 && q <= 255 && item_quality_ok((uint8_t)q) ? q : QUALITY_STANDARD) };
+}
+
+// ---- a weapon's speed ----
+// Each swipe frame of a swing with `item`: SWIPE_FRAME_MS, a dagger's quicker, a club's slower, and each
+// point of "weapon_speed" 8 % quicker (- slower).
+static uint16_t weapon_swipe_ms(item_id_t item)
+{
+    if (item_attr(item, ITEM_ATTR_WEAPON, 0) <= 0) return SWIPE_FRAME_MS;
+    int kind = (int)item_attr(item, ITEM_ATTR_WEAPON_KIND, 0), speed = (int)item_attr(item, "weapon_speed", 0);
+    int ms = SWIPE_FRAME_MS * (kind == 1 ? 70 : kind == 2 ? 135 : 100) / 100;
+    ms = ms * (100 - 8 * speed) / 100;
+    return (uint16_t)(ms < 24 ? 24 : ms > 130 ? 130 : ms);
+}
+
+// ---- thinking, once a game frame ----
+static void mon_think(monster_t *m, uint32_t now, int ticks)
+{
+    const monster_def_t *d = s_monsters[m->def];
+    uint32_t t = now - m->t_ms, fm = d->frame_ms ? d->frame_ms : 150;
+    int px = player_mid_x(), py = player_mid_y();
+    int dx = px - mon_fx(m), dy = py - mon_fy(m);
+    int32_t d2 = dx * dx + dy * dy, wake = (d->wake_tiles ? d->wake_tiles : 5) * TILE_SIZE;
+    bool near = d2 <= wake * wake;
+    m->moving = false;
+
+    if (m->state == MS_PARTS) {
+        float s = (float)ticks * GAME_TICK_US / 1000000.0f;
+        for (int i = 0; i < m->part_n; i++) {
+            m->part[i].x = (int16_t)(m->part[i].x + lroundf(m->part[i].vx * s));
+            m->part[i].y = (int16_t)(m->part[i].y + lroundf(m->part[i].vy * s));
+            m->part[i].vy = (int16_t)(m->part[i].vy + 3 * ticks);   // falling
+        }
+        if (t >= MON_PART_MS) { m->on = false; }
+        mon_show(m);
+        return;
+    }
+    if (m->state == MS_DYING) {
+        if (t >= (uint32_t)d->seq_len[MON_SEQ_DEATH] * fm) mon_burst(m, now);
+        mon_show(m);
+        return;
+    }
+    if (m->state == MS_DOWN) {
+        if (t >= MON_REVIVE_MS) {   // up again
+            m->revived = true;
+            m->hp = (int16_t)((d->hp + 1) / 2);
+            mon_set_state(m, MS_CHASE, now);
+            mon_show(m);
+        }
+        return;
+    }
+    // knocked back: that first
+    if (now - m->knock_from < MON_KNOCK_MS && (m->kx || m->ky)) {
+        int per = 4 * (GAME_TICK_US / 1000) * ticks;   // (quarter px: kx px over MON_KNOCK_MS)
+        mon_step(m, m->kx * per / MON_KNOCK_MS, m->ky * per / MON_KNOCK_MS);
+        m->dir = abs(dx) > abs(dy) ? (dx > 0 ? 1 : 3) : (dy > 0 ? 0 : 2);   // (it faces the player)
+        mon_show(m);
+        return;
+    }
+    if (d->abilities & MON_ERRATIC && now - m->think_ms > 280) {
+        m->think_ms = now;
+        m->jx = (int8_t)((int)(esp_random() % 3) - 1);
+        m->jy = (int8_t)((int)(esp_random() % 3) - 1);
+    }
+    int sp = d->speed_q;   // (0: it stays where it is — a lava lurk)
+    switch (m->state) {
+    case MS_REST:
+        if (near) { mon_set_state(m, d->seq_len[MON_SEQ_WAKE] ? MS_WAKE : MS_CHASE, now); mon_sfx(d, "wake"); }
+        return;   // (nothing to repaint)
+    case MS_WAKE:
+        if (t >= (uint32_t)d->seq_len[MON_SEQ_WAKE] * fm) mon_set_state(m, MS_CHASE, now);
+        break;
+    case MS_IDLE:
+        if (near && !(d->abilities & MON_STRAIGHT)) { mon_set_state(m, MS_CHASE, now); mon_sfx(d, "wake"); break; }   // (it noticed them)
+        if (d->abilities & MON_STRAIGHT) {
+            int stop = mon_step(m, m->vx * ticks, m->vy * ticks);
+            if (stop & 1) m->vx = (int16_t)-m->vx;   // off the wall
+            if (stop & 2) m->vy = (int16_t)-m->vy;
+            m->moving = true;
+            break;
+        }
+        if (!sp) break;
+        if (now - m->wander_ms > 1500 + esp_random() % 1500) {   // a new way to wander, or a rest
+            m->wander_ms = now;
+            int w = (int)(esp_random() % 5), ws = sp / 2 ? sp / 2 : 1;   // 0: stands about
+            m->vx = (int16_t)(w == 1 ? ws : w == 3 ? -ws : 0);
+            m->vy = (int16_t)(w == 2 ? ws : w == 4 ? -ws : 0);
+        }
+        if (m->vx || m->vy) { mon_step(m, m->vx * ticks, m->vy * ticks); m->moving = true; }
+        break;
+    case MS_CHASE: {
+        if (d2 > 4 * wake * wake) {   // they got away
+            if (!m->lost_ms) m->lost_ms = now;
+            else if (now - m->lost_ms > MON_LOSE_MS) { m->lost_ms = 0; mon_set_state(m, (d->abilities & MON_HIDES) ? MS_REST : MS_IDLE, now); break; }
+        } else {
+            m->lost_ms = 0;
+        }
+        if ((d->abilities & MON_HEALS) && now - m->heal_ms > MON_HEAL_MS) {
+            m->heal_ms = now;
+            for (int j = 0; j < MON_MAX; j++) {
+                monster_t *o = &s_mon[j];
+                if (!mon_alive(o)) continue;
+                int ex = mon_fx(o) - mon_fx(m), ey = mon_fy(o) - mon_fy(m);
+                int mx = s_monsters[o->def]->hp;
+                if (ex * ex + ey * ey <= 64 * 64 && o->hp < mx) { o->hp = (int16_t)(o->hp + mx * MON_HEAL_PCT / 100 > mx ? mx : o->hp + mx * MON_HEAL_PCT / 100); o->hurt_until = now + MON_HURT_MS; mon_show(o); }
+            }
+        }
+        if ((d->abilities & MON_CHARGES) && d2 < 64 * 64 && now - m->think_ms > MON_CHARGE_GAP_MS) {
+            m->think_ms = now;
+            mon_set_state(m, MS_WAIT, now);
+            break;
+        }
+        if (!sp) break;
+        if (d->abilities & MON_HOPS && (now - m->anim_ms) % (2 * MON_HOP_MS) >= MON_HOP_MS) break;   // between hops
+        if (d->abilities & MON_STRAIGHT) {
+            int stop = mon_step(m, m->vx * ticks, m->vy * ticks);
+            if (stop & 1) m->vx = (int16_t)-m->vx;
+            if (stop & 2) m->vy = (int16_t)-m->vy;
+        } else if (d->abilities & MON_KEEPS_OFF) {
+            if (d2 < 48 * 48)      mon_go(m, px, py, sp, ticks, -1);   // too close: back off
+            else if (d2 > 80 * 80) mon_go(m, px, py, sp, ticks, 1);
+            else                   mon_go(m, mon_fx(m) - dy, mon_fy(m) + dx, sp / 2 + 1, ticks, 1);   // circling
+        } else if (d->abilities & MON_FLIES) {
+            mon_go(m, px, py, sp, ticks, 1);
+        } else {   // walking: round what's in the way, tile by tile
+            int tx, ty;
+            mon_way(m, px, s_player_y + PLAYER_H - 3, &tx, &ty);
+            mon_go(m, tx, ty, sp, ticks, 1);
+        }
+        m->moving = true;
+        if (!(d->abilities & MON_STRAIGHT)) m->dir = abs(dx) > abs(dy) ? (dx > 0 ? 1 : 3) : (dy > 0 ? 0 : 2);   // (it faces the player, whichever way it steps)
+        break;
+    }
+    case MS_WAIT:
+        m->dir = abs(dx) > abs(dy) ? (dx > 0 ? 1 : 3) : (dy > 0 ? 0 : 2);
+        if (t >= MON_CHARGE_WAIT_MS) {
+            float l = sqrtf((float)d2);
+            if (l < 1.0f) l = 1.0f;
+            m->vx = (int16_t)(dx / l * sp * 3);
+            m->vy = (int16_t)(dy / l * sp * 3);
+            mon_set_state(m, MS_DASH, now);
+            mon_sfx(d, "attack");
+        }
+        break;
+    case MS_DASH:
+        if (mon_step(m, m->vx * ticks, m->vy * ticks) || t >= MON_CHARGE_MS) {
+            m->vx = m->vy = 0;
+            mon_set_state(m, MS_CHASE, now);
+        }
+        m->moving = true;
+        break;
+    default:
+        break;
+    }
+    // shooting at them
+    if ((d->abilities & MON_SHOOTS) && d->proj_count && m->state == MS_CHASE) {
+        int range = (d->shoot_tiles ? d->shoot_tiles : 6) * TILE_SIZE;
+        if (d2 <= range * range && now - m->shot_ms >= (d->shoot_ms ? d->shoot_ms : 2000)) {
+            m->shot_ms = now;
+            m->attack_until = now + MON_ATTACK_SHOW_MS;
+            m->dir = abs(dx) > abs(dy) ? (dx > 0 ? 1 : 3) : (dy > 0 ? 0 : 2);
+            mon_sfx(d, "attack");
+            proj_fire(false, m->def, ITEM_NONE, d->proj_damage ? d->proj_damage : d->damage, mon_fx(m), mon_fy(m) - d->fh / 2, px, py,
+                      d->proj_speed_q ? d->proj_speed_q : 20, (d->abilities & MON_FLIES) != 0, PROJ_LIFE_MS);
+        }
+    }
+    // touching the player hurts them
+    if (m->state != MS_REST && m->state != MS_WAKE && !(d->abilities & MON_KEEPS_OFF && m->state == MS_CHASE && d2 > 40 * 40)) {
+        rect_t b = mon_body_rect(m), p = player_body_rect();
+        if (anim_rects_overlap(b.x, b.y, b.w, b.h, p.x, p.y, p.w, p.h) && (int32_t)(s_player_hit_until - now) <= 0) {
+            m->attack_until = now + MON_ATTACK_SHOW_MS;
+            m->dir = abs(dx) > abs(dy) ? (dx > 0 ? 1 : 3) : (dy > 0 ? 0 : 2);   // (facing them as it strikes)
+            mon_sfx(d, "attack");
+            player_hurt(d->damage, mon_fx(m), mon_fy(m) - d->fh / 3);
+        }
+    }
+    mon_show(m);
+}
+
+// Once per game frame (the game loop, before market_tick() flushes the repaints).
+static void monster_tick(void)
+{
+    if (!s_map_loaded) return;
+    if (s_spawn.mon_due) { s_spawn.mon_due = false; mon_spawn_lot(); }   // a mining map just loaded: its lot (the player is where they arrived now)
+    uint32_t now = mon_now();
+    int ticks = s_game_ticks;
+    bool any = false;
+    for (int i = 0; i < MON_MAX && !any; i++) any = s_mon[i].on && s_mon[i].state == MS_CHASE;
+    if (any) mon_flow_update(now, player_mid_x() / TILE_SIZE, (s_player_y + PLAYER_H - 1) / TILE_SIZE);   // (the way round, for the walkers)
+    combat_chase_tick(now);   // walking to a tapped monster: swing once it's in reach
+    for (int i = 0; i < MON_MAX; i++)
+        if (s_mon[i].on) mon_think(&s_mon[i], now, ticks);
+    proj_tick(now, ticks);
+    int minute = clock_minute_of_day();   // health back, off the mining maps
+    if (minute != s_hp_seen_min) {
+        if (s_hp_seen_min >= 0 && !mining_map() && s_hp < hp_max() && minute % HP_REGEN_MIN == 0) s_hp++;
+        s_hp_seen_min = minute;
+    }
+    if (s_hp > hp_max()) s_hp = (int16_t)hp_max();
+}
+
+// The monster whose picture holds screen point (tx,ty) (a little leeway), or -1.
+static int mon_at_point(int tx, int ty)
+{
+    for (int i = 0; i < MON_MAX; i++) {
+        const monster_t *m = &s_mon[i];
+        if (!mon_alive(m)) continue;
+        rect_t v = mon_view_rect(m);
+        if (tx >= v.x - 6 && tx < v.x + v.w + 6 && ty >= v.y - 6 && ty < v.y + v.h + 6) return i;
+    }
+    return -1;
+}
+
+static int s_mon_size_y(const monster_t *m) { return s_monsters[m->def]->fh * 3 / 4; }   // (its body's height)
+
+// Is monster m in a swing's reach from where the player stands? (Its body within WEAPON_REACH of their middle.)
+static bool mon_in_reach(const monster_t *m)
+{
+    rect_t b = mon_body_rect(m);
+    int cx = player_mid_x(), cy = player_mid_y() - 4;
+    int ex = cx < b.x ? b.x - cx : cx >= b.x + b.w ? cx - (b.x + b.w - 1) : 0;
+    int ey = cy < b.y ? b.y - cy : cy >= b.y + b.h ? cy - (b.y + b.h - 1) : 0;
+    return ex * ex + ey * ey <= (WEAPON_REACH - 4) * (WEAPON_REACH - 4);
+}
+
+// Turn to monster m and swing at it. false = no swing (not a weapon, already swinging).
+static bool combat_swing_at(const monster_t *m)
+{
+    int dx = mon_fx(m) - player_mid_x(), dy = mon_fy(m) - s_mon_size_y(m) / 2 - (player_mid_y() - 4);
+    s_player_facing = abs(dx) > abs(dy) ? (dx < 0 ? DIR_LEFT : DIR_RIGHT) : (dy < 0 ? DIR_UP : DIR_DOWN);
+    nav_cancel();
+    if (!tool_swing_start()) return false;
+    s_swing.hit_due = true;
+    player_look_t l = player_look_now();
+    player_redraw(&l);
+    return true;
+}
+
+// A monster tapped out of reach: the player walks to it (following it as it moves) and swings once there.
+#define COMBAT_CHASE_MS  6000   // gives up after this long
+#define COMBAT_REPLAN_MS 350    // walks to where it is now this often
+static int      s_combat_target = -1;
+static uint32_t s_combat_since, s_combat_plan_ms;
+
+static void nav_tap(int tap_x, int tap_y);   // TAP-TO-WALK
+
+// Once a game frame (monster_tick()): on the way to a tapped monster — swing when it's in reach.
+static void combat_chase_tick(uint32_t now)
+{
+    if (s_combat_target < 0) return;
+    const monster_t *m = &s_mon[s_combat_target];
+    if (!mon_alive(m) || now - s_combat_since > COMBAT_CHASE_MS || item_attr(inv_held_item(), ITEM_ATTR_WEAPON, 0) <= 0) { s_combat_target = -1; return; }
+    if (mon_in_reach(m)) {
+        if (!tool_swinging() && combat_swing_at(m)) s_combat_target = -1;
+        return;
+    }
+    if (now - s_combat_plan_ms >= COMBAT_REPLAN_MS) {
+        s_combat_plan_ms = now;
+        nav_tap(mon_fx(m), mon_fy(m) - 4);   // (a walk to where it stands now)
+    }
+}
+
+// The game loop: a tap with a weapon in hand — on a monster: in reach, turn to it and swing; out of reach, walk
+// to it and swing there. Anywhere else: an ordinary tap (they walk). A slingshot shoots at a tapped monster. true = taken.
+static bool combat_tap(int tx, int ty)
+{
+    if (!s_map_loaded) return false;
+    if (sling_tap(tx, ty)) return true;
+    if (item_attr(inv_held_item(), ITEM_ATTR_WEAPON, 0) <= 0) return false;
+    int i = mon_at_point(tx, ty);
+    if (i < 0) { s_combat_target = -1; return false; }   // not at a monster: walk
+    if (tool_swinging()) return true;                     // (one swing at a time)
+    if (mon_in_reach(&s_mon[i])) { s_combat_target = -1; return combat_swing_at(&s_mon[i]); }
+    uint32_t now = mon_now();
+    s_combat_target  = i;
+    s_combat_since   = now;
+    s_combat_plan_ms = now;
+    nav_tap(mon_fx(&s_mon[i]), mon_fy(&s_mon[i]) - 4);
+    return true;
+}
+
+// world.txt's "health" line, and back.
+static void hp_write(FILE *f, char *line, size_t n)
+{
+    snprintf(line, n, "health %d\n", s_hp);
+    fputs(line, f);
+    if (!s_sling.count || s_sling.item >= item_count) return;
+    snprintf(line, n, "sling %s %d %d\n", item_get(s_sling.item)->id, s_sling.count, s_sling.quality);
+    fputs(line, f);
+}
+
+static void combat_reset(void)
+{
+    s_hp    = HP_BASE;
+    s_sling = (inv_slot_t){ ITEM_NONE, 0, QUALITY_STANDARD };
+}
+static void hp_load(int v) { s_hp = (int16_t)(v < 1 ? 1 : v > 999 ? 999 : v); }
+
+#if DEV_LINK_ENABLED
+// DEV LINK "mon": the monsters here · "mon spawn ID" (by the player) · "mon clear" · "mon kill" (all) · "hp [N]".
+static void monster_dev_cmd(int nw, char **w)
+{
+    if (strcmp(w[0], "god") == 0) {   // "god on|off": nothing hurts the player
+        s_dev_god = nw >= 2 && strcmp(w[1], "on") == 0;
+        dev_out("@@OK god %s", s_dev_god ? "on" : "off");
+        return;
+    }
+    if (nw >= 2 && strcmp(w[1], "shots") == 0) {   // "mon shots": the shots in the air
+        for (int i = 0; i < PROJ_MAX; i++)
+            if (s_proj[i].on) dev_out("@@SHOT %s at %ld %ld v %d %d dmg %d age %d", s_proj[i].mine ? "player" : s_monsters[s_proj[i].def]->id,
+                                      (long)(s_proj[i].xq >> 2), (long)(s_proj[i].yq >> 2), s_proj[i].vx, s_proj[i].vy, s_proj[i].dmg, s_proj[i].age);
+        dev_out("@@OK shots");
+        return;
+    }
+    if (strcmp(w[0], "sling") == 0) {   // "sling" (what's in it) / "sling ID N": load it
+        if (nw >= 3) sling_load(w[1], atoi(w[2]), QUALITY_STANDARD);
+        dev_out("@@OK sling %s x%d", s_sling.count ? item_name(s_sling.item) : "empty", s_sling.count);
+        return;
+    }
+    if (strcmp(w[0], "hp") == 0) {
+        if (nw >= 2) { int v = atoi(w[1]); s_hp = (int16_t)(v < 0 ? 0 : v > hp_max() ? hp_max() : v); if (!s_hp) { s_passout_pending = true; s_passout_why = PASSOUT_HURT; } }
+        dev_out("@@OK hp %d/%d", s_hp, hp_max());
+        return;
+    }
+    if (nw >= 3 && strcmp(w[1], "spawn") == 0) {
+        int def = -1;
+        for (int k = 0; k < monster_count; k++) if (strcmp(s_monsters[k]->id, w[2]) == 0) def = k;
+        if (def < 0) { dev_out("@@ERR no monster %s", w[2]); return; }
+        int tx = player_mid_x() / TILE_SIZE, ty = player_mid_y() / TILE_SIZE, dx, dy;
+        direction_to_delta(s_player_facing, &dx, &dy);
+        bool ok = mon_spawn(def, tx + 2 * dx, ty + 2 * dy) || mon_spawn(def, tx, ty);
+        dev_out(ok ? "@@OK %s" : "@@ERR no room for %s", w[2]);
+        return;
+    }
+    if (nw >= 2 && strcmp(w[1], "clear") == 0) {
+        for (int i = 0; i < MON_MAX; i++) if (s_mon[i].on) { s_mon[i].on = false; mon_show(&s_mon[i]); }
+        dev_out("@@OK cleared");
+        return;
+    }
+    if (nw >= 2 && strcmp(w[1], "kill") == 0) {
+        uint32_t now = mon_now();
+        for (int i = 0; i < MON_MAX; i++) if (mon_alive(&s_mon[i])) { s_mon[i].revived = true; mon_die(&s_mon[i], now); }
+        dev_out("@@OK killed");
+        return;
+    }
+    static const char *const k_state[] = { "idle", "rest", "wake", "chase", "wait", "dash", "dying", "down", "parts" };
+    for (int i = 0; i < MON_MAX; i++) {
+        const monster_t *m = &s_mon[i];
+        if (m->on) dev_out("@@MON %s at %d %d hp %d %s", s_monsters[m->def]->id, mon_fx(m), mon_fy(m), m->hp, k_state[m->state]);
+    }
+    dev_out("@@OK %d kinds built in, mining map: %d, hp %d/%d", monster_count, mining_map(), s_hp, hp_max());
 }
 #endif
 
@@ -30750,6 +33696,12 @@ static bool game_start(int slot, bool is_new, bool sd_ok)
 //    ui close / dev            closes the open screen / the dev switches as they are
 //    goto MAP [TX TY [INST]]   loads MAP (INST = a building's inside), stands on tile (TX,TY)
 //    forage [list|clear]       a morning's forage comes up now / what's lying here / all of it gone (FORAGE)
+//    weather auto|clear|rain|storm|snow|blizzard|fog   forces the weather here until "auto" (WEATHER)
+//    ice [hole|freeze]         the holes in the ice here / break one in the faced tile / all freeze over (ICE HOLES)
+//    boat [put ID|go X Y|shop] the boats / one on the faced water (helm there) / at a helm: sail to tile X Y / the boat shop (BOATS + DOCKS)
+//    rocks [new]               the random rocks out here / a new lot now (SPAWNS)
+//    mon [list|spawn ID|clear|kill] / hp [N]   the monsters here / one in front / all gone / all killed; the health (MONSTERS + COMBAT)
+//    sling [ID N]              what's in the slingshot / load N of item ID into it (MONSTERS + COMBAT)
 //    energy [N] / passout      shows (sets) the energy / passes out now (ENERGY)
 //    bat                       a bat flies over now (BATS)
 //    climate [NAME]            this map's climate / pretend it's NAME until the next map loads (CLIMATE)
@@ -31369,9 +34321,16 @@ static void dev_main_poll(void)
             memset(s_prof_us, 0, sizeof(s_prof_us));
             memset(s_prof_calls, 0, sizeof(s_prof_calls));
             s_prof_frames = 0;
+        } else if (strcmp(w[0], "weather") == 0 && nw == 2) {   // "weather auto|clear|rain|storm|snow|blizzard|fog" (WEATHER)
+            static const char *const k_wx[] = { "clear", "rain", "storm", "snow", "blizzard", "fog" };
+            int k;
+            for (k = 0; k < 6 && strcmp(w[1], k_wx[k]) != 0; k++) {}
+            s_wx_force   = k < 6 ? k : -1;
+            s_rain_force = k == 6 ? -1 : (k == WXF_RAIN || k == WXF_STORM || k == WXF_SNOW || k == WXF_BLIZZARD) ? 1 : 0;
+            dev_out("@@OK weather %s: rain %d storm %d snow %d blizzard %d fog %d", k < 6 ? k_wx[k] : "auto", rain_now(), storm_now(), snow_now(), blizzard_now(), fog_now());
         } else if (strcmp(w[0], "rain") == 0 && nw == 2) {   // "rain on|off|auto": the Dev Tools rain switch
             s_rain_force = strcmp(w[1], "on") == 0 ? 1 : strcmp(w[1], "off") == 0 ? 0 : -1;
-            dev_out("@@OK rain %s, raining here now: %d", w[1], rain_now());
+            dev_out("@@OK rain %s, raining here now: %d, snowing: %d", w[1], rain_now(), snow_now());
         } else if (strcmp(w[0], "hour") == 0 && (nw == 2 || nw == 3) && a >= 0 && a < 24) {   // "hour H [M]"
             int m = nw == 3 ? atoi(w[2]) : 0;
             s_clock_min = (uint32_t)a * 60 + (uint32_t)(m < 0 ? 0 : m > 59 ? 59 : m);
@@ -31417,6 +34376,14 @@ static void dev_main_poll(void)
             else { market_photo_taken(it, w[1], note, sizeof(note)); dev_out("@@OK %s", note[0] ? note : "(nothing new)"); }
         } else if (strcmp(w[0], "forage") == 0) {   // (FORAGE)
             forage_dev_cmd(line + 6);
+        } else if (strcmp(w[0], "mon") == 0 || strcmp(w[0], "hp") == 0 || strcmp(w[0], "sling") == 0 || strcmp(w[0], "god") == 0) {   // (MONSTERS + COMBAT)
+            monster_dev_cmd(nw, w);
+        } else if (strcmp(w[0], "ice") == 0) {      // (ICE HOLES)
+            ice_dev_cmd(line + 3);
+        } else if (strcmp(w[0], "boat") == 0) {     // (BOATS + DOCKS)
+            boat_dev_cmd(nw, w);
+        } else if (strcmp(w[0], "rocks") == 0) {    // (SPAWNS)
+            spawn_dev_cmd(line + 5);
         } else if (strcmp(w[0], "energy") == 0 || strcmp(w[0], "passout") == 0) {   // (ENERGY)
             energy_dev_cmd(nw, w);
         } else if (strcmp(w[0], "skill") == 0) {   // (SKILLS)
@@ -31468,6 +34435,7 @@ static void dev_travel(void)
 {
     if (!s_dev_goto_pending) return;
     s_dev_goto_pending = false;
+    if (ui_screen_open()) ui_close();   // (a screen open over the old map would come back over the new one when it closed)
     static char path[MAP_PATH_MAX];
     map_path_for(s_dev_goto, path, sizeof(path));
     s_load_inst_next = (uint16_t)s_dev_goto_inst;

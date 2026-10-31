@@ -28,6 +28,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 PROJECT = os.path.dirname(HERE)
 LOG = os.path.join(HERE, "devlink.log")
 END_CMDS = ("shot", "get ", "state", "ls ", "prof", "psram", "stacks", "items")    # answers end with @@END (so do END_WHOLE)
+END_OK = ("mon", "rocks", "ice", "forage", "skill")   # list answers that end with their @@OK line (the lines before it: @@MON, @@ROCK...)
 END_WHOLE = ("npc", "npc list", "crops", "crops list", "machines", "machines list", "animal", "animal list", "animal herd", "animal pipes", "craft", "craft list")
 IDF_PY = r"C:\Espressif\tools\python\v6.1\venv\Scripts\python.exe"
 IDF_PROFILE = r"C:\Espressif\tools\Microsoft.v6.1.PowerShell_profile.ps1"
@@ -189,6 +190,7 @@ def serve(port_name, take=False):
             line = req["line"]
             ends = line.startswith(END_CMDS) or line.strip() in END_WHOLE   # other npc commands answer one @@OK line
             last = tuple(req["end"]) if req.get("end") else ("@@END", "@@ERR") if ends else None   # "end": the caller says what ends it
+            if not last and line.split(" ")[0] in END_OK: last = ("@@OK", "@@ERR")
             send(line)
             got, ok = wait((lambda a: a.startswith(last)) if last else (lambda a: True), req.get("timeout", 20))
             return {"ok": ok, "lines": got}

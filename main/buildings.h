@@ -65,6 +65,12 @@ typedef struct {
     uint8_t         door_x, door_y, door_w, door_h;
     const uint16_t *door_shut;    // NULL = the art as it is while shut
     bool            water_source; // a well: tap it holding a watering can to fill the can (FARMING)
+    // A dock (BOATS + DOCKS in main.c; the Farm tab's kind "Dock"): built out over the water
+    // (every footprint tile Fishable water, touching the shore) instead of on Buildable ground.
+    // Its footprint is a deck the player walks on, all but one tile: the post in column
+    // door_col of the bottom row, solid — tapped, it opens the boat shop. Boats are launched
+    // from the deck. No inside (interior is ignored).
+    bool            dock;
 } building_def_t;
 
 extern const building_def_t *const s_buildings[];
